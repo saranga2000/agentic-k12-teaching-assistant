@@ -1,4 +1,4 @@
-.PHONY: install test check fmt run eval
+.PHONY: install test check fmt run eval label
 
 install:
 	pip install -e ".[dev]"
@@ -20,3 +20,6 @@ eval:
 
 run:
 	python -m k12ta.web --host 0.0.0.0 --port 8080
+
+label:
+	python -m k12ta.label

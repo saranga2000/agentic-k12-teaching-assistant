@@ -1,0 +1,25 @@
+{
+  "page_id": "img_0475",
+  "image": "pages/IMG_0475.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "fair",
+  "capture_device": "ipad-air-m1",
+  "capture_method": "camera-roll",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "Find the surface area of a rectangular prism 5 ft by 16 ft by 8 ft",
+      "student_answer_raw": "496",
+      "human_legible": true,
+      "correct_answer": "496"
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "Find the surface area of a rectangular prism 6 mm by 5 mm by 13 mm",
+      "student_answer_raw": "346",
+      "human_legible": true,
+      "correct_answer": "346"
+    }
+  ]
+}

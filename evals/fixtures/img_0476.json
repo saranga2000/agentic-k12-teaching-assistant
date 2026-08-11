@@ -1,0 +1,39 @@
+{
+  "page_id": "img_0476",
+  "image": "pages/IMG_0476.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "fair",
+  "capture_device": "ipad-air-m1",
+  "capture_method": "camera-roll",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "Tell what shape is created by the cross section of a rectangular prism",
+      "student_answer_raw": "rhombus",
+      "human_legible": true,
+      "correct_answer": "rhombus"
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "Tell what shape is created by the cross section of a pyramid",
+      "student_answer_raw": "pyramid",
+      "human_legible": true,
+      "correct_answer": "pyramid"
+    },
+    {
+      "problem_id": "3",
+      "prompt_text": "Tell what shape is created by the cross section of a cube",
+      "student_answer_raw": "square",
+      "human_legible": true,
+      "correct_answer": "square"
+    },
+    {
+      "problem_id": "4",
+      "prompt_text": "Tell what shape is created by the cross section of a pyramid",
+      "student_answer_raw": "rectangular prism",
+      "human_legible": true,
+      "correct_answer": "rectuangular prism"
+    }
+  ]
+}

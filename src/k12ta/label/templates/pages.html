@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>All pages</title>
+<style>
+  body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; text-align: left; }
+  .done { color: #2e7d32; }
+  .pending { color: #999; }
+</style>
+</head>
+<body>
+  <p><a href="/label">Back to labelling</a></p>
+  <h1>{{ done }} / {{ total }} labelled</h1>
+  <table>
+    <tr><th>Status</th><th>File</th><th></th></tr>
+    {% for row in rows %}
+    <tr>
+      <td class="{{ 'done' if row.done else 'pending' }}">{{ 'labelled' if row.done else 'pending' }}</td>
+      <td>{{ row.filename }}</td>
+      <td><a href="/label/{{ row.stem }}">{{ 'edit' if row.done else 'label' }}</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</body>
+</html>

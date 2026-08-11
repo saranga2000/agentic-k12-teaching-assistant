@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Label {{ filename }}</title>
+<style>
+  body { font-family: sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+  img { max-width: 100%; max-height: 55vh; display: block; margin-bottom: 1rem; border: 1px solid #ccc; }
+  .progress { color: #555; margin-bottom: 0.25rem; }
+  .filename { font-size: 1.3rem; font-weight: bold; margin-bottom: 1rem; }
+  .error { background: #f8d7da; color: #721c24; padding: 0.5rem 0.75rem; margin-bottom: 1rem; border-radius: 4px; }
+  fieldset { margin-bottom: 1rem; border-radius: 4px; }
+  .page-fields { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .field { display: flex; flex-direction: column; }
+  .field.prefilled input, .field.prefilled select { background: #fff3cd; }
+  .prefill-tag { font-size: 0.7rem; color: #856404; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { padding: 0.25rem; border-bottom: 1px solid #eee; text-align: left; }
+  input[type=text] { width: 100%; box-sizing: border-box; }
+  .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
+</style>
+</head>
+<body>
+  <div class="progress">{{ done }} / {{ total }} labelled &middot; <a href="/pages">all pages</a></div>
+  <div class="filename">{{ filename }}</div>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <img src="/image/{{ stem }}" alt="{{ filename }}">
+
+  <form method="post" action="/label">
+    <input type="hidden" name="stem" value="{{ stem }}">
+    <input type="hidden" name="row_count" value="{{ row_count }}">
+
+    <fieldset>
+      <legend>Page</legend>
+      <div class="page-fields">
+        <div class="field {% if 'source_id' in prefilled %}prefilled{% endif %}">
+          <label>source_id</label>
+          <input type="text" name="source_id" value="{{ values.source_id }}">
+          {% if 'source_id' in prefilled %}<span class="prefill-tag">carried forward</span>{% endif %}
+        </div>
+        <div class="field {% if 'subject' in prefilled %}prefilled{% endif %}">
+          <label>subject</label>
+          <input type="text" name="subject" value="{{ values.subject }}">
+          {% if 'subject' in prefilled %}<span class="prefill-tag">carried forward</span>{% endif %}
+        </div>
+        <div class="field">
+          <label>capture_quality</label>
+          <input type="text" name="capture_quality" value="{{ values.capture_quality }}" placeholder="good / fair / poor">
+        </div>
+        <div class="field">
+          <label>capture_device (from filename above)</label>
+          <input type="text" name="capture_device" value="{{ values.capture_device }}" placeholder="e.g. ipad-air-m1">
+        </div>
+        <div class="field {% if 'capture_method' in prefilled %}prefilled{% endif %}">
+          <label>capture_method</label>
+          <select name="capture_method">
+            <option value="">-- choose --</option>
+            {% for m in methods %}
+            <option value="{{ m }}" {% if values.capture_method == m %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+          </select>
+          {% if 'capture_method' in prefilled %}<span class="prefill-tag">carried forward</span>{% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Problems on this page</legend>
+      <table>
+        <tr>
+          <th>problem_id</th><th>prompt_text</th><th>student_answer_raw</th>
+          <th>legible</th><th>correct_answer</th>
+        </tr>
+        {% for row in rows %}
+        <tr>
+          <td><input type="text" name="problem_id_{{ loop.index0 }}" value="{{ row.problem_id }}"></td>
+          <td><input type="text" name="prompt_text_{{ loop.index0 }}" value="{{ row.prompt_text }}"></td>
+          <td><input type="text" name="student_answer_raw_{{ loop.index0 }}" value="{{ row.student_answer_raw }}"></td>
+          <td><input type="checkbox" name="human_legible_{{ loop.index0 }}" value="1" {% if row.human_legible %}checked{% endif %}></td>
+          <td><input type="text" name="correct_answer_{{ loop.index0 }}" value="{{ row.correct_answer }}"></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" name="action" value="save">Save (Enter)</button>
+      <button type="submit" name="action" value="add_rows">Add 5 more rows</button>
+      <button type="submit" name="action" value="skip">Skip this page (no problems here)</button>
+    </div>
+  </form>
+
+  <script>
+    const form = document.querySelector("form");
+    const fields = Array.from(form.querySelectorAll("input[type=text], select"));
+    fields.forEach((field, i) => {
+      field.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && i < fields.length - 1) {
+          event.preventDefault();
+          fields[i + 1].focus();
+        }
+      });
+    });
+    if (fields[0]) {
+      fields[0].focus();
+    }
+  </script>
+</body>
+</html>

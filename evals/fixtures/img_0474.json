@@ -1,0 +1,25 @@
+{
+  "page_id": "img_0474",
+  "image": "pages/IMG_0474.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "Section 1",
+  "capture_quality": ". It is not good: angled, shadowed, half-resolution, and the page curves.",
+  "capture_device": "ipad-air-m1",
+  "capture_method": "camera-roll",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "Monthly Goals",
+      "student_answer_raw": "1. Schedule properly, 2. \"pick of for school\" 3. \"dance well in Anandmela\"",
+      "human_legible": false,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "Word list",
+      "student_answer_raw": "\"Navratri is a very auspicious time for Hindu...\" (runs off, hard to read) \"I wanted the window bed and my sister wanted the corner bed, so we came up with a compamize\" (misspelling is data, transcribe it as written) \"I saw a critical part of the Math equation missing\"",
+      "human_legible": false,
+      "correct_answer": ""
+    }
+  ]
+}

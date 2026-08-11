@@ -73,7 +73,7 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
         source_id=_require_str(page, "source_id", label_path),
         subject=_require_str(page, "subject", label_path),
         capture_quality=_require_str(page, "capture_quality", label_path),
-        capture_device=_normalise_device(_require_str(page, "capture_device", label_path)),
+        capture_device=normalise_device(_require_str(page, "capture_device", label_path)),
         capture_method=capture_method,
         items=_parse_items(page, label_path),
     )
@@ -131,6 +131,10 @@ def _require_bool(page: dict[str, object], key: str, label_path: Path) -> bool:
     return value
 
 
-def _normalise_device(value: str) -> str:
-    """Fold 'Pixel 9a', 'pixel 9a', and 'pixel-9a' into one slice key."""
+def normalise_device(value: str) -> str:
+    """Fold 'Pixel 9a', 'pixel 9a', and 'pixel-9a' into one slice key.
+
+    Public so the labelling tool can apply the same normalisation before writing a
+    label, rather than saving a raw string the loader would silently reshape later.
+    """
     return "-".join(value.strip().lower().split())
