@@ -8,7 +8,9 @@ from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 
 
 def test_graded_work_never_reveals_the_answer() -> None:
-    mode = resolve_mode(source_default_mode=FeedbackMode.FULL, work_will_be_graded_by_someone_else=True)
+    mode = resolve_mode(
+        source_default_mode=FeedbackMode.FULL, work_will_be_graded_by_someone_else=True
+    )
     assert mode is FeedbackMode.DIAGNOSTIC_ONLY
     assert rules_for(mode).forbids_answer()
 

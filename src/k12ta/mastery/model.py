@@ -66,7 +66,8 @@ class SkillMastery:
     def retention_on(self, on: date) -> float:
         """Estimated probability of correct retrieval on a given date."""
         elapsed = max(0, (on - self.last_reviewed_on).days)
-        decayed = (self.p_at_last_review - self.floor) * 0.5 ** (elapsed / self.stability_days)
+        decay_factor = math.pow(0.5, elapsed / self.stability_days)
+        decayed = (self.p_at_last_review - self.floor) * decay_factor
         return round(min(1.0, max(0.0, self.floor + decayed)), 4)
 
     def is_mastered_on(self, on: date, threshold: float = MASTERY_THRESHOLD) -> bool:
