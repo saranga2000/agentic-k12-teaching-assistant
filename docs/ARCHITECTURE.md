@@ -22,23 +22,23 @@ contain the worked reasoning even when the child's view cannot.
 
 | Package | Owns | Must not |
 |---|---|---|
-| `alc.domain` | Entities and the feedback policy rail | Call a model or touch I/O |
-| `alc.content` | Where work comes from and its attached rules | Know about grading internals |
-| `alc.transcribe` | Image to structured problems, provider adapters | Decide correctness |
-| `alc.grading` | Correctness verdicts and confidence gating | Generate student-facing text |
-| `alc.mastery` | Memory traces, decay, retrieval scheduling | Know about images or prompts |
-| `alc.llm` | The only place a model provider is called | Contain any product logic |
-| `alc.diagnose` | Turning an established error into a Diagnosis | Decide correctness |
-| `alc.respond` | Applying the policy filter and rendering student-facing text | Call a model directly for a verdict |
-| `alc.digest` | Weekly parent rollups | Reuse student-facing renderers |
-| `alc.web` | HTTP and templates | Contain business logic |
+| `k12ta.domain` | Entities and the feedback policy rail | Call a model or touch I/O |
+| `k12ta.content` | Where work comes from and its attached rules | Know about grading internals |
+| `k12ta.transcribe` | Image to structured problems, provider adapters | Decide correctness |
+| `k12ta.grading` | Correctness verdicts and confidence gating | Generate student-facing text |
+| `k12ta.mastery` | Memory traces, decay, retrieval scheduling | Know about images or prompts |
+| `k12ta.llm` | The only place a model provider is called | Contain any product logic |
+| `k12ta.diagnose` | Turning an established error into a Diagnosis | Decide correctness |
+| `k12ta.respond` | Applying the policy filter and rendering student-facing text | Call a model directly for a verdict |
+| `k12ta.digest` | Weekly parent rollups | Reuse student-facing renderers |
+| `k12ta.web` | HTTP and templates | Contain business logic |
 
 Four of these packages do not exist yet. They are listed because the pipeline has eight
 stages and the table originally named owners for six, which left diagnosis, response
 rendering, and the digest with no legal home under the stated rules. Create each one when
 its milestone arrives, not before.
 
-`alc.domain` and `alc.mastery` have zero third-party imports. That is deliberate: they
+`k12ta.domain` and `k12ta.mastery` have zero third-party imports. That is deliberate: they
 are the parts worth reading, and they should be testable in milliseconds.
 
 ## Why these dependencies

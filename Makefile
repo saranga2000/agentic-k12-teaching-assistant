@@ -19,4 +19,4 @@ eval:
 	python evals/run_transcription_eval.py
 
 run:
-	python -m alc.web --host 0.0.0.0 --port 8080
+	python -m k12ta.web --host 0.0.0.0 --port 8080

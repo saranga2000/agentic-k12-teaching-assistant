@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from alc.domain.policy import FeedbackMode
+from k12ta.domain.policy import FeedbackMode
 
 
 class SourceKind(Enum):

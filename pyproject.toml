@@ -1,5 +1,5 @@
 [project]
-name = "adaptive-learning-coach"
+name = "agentic-k12-teaching-assistant"
 version = "0.1.0"
 description = "Agentic tutoring coach: photo of work in, diagnosis and targeted practice out."
 requires-python = ">=3.11"

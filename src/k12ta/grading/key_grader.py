@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from alc.domain.models import GradeOutcome
+from k12ta.domain.models import GradeOutcome
 
 _WHITESPACE = re.compile(r"\s+")
 

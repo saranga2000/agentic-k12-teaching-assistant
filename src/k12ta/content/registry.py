@@ -6,8 +6,8 @@ from parent input and are here only as reference shapes for tests and seeding.
 
 from __future__ import annotations
 
-from alc.content.source import ContentSource, SourceKind
-from alc.domain.policy import FeedbackMode
+from k12ta.content.source import ContentSource, SourceKind
+from k12ta.domain.policy import FeedbackMode
 
 
 class ContentSourceRegistry:

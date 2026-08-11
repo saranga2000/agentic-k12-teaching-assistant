@@ -6,7 +6,7 @@ changes are reviewable and eval-able independently of this code.
 
 from __future__ import annotations
 
-from alc.transcribe.base import TranscriptionResult
+from k12ta.transcribe.base import TranscriptionResult
 
 
 class VisionLLMTranscriber:

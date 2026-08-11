@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from alc.content.registry import ContentSourceRegistry, example_sources
-from alc.domain.policy import FeedbackMode, resolve_mode
+from k12ta.content.registry import ContentSourceRegistry, example_sources
+from k12ta.domain.policy import FeedbackMode, resolve_mode
 
 
 def test_registry_round_trips() -> None:

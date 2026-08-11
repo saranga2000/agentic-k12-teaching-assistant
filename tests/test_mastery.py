@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from alc.mastery.model import SkillMastery
+from k12ta.mastery.model import SkillMastery
 
 
 def trace(on: date) -> SkillMastery:

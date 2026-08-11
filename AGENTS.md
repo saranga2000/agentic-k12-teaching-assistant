@@ -30,7 +30,7 @@ introduced without being asked.
 8. **Multi-user schemas from day one.** Every persisted row carries `student_id`. No
    singleton assumptions. Do not build authentication.
 9. **Model calls go through an adapter.** Provider SDK or raw HTTP calls live only in
-   `src/alc/llm/`. Every other package, including `alc.transcribe` and `alc.diagnose`,
+   `src/k12ta/llm/`. Every other package, including `k12ta.transcribe` and `k12ta.diagnose`,
    calls a model through that adapter. Swapping providers is a new file, not a refactor.
 10. **Fail loud on unreadable input.** A confident wrong grade is the worst outcome in
     this system. When confidence is below threshold, return `NEEDS_HUMAN`, never a guess.
@@ -45,12 +45,12 @@ introduced without being asked.
 
 ## Repo conventions
 
-- Package root `src/alc/`, imports are absolute (`from alc.domain.models import ...`)
+- Package root `src/k12ta/`, imports are absolute (`from k12ta.domain.models import ...`)
 - Dataclasses for domain objects, pydantic only at I/O boundaries
 - Dates are `datetime.date`; timestamps are timezone-aware UTC
 - Money and token cost tracked in `Decimal`, never float
 - Test files are flat in `tests/` and named after the module under test
-  (`src/alc/mastery/model.py` -> `tests/test_mastery.py`). Move to mirrored
+  (`src/k12ta/mastery/model.py` -> `tests/test_mastery.py`). Move to mirrored
   subdirectories only once a package has three or more test files. Do not create empty
   test directories in advance.
 - Hidden files and directories are part of this repo, search them

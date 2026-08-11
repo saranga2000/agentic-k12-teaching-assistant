@@ -17,7 +17,7 @@ a testable requirement rather than a preference. What follows is the gap list.
    (accuracy leaderboards drive avoidance of hard material) is right and is the kind of
    reasoning worth writing up in the repo README.
 5. **Decay in the mastery model.** This is the technically interesting part and the best
-   portfolio chapter. It is scaffolded and tested in `src/alc/mastery/`.
+   portfolio chapter. It is scaffolded and tested in `src/k12ta/mastery/`.
 
 ## Gap 1: the mode switch is modelled at the wrong level
 
@@ -28,7 +28,7 @@ in the back of the book. A global toggle will be wrong for at least one of them,
 failure mode is the coach handing over an answer to graded work.
 
 **Fix applied here:** feedback policy is a property of the assignment, derived from the
-content source, and it fails closed. See `src/alc/domain/policy.py` and
+content source, and it fails closed. See `src/k12ta/domain/policy.py` and
 `tests/test_policy.py`. There is no global switch to forget to flip.
 
 This also cleanly absorbs the outside programmes without special cases. Each becomes a

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from alc.domain.models import GradeOutcome
-from alc.grading.key_grader import grade_against_key, normalise
+from k12ta.domain.models import GradeOutcome
+from k12ta.grading.key_grader import grade_against_key, normalise
 
 
 def test_normalisation_handles_unicode_minus_and_spacing() -> None:

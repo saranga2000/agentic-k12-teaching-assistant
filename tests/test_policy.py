@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from alc.domain.policy import FeedbackMode, resolve_mode, rules_for
+from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 
 
 def test_graded_work_never_reveals_the_answer() -> None:

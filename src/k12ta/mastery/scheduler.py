@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from alc.mastery.model import SkillMastery
+from k12ta.mastery.model import SkillMastery
 
 MAX_SOLID_ITEMS = 2
 """One opener and one closer. Never more."""

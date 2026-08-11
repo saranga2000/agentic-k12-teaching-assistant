@@ -29,7 +29,7 @@ Read AGENTS.md, docs/ROADMAP.md, and docs/ARCHITECTURE.md in full before doing a
 Then, without writing any code, give me:
 1. A one paragraph summary of what this project is and what state it is in
 2. The current milestone according to the roadmap, and the first three tasks in it
-3. Anything in the existing code under src/alc that you think is wrong, unclear, or
+3. Anything in the existing code under src/k12ta that you think is wrong, unclear, or
    inconsistent with the docs
 
 Be specific. Do not be agreeable. If you disagree with a design decision in the docs,
@@ -69,7 +69,7 @@ transcriber is implemented. Do not let the assistant reorder these.
 Milestone M1, task 1. Read evals/fixtures/README.md first.
 
 Write, tests first:
-- src/alc/evals/fixtures.py with a typed loader that reads the label JSON files in
+- src/k12ta/evals/fixtures.py with a typed loader that reads the label JSON files in
   evals/fixtures/, validates them, and returns dataclasses
 - Validation must reject: missing image path, duplicate problem_id within a page,
   confidence or legibility fields of the wrong type
@@ -86,10 +86,10 @@ Plan first, then wait for me to approve before writing code.
 Milestone M1, task 2. Read docs/EVALS.md.
 
 Rewrite evals/run_transcription_eval.py so it takes any object satisfying the
-Transcriber protocol in src/alc/transcribe/base.py and produces a scorecard with:
+Transcriber protocol in src/k12ta/transcribe/base.py and produces a scorecard with:
 - problem detection recall
 - answer exact match rate on detected problems, using the same normalisation as
-  src/alc/grading/key_grader.py
+  src/k12ta/grading/key_grader.py
 - calibration: accuracy within each confidence band, using the bands already defined
 
 Include a FakeTranscriber in tests that returns known-wrong answers at known
@@ -108,7 +108,7 @@ Milestone M1, task 3.
 
 I have to hand label 40 to 60 pages and I want that to take minutes, not an evening.
 
-Build a small local page at src/alc/label/ that:
+Build a small local page at src/k12ta/label/ that:
 - lists images in evals/fixtures/pages/
 - shows one image large, with a form to enter problem_id, prompt_text,
   student_answer_raw, human_legible, correct_answer
@@ -126,9 +126,9 @@ Plan first.
 ```
 Milestone M1, task 4. Only now do we implement transcription.
 
-Implement VisionLLMTranscriber in src/alc/transcribe/vision_llm.py:
+Implement VisionLLMTranscriber in src/k12ta/transcribe/vision_llm.py:
 - loads its prompt from prompts/transcribe_page.md by id, never inline
-- calls the provider configured in src/alc/config.py via httpx
+- calls the provider configured in src/k12ta/config.py via httpx
 - parses the JSON response defensively: malformed output returns items with confidence
   0.0 rather than raising
 - records cost_usd and latency_ms on the result
@@ -163,7 +163,7 @@ oversell. This section is a lab notebook, not marketing.
 ```
 Milestone M2, task 1.
 
-Add SQLite persistence in src/alc/store/ using the standard library sqlite3, no ORM.
+Add SQLite persistence in src/k12ta/store/ using the standard library sqlite3, no ORM.
 
 Tables for students, content sources, assignments, page captures, problems, graded
 problems, sessions, and skill mastery traces. Every table carries student_id.
@@ -185,7 +185,7 @@ Tests first. Plan first.
 ```
 Milestone M2, task 2. Read docs/DEPLOYMENT.md first.
 
-Build the capture page in src/alc/web/. Requirements, in priority order:
+Build the capture page in src/k12ta/web/. Requirements, in priority order:
 
 1. Ten seconds and two taps from opening the tablet to a photo submitted. This is the
    single most important requirement in the whole project. If a design choice adds a tap,
@@ -246,7 +246,7 @@ Build the one time setup flow: add a student (name, grade, state, coach name the
 choose), then add content sources with label, kind, subject, has_answer_key,
 graded_by_someone_else, default_mode, typical_session_minutes.
 
-Use src/alc/content/registry.py example_sources() only as a shape reference. Seed
+Use src/k12ta/content/registry.py example_sources() only as a shape reference. Seed
 nothing automatically. Everything is entered by me.
 
 Tests first. Plan first.
@@ -255,7 +255,7 @@ Tests first. Plan first.
 **M3.2 Policy wired into every response**
 
 ```
-Milestone M3, task 2. Read src/alc/domain/policy.py and prompts/coach_voice.md.
+Milestone M3, task 2. Read src/k12ta/domain/policy.py and prompts/coach_voice.md.
 
 Every student facing message must pass through the policy filter. Diagnosis always runs
 in full; the filter decides what reaches the student.
@@ -308,11 +308,11 @@ Tests first. Plan first.
 Come back for the detail. These are enough to start each one.
 
 ```
-Milestone M4, task 1. Read src/alc/mastery/model.py and its tests in full.
+Milestone M4, task 1. Read src/k12ta/mastery/model.py and its tests in full.
 
 Tag graded problems with skill_ids, fold every graded result into the student's mastery
 traces, and inject due skills into the next session using
-src/alc/mastery/scheduler.py.
+src/k12ta/mastery/scheduler.py.
 
 Do not change the decay maths without telling me first and showing which existing test
 would need to change. Those tests encode the design.

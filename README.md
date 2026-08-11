@@ -1,4 +1,4 @@
-# adaptive-learning-coach
+# agentic-k12-teaching-assistant
 
 An agentic tutoring system that turns a photo of completed schoolwork into a graded
 page, a diagnosis of *why* each error happened, a short targeted follow-up quiz, and
@@ -34,8 +34,8 @@ make test
 
 1. `docs/PROMPT_REVIEW.md` - the design critique that shaped this build
 2. `docs/ARCHITECTURE.md` - boundaries and why they are where they are
-3. `src/alc/mastery/model.py` - memory with decay and retrieval scheduling
-4. `src/alc/domain/policy.py` - the academic integrity rail
+3. `src/k12ta/mastery/model.py` - memory with decay and retrieval scheduling
+4. `src/k12ta/domain/policy.py` - the academic integrity rail
 5. `evals/` - how any of this is known to work
 
 ## Non-goals for v1
