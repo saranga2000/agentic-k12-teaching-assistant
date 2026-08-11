@@ -59,7 +59,7 @@ Cloud vision and reasoning, no local GPU. The MacBook Air can run a small local 
 but not one that reads a child's handwritten long division reliably, and the failure
 mode of a weak transcriber is exactly the failure mode this project cannot afford.
 
-Set `ALC_DAILY_TOKEN_BUDGET_USD` and enforce it. Expected steady-state cost for two
+Set `K12TA_DAILY_TOKEN_BUDGET_USD` and enforce it. Expected steady-state cost for two
 children at one page per day is small, but an accidental retry loop over a photo is not,
 and a hard stop is one line of code.
 

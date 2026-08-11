@@ -29,11 +29,13 @@ class Settings:
     @staticmethod
     def from_env() -> Settings:
         return Settings(
-            llm_provider=os.environ.get("ALC_LLM_PROVIDER", "anthropic"),
-            llm_api_key=os.environ.get("ALC_LLM_API_KEY", ""),
-            llm_model=os.environ.get("ALC_LLM_MODEL", ""),
-            data_dir=Path(os.environ.get("ALC_DATA_DIR", "./data")),
-            coach_name=os.environ.get("ALC_COACH_NAME", COACH_NAME_PLACEHOLDER),
-            daily_token_budget_usd=Decimal(os.environ.get("ALC_DAILY_TOKEN_BUDGET_USD", "1.50")),
-            log_level=os.environ.get("ALC_LOG_LEVEL", "INFO"),
+            llm_provider=os.environ.get("K12TA_LLM_PROVIDER", "anthropic"),
+            llm_api_key=os.environ.get("K12TA_LLM_API_KEY", ""),
+            llm_model=os.environ.get("K12TA_LLM_MODEL", ""),
+            data_dir=Path(os.environ.get("K12TA_DATA_DIR", "./data")),
+            coach_name=os.environ.get("K12TA_COACH_NAME", COACH_NAME_PLACEHOLDER),
+            daily_token_budget_usd=Decimal(
+                os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")
+            ),
+            log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),
         )

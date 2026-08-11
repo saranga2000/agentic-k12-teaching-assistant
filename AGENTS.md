@@ -42,6 +42,7 @@ introduced without being asked.
 - [ ] Public functions have docstrings stating the contract, not restating the name
 - [ ] No secret, student name, or photo committed
 - [ ] If behaviour is user-visible, `docs/ROADMAP.md` milestone table updated
+- [ ] Every CI step run locally before pushing, not only the one that failed last time
 
 ## Repo conventions
 
@@ -54,6 +55,14 @@ introduced without being asked.
   subdirectories only once a package has three or more test files. Do not create empty
   test directories in advance.
 - Hidden files and directories are part of this repo, search them
+- When verifying a rename, `grep -w` treats underscore as a word character, so it will
+  not catch `OLDNAME_SUFFIX`. Search for the literal substring case-insensitively as
+  well as on word boundaries.
+
+## Local setup
+
+See "Run it yourself" in `README.md`.
+
 ## What to ask about instead of guessing
 
 Grading semantics, feedback policy, anything touching a child's data, anything that

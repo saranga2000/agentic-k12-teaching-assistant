@@ -1,11 +1,19 @@
 # agentic-k12-teaching-assistant
 
-An agentic tutoring system that turns a photo of completed schoolwork into a graded
-page, a diagnosis of *why* each error happened, a short targeted follow-up quiz, and
-an updated per-skill mastery model that drives the next session.
+[![ci](https://github.com/saranga2000/agentic-k12-teaching-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/saranga2000/agentic-k12-teaching-assistant/actions/workflows/ci.yml)
 
-Built as a working household tool first and a portfolio artifact second. The two goals
-are compatible only if every milestone is independently shippable.
+A tool that takes a photo of your kid's finished homework page and turns it into a
+graded page, a plain explanation of why each mistake happened, a short follow-up quiz on
+just the skill that slipped, and an updated picture of what they still need to practise.
+
+There are two doors into this repository, depending on why you are here:
+
+- **[Use it with your kids](#use-it-with-your-kids)** — you are a parent who wants a
+  practical tool for getting homework checked without sitting over a shoulder every
+  night.
+- **[Learn agentic AI by building something real](#learn-agentic-ai-by-building-something-real)**
+  — you want to see what a small, typed, eval-driven AI pipeline looks like when it is
+  built for a real household instead of a demo.
 
 ## Status
 
@@ -19,26 +27,96 @@ are compatible only if every milestone is independently shippable.
 | M5 Parent weekly digest | Payoff for the busy adult | not started |
 | M6 Keyless grading (independent solve + cross-check) | Hard accuracy work | not started |
 
-See `docs/ROADMAP.md`.
+See `docs/ROADMAP.md` for what each milestone includes and why they are ordered this way.
 
-## Quick start
+## Use it with your kids
+
+There is nothing to install yet, but here is what it will look like. Your child
+photographs a finished page on a tablet, and a few seconds later the same screen shows
+what they got right, what they got wrong, and why — one page that appears after a tap,
+not a conversation. The whole thing runs on one laptop in your house: no account to
+create, no app to install beyond adding a browser tab to the home screen, no cloud
+service holding your child's work.
+
+The setup guide for families arrives at M3, once the app can actually capture a page,
+grade it, and be trusted not to hand over an answer on work someone else is going to
+grade. Until then, `docs/ROADMAP.md` has the full plan and timeline.
+
+## Learn agentic AI by building something real
+
+A K-12 teaching assistant that runs in a real house, on a real school schedule, for two
+real kids.
+
+### Run it yourself
 
 ```bash
+git clone https://github.com/saranga2000/agentic-k12-teaching-assistant
+cd agentic-k12-teaching-assistant
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env      # add your model API key
-make test
+pytest
 ```
 
-## Reading order for a reviewer
+That runs the 31 tests M0 shipped. Implemented and tested right now: the domain model,
+the feedback policy engine, the mastery model, and the key-based grader. Not built yet:
+transcription, persistence, and the web interface.
 
-1. `docs/PROMPT_REVIEW.md` - the design critique that shaped this build
-2. `docs/ARCHITECTURE.md` - boundaries and why they are where they are
-3. `src/k12ta/mastery/model.py` - memory with decay and retrieval scheduling
-4. `src/k12ta/domain/policy.py` - the academic integrity rail
-5. `evals/` - how any of this is known to work
+### What you will learn
 
-## Non-goals for v1
+- **Plain dataclasses for domain objects** — no framework, testable in milliseconds —
+  `src/k12ta/domain/models.py`
+- **Feedback policy as assignment data, not a global switch** — fails closed by
+  default — `src/k12ta/domain/policy.py`
+- **Deterministic grading kept apart from model calls** — the key-based grader never
+  touches a model — `src/k12ta/grading/key_grader.py`
+- **A two-parameter spaced-decay memory model** — stability grows on success, a floor
+  stops it decaying to zero — `src/k12ta/mastery/model.py`
+- **Session composition against burnout** — mixes due, weak, and solid items instead of
+  "weakest skill first" — `src/k12ta/mastery/scheduler.py`
+- **Confidence-gated escalation** — below a stated threshold the system says it could
+  not read the page, never a guess — see "Confidence and escalation" in
+  `docs/ARCHITECTURE.md`
+- **A single model-provider adapter boundary** — swapping providers is a new file, not
+  a refactor (M1) — `src/k12ta/llm/`
+- **Eval-driven development** — a scoring harness written and run before the thing it
+  measures exists (M1) — `evals/run_transcription_eval.py`
+- **Adversarial evals as a CI gate** — scores leakage of graded answers, blocking merges
+  (M3) — `docs/EVALS.md`
 
-No account system. No cloud multi-tenancy. No peer/group mode. No speech. No mobile
-native app. No always-on capture of any kind.
+### Why there is no agent framework here
+
+No LangChain, no agent framework, no vector database, and no reasoning loop deciding
+what to do next. The pipeline is a fixed sequence of typed stages — capture, transcribe,
+grade, diagnose, respond, update mastery, schedule — each a plain function with a typed
+input and output. That is a deliberate trade: less flexible than a general agent loop,
+but every stage is independently testable, independently eval-able, and legible to a
+reviewer who has never seen the code before. See `docs/ARCHITECTURE.md` for the full
+reasoning.
+
+### Where to go next
+
+- `docs/PROMPT_REVIEW.md` — the design critique that shaped every decision below,
+  including why a single global feedback toggle was rejected.
+- `docs/ARCHITECTURE.md` — the module boundaries, the dependency choices, and the case
+  against an agent framework, in full.
+- `docs/EVALS.md` — the three eval families that gate every milestone, and the number
+  each one has to clear.
+- `AGENTS.md` — the working agreement a coding assistant follows in this repo: tests
+  first, one module one job, `mypy --strict`.
+- `docs/DATA_POLICY.md` — what happens to a photograph of a child's homework, written
+  down before the first one was ever taken.
+- `PROMPTS.md` — the actual prompts used to build this, one milestone at a time, if you
+  want to reproduce the process yourself.
+
+`docs/MEMORY.md` and `docs/PROGRESS.md` arrive at M4 and M5, once there is a mastery
+history and a weekly digest to write about.
+
+## Roadmap and non-goals
+
+Milestones are ordered around one constraint: each one has to be independently
+shippable and independently demonstrable, and the school-year path (M0 through M3)
+ships before the more permissive summer-mode work. Full reasoning and the milestone
+detail live in `docs/ROADMAP.md`.
+
+Deliberately out of scope for v1: no account system, no cloud multi-tenancy, no
+peer or group mode, no speech, no mobile native app, no always-on capture of any kind.
