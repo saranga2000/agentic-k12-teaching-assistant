@@ -47,5 +47,7 @@ Do not report accuracy. Accuracy hides the asymmetry.
 make eval
 ```
 
-Record results in `evals/results/<date>-<milestone>.md` and reference the file in the
-commit. The history of these numbers is the most interesting thing in the repository.
+Record results in `evals/results/<date>-<time>-<transcriber_name>.md` and reference the
+file in the commit. The timestamp exists so that same-day reruns during tuning never
+overwrite each other — comparing runs against each other is the point. The history of
+these numbers is the most interesting thing in the repository.

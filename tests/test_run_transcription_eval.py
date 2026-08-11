@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from evals.run_transcription_eval import Scorecard, _normalise_prompt, score, write_report
+from k12ta.transcribe.base import TranscribedItem, TranscriptionResult
+
+
+@dataclass
+class FakeTranscriber:
+    """Returns pre-canned results keyed by image path. Test-only, never shipped."""
+
+    name: str
+    responses: dict[str, TranscriptionResult]
+
+    def transcribe(self, image_path: str) -> TranscriptionResult:
+        return self.responses[image_path]
+
+
+def _result(*items: TranscribedItem) -> TranscriptionResult:
+    return TranscriptionResult(
+        items=items, provider="fake", model="fake", cost_usd=0.0, latency_ms=0
+    )
+
+
+def _write_page(
+    tmp_path: Path,
+    page_id: str,
+    image: str,
+    capture_device: str,
+    capture_method: str,
+    items: list[dict[str, object]],
+) -> None:
+    image_path = tmp_path / image
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.touch()
+    page = {
+        "page_id": page_id,
+        "image": image,
+        "source_id": "summer_bridge",
+        "subject": "math",
+        "capture_quality": "good",
+        "capture_device": capture_device,
+        "capture_method": capture_method,
+        "items": items,
+    }
+    (tmp_path / f"{page_id}.json").write_text(json.dumps(page))
+
+
+def _item(problem_id: str, prompt_text: str, answer: str) -> dict[str, object]:
+    return {
+        "problem_id": problem_id,
+        "prompt_text": prompt_text,
+        "student_answer_raw": answer,
+        "human_legible": True,
+        "correct_answer": answer,
+    }
+
+
+def _two_page_fixture(tmp_path: Path) -> dict[str, str]:
+    """Page A: ipad, camera-roll. Page B: pixel, app-ui. Returns image keys used by the fake."""
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [
+            _item("1", "What is 2+2?", "4"),
+            _item("2", "What is 3+3?", "6"),
+            _item("3", "What is 5+5?", "10"),
+        ],
+    )
+    _write_page(
+        tmp_path,
+        "page-b",
+        "pages/b.jpg",
+        "pixel-9a",
+        "app-ui",
+        [
+            _item("1", "Solve for x: x+1=2", "x = 1"),
+            _item("2", "Solve for x: x+2=5", "x = 3"),
+        ],
+    )
+    return {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+
+
+def test_hand_computed_scores_across_two_pages(tmp_path: Path) -> None:
+    keys = _two_page_fixture(tmp_path)
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(
+                TranscribedItem("1", "What is 2+2?", "4", confidence=0.97),  # exact match
+                TranscribedItem("2", "What is 3+3?", "7", confidence=0.90),  # wrong answer
+                # id "3" not returned at all: a genuine miss
+                TranscribedItem("9", "What is 100/2?", "50", confidence=0.99),  # spurious
+            ),
+            keys["b"]: _result(
+                # right problem, wrong printed number: misnumbered, not spurious/missed
+                TranscribedItem("5", "Solve for x: x+1=2", "x=1", confidence=0.60),
+                TranscribedItem("2", "Solve for x: x+2=5", "x = 3", confidence=0.40),  # exact
+            ),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+    overall = report.overall
+
+    assert overall.pages == 2
+    assert overall.expected_items == 5
+    assert overall.matched_items == 3
+    assert overall.misnumbered_items == 1
+    assert overall.spurious_items == 1
+    assert overall.exact_matches == 2
+    assert overall.detection_recall() == pytest.approx(4 / 5)
+    assert overall.detection_precision() == pytest.approx(4 / 5)
+    assert overall.exact_match_rate() == pytest.approx(2 / 3)
+    assert overall.band_totals == {"0.95-1.01": 1, "0.85-0.95": 1, "0.00-0.85": 1}
+    assert overall.band_correct == {"0.95-1.01": 1, "0.00-0.85": 1}
+
+    ipad = report.by_device["ipad-air-m1"]
+    assert (ipad.pages, ipad.expected_items, ipad.matched_items) == (1, 3, 2)
+    assert ipad.misnumbered_items == 0
+    assert ipad.spurious_items == 1
+    assert ipad.detection_recall() == pytest.approx(2 / 3)
+    assert ipad.exact_match_rate() == pytest.approx(1 / 2)
+
+    pixel = report.by_device["pixel-9a"]
+    assert (pixel.pages, pixel.expected_items, pixel.matched_items) == (1, 2, 1)
+    assert pixel.misnumbered_items == 1
+    assert pixel.spurious_items == 0
+    assert pixel.detection_recall() == pytest.approx(1.0)
+    assert pixel.exact_match_rate() == pytest.approx(1.0)
+
+    camera_roll = report.by_method["camera-roll"]
+    app_ui = report.by_method["app-ui"]
+    assert (camera_roll.matched_items, camera_roll.spurious_items) == (2, 1)
+    assert (app_ui.matched_items, app_ui.misnumbered_items) == (1, 1)
+
+    # Slices must sum back to the overall scorecard.
+    for field in ("expected_items", "matched_items", "misnumbered_items", "spurious_items"):
+        device_sum = sum(getattr(c, field) for c in report.by_device.values())
+        method_sum = sum(getattr(c, field) for c in report.by_method.values())
+        assert device_sum == getattr(overall, field)
+        assert method_sum == getattr(overall, field)
+
+
+def test_misnumbered_item_excluded_from_spurious_missed_and_exact_match(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        # Same problem, wrong id, and an answer that would fail exact-match if it were scored.
+        responses={
+            image_key: _result(TranscribedItem("7", "What is 2+2?", "five", confidence=0.99))
+        },
+    )
+
+    overall = score(transcriber, tmp_path).overall
+
+    assert overall.matched_items == 0
+    assert overall.misnumbered_items == 1
+    assert overall.spurious_items == 0
+    assert overall.exact_matches == 0
+    assert overall.band_totals == {}
+    assert overall.detection_recall() == pytest.approx(1.0)
+    assert overall.detection_precision() == pytest.approx(1.0)
+    assert overall.exact_match_rate() == 0.0
+
+
+def test_spurious_item_not_explained_by_any_prompt(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                TranscribedItem("1", "What is 2+2?", "4", confidence=0.99),
+                TranscribedItem("2", "What is the capital of France?", "Paris", confidence=0.9),
+            )
+        },
+    )
+
+    overall = score(transcriber, tmp_path).overall
+
+    assert overall.matched_items == 1
+    assert overall.misnumbered_items == 0
+    assert overall.spurious_items == 1
+
+
+def test_normalise_prompt_does_not_collide_different_problems() -> None:
+    # key_grader.normalise strips all whitespace, so these two would collapse to the
+    # same string under it ("whatis2+2?"). The prompt-text fallback must not do that.
+    assert _normalise_prompt("What is 2+2?") != _normalise_prompt("What is 2 + 2?")
+
+
+def test_normalise_prompt_collapses_whitespace_and_case_only() -> None:
+    assert _normalise_prompt("  Solve for X:   3(x - 4) = 18  ") == "solve for x: 3(x - 4) = 18"
+
+
+def test_empty_scorecard_rates_do_not_divide_by_zero() -> None:
+    card = Scorecard()
+
+    assert card.detection_recall() == 0.0
+    assert card.detection_precision() == 0.0
+    assert card.exact_match_rate() == 0.0
+    assert card.calibration() == {}
+
+
+def test_missing_item_with_no_transcription_lowers_recall_only(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(name="fake", responses={image_key: _result()})
+
+    overall = score(transcriber, tmp_path).overall
+
+    assert overall.expected_items == 1
+    assert overall.matched_items == 0
+    assert overall.misnumbered_items == 0
+    assert overall.spurious_items == 0
+    assert overall.detection_recall() == 0.0
+    assert overall.detection_precision() == 0.0
+
+
+def test_write_report_preserves_same_day_reruns(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="vision test/v2",
+        responses={image_key: _result(TranscribedItem("1", "What is 2+2?", "4", confidence=0.97))},
+    )
+    report = score(transcriber, tmp_path)
+    results_dir = tmp_path / "results"
+
+    first_at = datetime(2026, 8, 11, 9, 5)
+    second_at = datetime(2026, 8, 11, 14, 30)
+    first = write_report(report, transcriber.name, results_dir, run_at=first_at)
+    second = write_report(report, transcriber.name, results_dir, run_at=second_at)
+
+    assert first != second
+    assert first.name == "2026-08-11-0905-vision-test-v2.md"
+    assert second.name == "2026-08-11-1430-vision-test-v2.md"
+    assert first.exists() and second.exists()
+    assert "detection recall" in first.read_text().lower()
