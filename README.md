@@ -11,7 +11,7 @@ are compatible only if every milestone is independently shippable.
 
 | Milestone | What it proves | State |
 |---|---|---|
-| M0 Skeleton + domain model | Repo hygiene, tests-before-code, CI | in progress |
+| M0 Skeleton + domain model | Repo hygiene, tests-before-code, CI | done |
 | M1 Fixture corpus + transcription eval | Measurement before capability | not started |
 | M2 Vertical slice (photo to graded page) | End to end value | not started |
 | M3 Assignment policy engine + integrity evals | Safety rail with its own tests | not started |
