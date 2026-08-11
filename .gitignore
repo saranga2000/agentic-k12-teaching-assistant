@@ -8,8 +8,8 @@ __pycache__/
 *.egg-info/
 data/
 evals/fixtures/pages/
-evals/fixtures/*.jpg
-evals/fixtures/*.jpeg
-evals/fixtures/*.png
-evals/fixtures/*.heic
+evals/fixtures/**/*.[Jj][Pp][Gg]
+evals/fixtures/**/*.[Jj][Pp][Ee][Gg]
+evals/fixtures/**/*.[Pp][Nn][Gg]
+evals/fixtures/**/*.[Hh][Ee][Ii][Cc]
 .DS_Store
