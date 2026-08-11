@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mount)",
+      "Bash(diskutil info *)",
+      "Bash(cd \"/Volumes/SriRamaJayam/Desktop/myApps\" && ls -la | grep -i \"venv\\\\|Adaptive\")",
+      "Read(//Volumes/SriRamaJayam/Desktop/myApps/**)",
+      "Bash(git init *)"
+    ]
+  }
+}

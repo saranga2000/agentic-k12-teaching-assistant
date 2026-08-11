@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+data/
+evals/fixtures/pages/
+evals/fixtures/*.jpg
+evals/fixtures/*.jpeg
+evals/fixtures/*.png
+evals/fixtures/*.heic
+.DS_Store
