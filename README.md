@@ -20,7 +20,7 @@ There are two doors into this repository, depending on why you are here:
 | Milestone | What it proves | State |
 |---|---|---|
 | M0 Skeleton + domain model | Repo hygiene, tests-before-code, CI | done |
-| M1 Fixture corpus + transcription eval | Measurement before capability | not started |
+| M1 Fixture corpus + transcription eval | Measurement before capability | done |
 | M2 Vertical slice (photo to graded page) | End to end value | not started |
 | M3 Assignment policy engine + integrity evals | Safety rail with its own tests | not started |
 | M4 Mastery model with decay and resurfacing | The headline chapter | scaffolded |
@@ -28,6 +28,24 @@ There are two doors into this repository, depending on why you are here:
 | M6 Keyless grading (independent solve + cross-check) | Hard accuracy work | not started |
 
 See `docs/ROADMAP.md` for what each milestone includes and why they are ordered this way.
+
+**Transcription eval, 2026-08-11**: detection recall 0.545 (12/22), answer exact match
+0.500 (6/12), detection precision 1.000. Full report:
+[`evals/results/2026-08-11-1845-vision_llm.md`](evals/results/2026-08-11-1845-vision_llm.md).
+
+The number that matters most here is calibration, not recall: answers reported at
+0.85–0.95 confidence were wrong 5 times out of 5 (0.000 accuracy), while answers at
+0.95 and above were right 6 out of 6 (1.000 accuracy) — the confidence gate can only be
+trusted at the top band on this sample. The 1.000 detection precision is not evidence
+the model stopped hallucinating problems; it is a fix to how the harness measures a
+two-page-spread page, which only had one of its two visible pages labelled. Every
+detection on the unlabelled page was previously counted as a spurious hallucination it
+never made — an instrument flaw, not a model failure — and the `layout`/`spread_side`
+fields added days earlier are what made that flaw visible enough to fix, moving those
+25 detections into their own unattributed count instead of into precision or recall.
+Treat this as a first read, not a baseline: the corpus is nine pages, all the same
+source, layout, and capture device, and Gemini's daily quota cut the run short after
+four of the nine pages, so even that first read is partial.
 
 ## Use it with your kids
 
