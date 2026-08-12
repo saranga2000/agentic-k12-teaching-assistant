@@ -12,7 +12,7 @@ There are two doors into this repository, depending on why you are here:
   practical tool for getting homework checked without sitting over a shoulder every
   night.
 - **[Learn agentic AI by building something real](#learn-agentic-ai-by-building-something-real)**
-  — you want to see what a small, typed, eval-driven AI pipeline looks like when it is
+  — you want to see what a small, typed, eval-driven Agentic AI pipeline looks like when it is
   built for a real household instead of a demo.
 
 ## Status
@@ -29,23 +29,24 @@ There are two doors into this repository, depending on why you are here:
 
 See `docs/ROADMAP.md` for what each milestone includes and why they are ordered this way.
 
-**Transcription eval, 2026-08-11**: detection recall 0.545 (12/22), answer exact match
-0.500 (6/12), detection precision 1.000. Full report:
-[`evals/results/2026-08-11-1845-vision_llm.md`](evals/results/2026-08-11-1845-vision_llm.md).
+**Transcription eval, 2026-08-12**: detection recall 0.396 (19/48), answer exact match
+0.842 (16/19), detection precision 1.000. Full report:
+[`evals/results/2026-08-12-0825-vision_llm.md`](evals/results/2026-08-12-0825-vision_llm.md).
 
-The number that matters most here is calibration, not recall: answers reported at
-0.85–0.95 confidence were wrong 5 times out of 5 (0.000 accuracy), while answers at
-0.95 and above were right 6 out of 6 (1.000 accuracy) — the confidence gate can only be
-trusted at the top band on this sample. The 1.000 detection precision is not evidence
-the model stopped hallucinating problems; it is a fix to how the harness measures a
-two-page-spread page, which only had one of its two visible pages labelled. Every
-detection on the unlabelled page was previously counted as a spurious hallucination it
-never made — an instrument flaw, not a model failure — and the `layout`/`spread_side`
-fields added days earlier are what made that flaw visible enough to fix, moving those
-25 detections into their own unattributed count instead of into precision or recall.
-Treat this as a first read, not a baseline: the corpus is nine pages, all the same
-source, layout, and capture device, and Gemini's daily quota cut the run short after
-four of the nine pages, so even that first read is partial.
+Calibration is still the number that matters most, not recall: answers reported at
+0.85–0.95 confidence were right 3 out of 5 (0.600 accuracy), while answers at 0.95 and
+above were right all 13 out of 13 (1.000 accuracy) — the confidence gate is trustworthy
+only at the top band on this sample. Detection precision reads as a perfect 1.000 for
+the same reason it did before: a two-page-spread fixture labels only one visible page,
+so a detection on the unlabelled page is reported as unattributed rather than folded in
+as a hallucination it never made. The number this run actually exposes as weak is
+recall, not precision: only 19 of 48 expected problems were found at all, and
+misnumbered items are 0 across every slice, so every miss is a clean failure to detect
+the problem, not a numbering mixup. The corpus is eight scored pages (one hit a network
+timeout, excluded rather than counted as a model failure), all two-page-spread, one
+source, one capture device — the roadmap already predicted spread layout would score
+worse than single-page, and there is no single-page data yet to say how much of this
+gap is that specifically.
 
 ## Use it with your kids
 
