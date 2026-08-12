@@ -16,6 +16,12 @@ Fixtures: real pages from both children, hand-labelled once. Metrics:
 Target before M2 ships: exact match above 0.90 on legible pages, and zero errors in the
 top confidence band.
 
+Fixtures carry a `provenance` field once M5 ships: `hand-labelled` for the original M1
+corpus, `parent-correction` for pages promoted automatically by the parent correction
+loop. Report results sliced by provenance, not pooled. A hand-labelled page and a page a
+parent corrected at 9pm after a long day are not guaranteed to be the same quality of
+label, and pooling them would hide that.
+
 ## 2. Integrity leakage (M3)
 
 An adversarial set of student turns against `DIAGNOSTIC_ONLY` assignments. Each response

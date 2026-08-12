@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from k12ta.evals.fixtures import CaptureMethod, normalise_device
+from k12ta.evals.fixtures import CaptureMethod, Layout, SpreadSide, normalise_device
 
 FIXTURES_DIR = Path(__file__).resolve().parents[3] / "evals" / "fixtures"
 PAGES_DIR = FIXTURES_DIR / "pages"
@@ -27,7 +27,16 @@ CACHE_DIR = FIXTURES_DIR / ".cache"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
 DEFAULT_ROWS = 10
 ADD_ROWS = 5
-PAGE_FIELDS = ("source_id", "subject", "capture_quality", "capture_device", "capture_method")
+PAGE_FIELDS = (
+    "source_id",
+    "subject",
+    "capture_quality",
+    "capture_device",
+    "capture_method",
+    "layout",
+    "spread_side",
+)
+# layout and spread_side are page-specific judgements, not carried between pages.
 PREFILL_FIELDS = ("source_id", "subject", "capture_method")
 ITEM_TEXT_FIELDS = ("problem_id", "prompt_text", "student_answer_raw", "correct_answer")
 
@@ -131,6 +140,18 @@ def _get(data: dict[str, list[str]], key: str, default: str = "") -> str:
     return data.get(key, [default])[0]
 
 
+def _validate_layout(layout_raw: str, spread_side_raw: str) -> str | None:
+    if not layout_raw:
+        return "layout is required."
+    if layout_raw not in {m.value for m in Layout}:
+        return f"layout must be one of {', '.join(m.value for m in Layout)}."
+    if layout_raw == Layout.TWO_PAGE_SPREAD.value and spread_side_raw not in {
+        s.value for s in SpreadSide
+    }:
+        return "spread_side is required when layout is two-page-spread."
+    return None
+
+
 def _render_form(
     request: Request,
     image: Path,
@@ -150,6 +171,8 @@ def _render_form(
         "row_count": row_count,
         "prefilled": prefilled,
         "methods": [m.value for m in CaptureMethod],
+        "layouts": [layout.value for layout in Layout],
+        "spread_sides": [side.value for side in SpreadSide],
         "error": error,
     }
     return templates.TemplateResponse(request, "label.html", context)
@@ -221,6 +244,12 @@ async def submit_label(request: Request) -> HTMLResponse | RedirectResponse:
         new_rows = rows + [_blank_row() for _ in range(ADD_ROWS)]
         return _render_form(request, image, values, new_rows, row_count + ADD_ROWS, set())
 
+    layout_raw = values["layout"].strip()
+    spread_side_raw = values["spread_side"].strip()
+    layout_error = _validate_layout(layout_raw, spread_side_raw)
+    if layout_error:
+        return _render_form(request, image, values, rows, row_count, set(), error=layout_error)
+
     items = [
         {
             "problem_id": row["problem_id"].strip(),
@@ -237,7 +266,7 @@ async def submit_label(request: Request) -> HTMLResponse | RedirectResponse:
         error = "No problems entered. Use 'Skip this page' if it has none."
         return _render_form(request, image, values, rows, row_count, set(), error=error)
 
-    page = {
+    page: dict[str, object] = {
         "page_id": stem,
         "image": f"pages/{image.name}",
         "source_id": values["source_id"].strip(),
@@ -245,8 +274,11 @@ async def submit_label(request: Request) -> HTMLResponse | RedirectResponse:
         "capture_quality": values["capture_quality"].strip(),
         "capture_device": normalise_device(values["capture_device"]),
         "capture_method": values["capture_method"],
+        "layout": layout_raw,
         "items": items,
     }
+    if layout_raw == Layout.TWO_PAGE_SPREAD.value:
+        page["spread_side"] = spread_side_raw
     _label_path(stem).write_text(json.dumps(page, indent=2))
     destination = "/pages" if was_already_labelled else "/label"
     return RedirectResponse(destination, status_code=303)

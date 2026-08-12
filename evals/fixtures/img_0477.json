@@ -1,0 +1,76 @@
+{
+  "page_id": "img_0477",
+  "image": "pages/IMG_0477.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "fair",
+  "capture_device": "ipad-air-m1",
+  "capture_method": "camera-roll",
+  "layout": "two-page-spread",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "A chef uses 4 3/4 cups of broth for 10 servings of soup. How much broth is used in one serving? Let x represent the amount of broth.",
+      "student_answer_raw": "0.475",
+      "human_legible": true,
+      "correct_answer": "0.475"
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "Louisa biked 50 4/5 miles in 4 hours. How many miles did she bike per hour? Let m represent the number of miles.",
+      "student_answer_raw": "12.6",
+      "human_legible": true,
+      "correct_answer": "12.7"
+    },
+    {
+      "problem_id": "3",
+      "prompt_text": "124 7/8 gallons of water drained from a pool in 25 minutes. How much water drained each minute? Let g represent the number of gallons.",
+      "student_answer_raw": "4.995",
+      "human_legible": true,
+      "correct_answer": "4.995"
+    },
+    {
+      "problem_id": "4",
+      "prompt_text": "Look up \"facilitate\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "verb",
+      "human_legible": true,
+      "correct_answer": "verb"
+    },
+    {
+      "problem_id": "5",
+      "prompt_text": "Look up \"mezzanine\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "Noun",
+      "human_legible": true,
+      "correct_answer": "Noun"
+    },
+    {
+      "problem_id": "6",
+      "prompt_text": "Look up \"accomplice\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "Noun",
+      "human_legible": true,
+      "correct_answer": "Noun"
+    },
+    {
+      "problem_id": "7",
+      "prompt_text": "Look up \"patriarch\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "Noun",
+      "human_legible": true,
+      "correct_answer": "Noun"
+    },
+    {
+      "problem_id": "8",
+      "prompt_text": "Look up \"confiscate\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "verb",
+      "human_legible": true,
+      "correct_answer": "verb"
+    },
+    {
+      "problem_id": "9",
+      "prompt_text": "Look up \"utilitarian\" in a dictionary. Write the word's part of speech.",
+      "student_answer_raw": "Adjective",
+      "human_legible": true,
+      "correct_answer": "Adjective"
+    }
+  ],
+  "spread_side": "right"
+}

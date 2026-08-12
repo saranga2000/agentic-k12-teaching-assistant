@@ -40,6 +40,7 @@ def _minimal_save(stem: str, **overrides: str) -> dict[str, str]:
         "capture_quality": "good",
         "capture_device": "ipad-air-m1",
         "capture_method": "camera-roll",
+        "layout": "single-page",
     }
     data.update(overrides)
     return data
@@ -119,6 +120,8 @@ def test_prefill_carries_source_subject_method_but_not_device_or_quality(
     assert 'name="capture_device" value=""' in r.text  # never carried forward
     assert 'name="capture_quality" value=""' in r.text  # never carried forward
     assert 'selected>camera-roll' in r.text  # capture_method carried forward
+    assert 'value="single-page" selected' not in r.text  # layout never carried forward
+    assert 'value="two-page-spread" selected' not in r.text
 
 
 def test_save_writes_original_image_path_and_normalised_device(client: TestClient) -> None:
@@ -165,6 +168,87 @@ def test_blank_rows_are_dropped_but_filled_rows_are_kept(client: TestClient) -> 
 
     saved = json.loads((label_app.FIXTURES_DIR / "a.json").read_text())
     assert [item["problem_id"] for item in saved["items"]] == ["1", "4"]
+
+
+def test_save_rejects_missing_layout(client: TestClient) -> None:
+    _touch(label_app.PAGES_DIR, "a.jpg")
+
+    r = client.post(
+        "/label",
+        data=_minimal_save("a", layout="", problem_id_0="1", student_answer_raw_0="4"),
+    )
+
+    assert "layout" in r.text.lower()
+    assert not (label_app.FIXTURES_DIR / "a.json").exists()
+
+
+def test_two_page_spread_requires_spread_side(client: TestClient) -> None:
+    _touch(label_app.PAGES_DIR, "a.jpg")
+
+    r = client.post(
+        "/label",
+        data=_minimal_save(
+            "a", layout="two-page-spread", problem_id_0="1", student_answer_raw_0="4"
+        ),
+    )
+
+    assert "spread_side" in r.text.lower()
+    assert not (label_app.FIXTURES_DIR / "a.json").exists()
+
+
+def test_two_page_spread_with_spread_side_saves_both_fields(client: TestClient) -> None:
+    _touch(label_app.PAGES_DIR, "a.jpg")
+
+    r = client.post(
+        "/label",
+        data=_minimal_save(
+            "a",
+            layout="two-page-spread",
+            spread_side="right",
+            problem_id_0="1",
+            student_answer_raw_0="4",
+        ),
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    saved = json.loads((label_app.FIXTURES_DIR / "a.json").read_text())
+    assert saved["layout"] == "two-page-spread"
+    assert saved["spread_side"] == "right"
+
+
+def test_single_page_drops_any_submitted_spread_side(client: TestClient) -> None:
+    _touch(label_app.PAGES_DIR, "a.jpg")
+
+    r = client.post(
+        "/label",
+        data=_minimal_save(
+            "a",
+            layout="single-page",
+            spread_side="left",  # e.g. left over from switching the dropdown back
+            problem_id_0="1",
+            student_answer_raw_0="4",
+        ),
+        follow_redirects=False,
+    )
+
+    assert r.status_code == 303
+    saved = json.loads((label_app.FIXTURES_DIR / "a.json").read_text())
+    assert saved["layout"] == "single-page"
+    assert "spread_side" not in saved
+
+
+def test_layout_never_carries_forward_even_when_skipped(client: TestClient) -> None:
+    _touch(label_app.PAGES_DIR, "a.jpg")
+    _touch(label_app.PAGES_DIR, "b.jpg")
+    client.post(
+        "/label", data=_minimal_save("a", layout="two-page-spread", spread_side="left")
+    )
+
+    r = client.get("/label")
+
+    assert 'value="single-page" selected' not in r.text
+    assert 'value="two-page-spread" selected' not in r.text
 
 
 def test_all_pages_labelled_shows_done_page(client: TestClient) -> None:

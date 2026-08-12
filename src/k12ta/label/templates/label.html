@@ -61,6 +61,24 @@
           </select>
           {% if 'capture_method' in prefilled %}<span class="prefill-tag">carried forward</span>{% endif %}
         </div>
+        <div class="field">
+          <label>layout</label>
+          <select name="layout" id="layout_select">
+            <option value="">-- choose --</option>
+            {% for l in layouts %}
+            <option value="{{ l }}" {% if values.layout == l %}selected{% endif %}>{{ l }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" id="spread_side_field">
+          <label>spread_side</label>
+          <select name="spread_side">
+            <option value="">-- choose --</option>
+            {% for s in spread_sides %}
+            <option value="{{ s }}" {% if values.spread_side == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
       </div>
     </fieldset>
 
@@ -92,17 +110,33 @@
 
   <script>
     const form = document.querySelector("form");
-    const fields = Array.from(form.querySelectorAll("input[type=text], select"));
-    fields.forEach((field, i) => {
+    const layoutSelect = document.getElementById("layout_select");
+    const spreadSideField = document.getElementById("spread_side_field");
+
+    function updateSpreadSideVisibility() {
+      spreadSideField.style.display = layoutSelect.value === "two-page-spread" ? "" : "none";
+    }
+    layoutSelect.addEventListener("change", updateSpreadSideVisibility);
+    updateSpreadSideVisibility();
+
+    function visibleFields() {
+      return Array.from(form.querySelectorAll("input[type=text], select"))
+        .filter((el) => el.offsetParent !== null);
+    }
+    form.querySelectorAll("input[type=text], select").forEach((field) => {
       field.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && i < fields.length - 1) {
+        if (event.key !== "Enter") return;
+        const fields = visibleFields();
+        const i = fields.indexOf(field);
+        if (i >= 0 && i < fields.length - 1) {
           event.preventDefault();
           fields[i + 1].focus();
         }
       });
     });
-    if (fields[0]) {
-      fields[0].focus();
+    const first = visibleFields()[0];
+    if (first) {
+      first.focus();
     }
   </script>
 </body>

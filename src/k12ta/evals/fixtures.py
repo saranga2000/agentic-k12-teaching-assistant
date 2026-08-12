@@ -19,6 +19,20 @@ class CaptureMethod(Enum):
     APP_UI = "app-ui"
 
 
+class Layout(Enum):
+    """Whether the image shows one workbook page or two facing pages at once."""
+
+    SINGLE_PAGE = "single-page"
+    TWO_PAGE_SPREAD = "two-page-spread"
+
+
+class SpreadSide(Enum):
+    """Which visible page of a two-page spread the labelled items came from."""
+
+    LEFT = "left"
+    RIGHT = "right"
+
+
 class FixtureValidationError(ValueError):
     """A label file does not conform to the fixture schema."""
 
@@ -41,6 +55,8 @@ class FixturePage:
     capture_quality: str
     capture_device: str
     capture_method: CaptureMethod
+    layout: Layout
+    spread_side: SpreadSide | None
     items: tuple[FixtureItem, ...]
 
 
@@ -67,6 +83,8 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
             f"got {capture_method_raw!r}"
         ) from exc
 
+    layout, spread_side = _parse_layout(page, label_path)
+
     return FixturePage(
         page_id=_require_str(page, "page_id", label_path),
         image=image,
@@ -75,8 +93,40 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
         capture_quality=_require_str(page, "capture_quality", label_path),
         capture_device=normalise_device(_require_str(page, "capture_device", label_path)),
         capture_method=capture_method,
+        layout=layout,
+        spread_side=spread_side,
         items=_parse_items(page, label_path),
     )
+
+
+def _parse_layout(
+    page: dict[str, object], label_path: Path
+) -> tuple[Layout, SpreadSide | None]:
+    layout_raw = _require_str(page, "layout", label_path)
+    try:
+        layout = Layout(layout_raw)
+    except ValueError as exc:
+        allowed = ", ".join(m.value for m in Layout)
+        raise FixtureValidationError(
+            f"{label_path}: layout must be one of {allowed}, got {layout_raw!r}"
+        ) from exc
+
+    if layout is Layout.SINGLE_PAGE:
+        if "spread_side" in page:
+            raise FixtureValidationError(
+                f"{label_path}: spread_side must be absent when layout is single-page"
+            )
+        return layout, None
+
+    spread_side_raw = _require_str(page, "spread_side", label_path)
+    try:
+        spread_side = SpreadSide(spread_side_raw)
+    except ValueError as exc:
+        allowed = ", ".join(m.value for m in SpreadSide)
+        raise FixtureValidationError(
+            f"{label_path}: spread_side must be one of {allowed}, got {spread_side_raw!r}"
+        ) from exc
+    return layout, spread_side
 
 
 def _parse_items(page: dict[str, object], label_path: Path) -> tuple[FixtureItem, ...]:

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from k12ta.evals.fixtures import CaptureMethod, FixtureValidationError, load_fixture_pages
+from k12ta.evals.fixtures import (
+    CaptureMethod,
+    FixtureValidationError,
+    Layout,
+    SpreadSide,
+    load_fixture_pages,
+)
 
 VALID_PAGE: dict[str, object] = {
     "page_id": "2026-08-15-math-p12",
@@ -16,6 +22,7 @@ VALID_PAGE: dict[str, object] = {
     "capture_quality": "good",
     "capture_device": "ipad-air-m1",
     "capture_method": "camera-roll",
+    "layout": "single-page",
     "items": [
         {
             "problem_id": "3",
@@ -56,6 +63,8 @@ def test_loads_a_valid_page(tmp_path: Path) -> None:
     assert loaded.page_id == "2026-08-15-math-p12"
     assert loaded.capture_device == "ipad-air-m1"
     assert loaded.capture_method is CaptureMethod.CAMERA_ROLL
+    assert loaded.layout is Layout.SINGLE_PAGE
+    assert loaded.spread_side is None
     assert len(loaded.items) == 1
     assert loaded.items[0].problem_id == "3"
     assert loaded.items[0].correct_answer == "x = 10"
@@ -169,3 +178,67 @@ def test_normalises_capture_device(tmp_path: Path, raw_device: str, expected: st
     pages = load_fixture_pages(tmp_path)
 
     assert pages[0].capture_device == expected
+
+
+def test_rejects_missing_layout(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    del page["layout"]
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="layout"):
+        load_fixture_pages(tmp_path)
+
+
+def test_rejects_invalid_layout(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    page["layout"] = "landscape"
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="layout"):
+        load_fixture_pages(tmp_path)
+
+
+def test_loads_two_page_spread_with_spread_side(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    page["layout"] = "two-page-spread"
+    page["spread_side"] = "left"
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].layout is Layout.TWO_PAGE_SPREAD
+    assert pages[0].spread_side is SpreadSide.LEFT
+
+
+def test_rejects_two_page_spread_without_spread_side(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    page["layout"] = "two-page-spread"
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="spread_side"):
+        load_fixture_pages(tmp_path)
+
+
+def test_rejects_invalid_spread_side(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    page["layout"] = "two-page-spread"
+    page["spread_side"] = "middle"
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="spread_side"):
+        load_fixture_pages(tmp_path)
+
+
+def test_rejects_spread_side_present_when_layout_is_single_page(tmp_path: Path) -> None:
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    page["spread_side"] = "left"
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="spread_side"):
+        load_fixture_pages(tmp_path)

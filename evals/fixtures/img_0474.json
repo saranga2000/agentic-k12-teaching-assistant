@@ -6,6 +6,7 @@
   "capture_quality": ". It is not good: angled, shadowed, half-resolution, and the page curves.",
   "capture_device": "ipad-air-m1",
   "capture_method": "camera-roll",
+  "layout": "two-page-spread",
   "items": [
     {
       "problem_id": "1",
@@ -21,5 +22,6 @@
       "human_legible": false,
       "correct_answer": ""
     }
-  ]
+  ],
+  "spread_side": "left"
 }

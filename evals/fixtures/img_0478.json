@@ -1,0 +1,76 @@
+{
+  "page_id": "img_0478",
+  "image": "pages/IMG_0478.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "",
+  "capture_device": "",
+  "capture_method": "camera-roll",
+  "layout": "two-page-spread",
+  "items": [
+    {
+      "problem_id": "13",
+      "prompt_text": "Write P if the word \"annoy\" has a positive connotation, N if negative.",
+      "student_answer_raw": "N",
+      "human_legible": true,
+      "correct_answer": "N"
+    },
+    {
+      "problem_id": "15",
+      "prompt_text": "Write P if the word \"worthless\" has a positive connotation, N if negative.",
+      "student_answer_raw": "N",
+      "human_legible": true,
+      "correct_answer": "N"
+    },
+    {
+      "problem_id": "17",
+      "prompt_text": "Write P if the word \"compliment\" has a positive connotation, N if negative.",
+      "student_answer_raw": "P",
+      "human_legible": true,
+      "correct_answer": "P"
+    },
+    {
+      "problem_id": "14",
+      "prompt_text": "Write P if the word \"unique\" has a positive connotation, N if negative.",
+      "student_answer_raw": "P",
+      "human_legible": true,
+      "correct_answer": "P"
+    },
+    {
+      "problem_id": "16",
+      "prompt_text": "Write P if the word \"clumsy\" has a positive connotation, N if negative.",
+      "student_answer_raw": "N",
+      "human_legible": true,
+      "correct_answer": "N"
+    },
+    {
+      "problem_id": "18",
+      "prompt_text": "Write P if the word \"exquisite\" has a positive connotation, N if negative.",
+      "student_answer_raw": "P",
+      "human_legible": true,
+      "correct_answer": "P"
+    },
+    {
+      "problem_id": "20",
+      "prompt_text": "What kind of information do primary sources provide?",
+      "student_answer_raw": "they provide information that the people of that time recieved",
+      "human_legible": true,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "21",
+      "prompt_text": "What does a secondary source interpret?",
+      "student_answer_raw": "it interprets what happened after the time",
+      "human_legible": true,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "22",
+      "prompt_text": "Name a primary source you might use to write a research paper about the Klondike Gold Rush.",
+      "student_answer_raw": "a journal entry from someone who found gold",
+      "human_legible": true,
+      "correct_answer": ""
+    }
+  ],
+  "spread_side": "left"
+}

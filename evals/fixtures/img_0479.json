@@ -1,0 +1,69 @@
+{
+  "page_id": "img_0479",
+  "image": "pages/IMG_0479.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "",
+  "capture_device": "",
+  "capture_method": "camera-roll",
+  "layout": "two-page-spread",
+  "items": [
+    {
+      "problem_id": "k",
+      "prompt_text": "Use the equation k = y \u00f7 x to find the constant of proportionality for the set of values.",
+      "student_answer_raw": "3",
+      "human_legible": true,
+      "correct_answer": "3"
+    },
+    {
+      "problem_id": "table-x3",
+      "prompt_text": "Complete the table: third x value",
+      "student_answer_raw": "3",
+      "human_legible": true,
+      "correct_answer": "3"
+    },
+    {
+      "problem_id": "table-y3",
+      "prompt_text": "Complete the table: y value when x = 3",
+      "student_answer_raw": "9",
+      "human_legible": true,
+      "correct_answer": "9"
+    },
+    {
+      "problem_id": "table-x4",
+      "prompt_text": "Complete the table: fourth x value",
+      "student_answer_raw": "4",
+      "human_legible": true,
+      "correct_answer": "4"
+    },
+    {
+      "problem_id": "table-y4",
+      "prompt_text": "Complete the table: y value when x = 4",
+      "student_answer_raw": "12",
+      "human_legible": true,
+      "correct_answer": "12"
+    },
+    {
+      "problem_id": "table-x5",
+      "prompt_text": "Complete the table: fifth x value",
+      "student_answer_raw": "5",
+      "human_legible": true,
+      "correct_answer": "5"
+    },
+    {
+      "problem_id": "table-y5",
+      "prompt_text": "Complete the table: y value when x = 5",
+      "student_answer_raw": "15",
+      "human_legible": true,
+      "correct_answer": "15"
+    },
+    {
+      "problem_id": "rate",
+      "prompt_text": "How does the graph show that the rate of change is constant?",
+      "student_answer_raw": "because it creates a straight line",
+      "human_legible": true,
+      "correct_answer": ""
+    }
+  ],
+  "spread_side": "right"
+}

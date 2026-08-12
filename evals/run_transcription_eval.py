@@ -101,6 +101,7 @@ class EvalReport:
     overall: Scorecard
     by_device: dict[str, Scorecard]
     by_method: dict[str, Scorecard]
+    by_layout: dict[str, Scorecard]
 
     def to_markdown(self, transcriber_name: str, run_at: datetime) -> str:
         lines = [
@@ -111,17 +112,17 @@ class EvalReport:
             self.overall.render("Overall"),
             "",
         ]
-        if self.by_device:
-            lines.append("## By capture device")
+        for title, slices in (
+            ("By capture device", self.by_device),
+            ("By capture method", self.by_method),
+            ("By layout", self.by_layout),
+        ):
+            if not slices:
+                continue
+            lines.append(f"## {title}")
             lines.append("")
-            for device in sorted(self.by_device):
-                lines.append(self.by_device[device].render(device))
-                lines.append("")
-        if self.by_method:
-            lines.append("## By capture method")
-            lines.append("")
-            for method in sorted(self.by_method):
-                lines.append(self.by_method[method].render(method))
+            for key in sorted(slices):
+                lines.append(slices[key].render(key))
                 lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
@@ -201,6 +202,7 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
     overall = Scorecard()
     by_device: dict[str, Scorecard] = {}
     by_method: dict[str, Scorecard] = {}
+    by_layout: dict[str, Scorecard] = {}
 
     for page in load_fixture_pages(fixtures_dir):
         result = transcriber.transcribe(str(fixtures_dir / page.image))
@@ -208,8 +210,9 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
 
         device_card = by_device.setdefault(page.capture_device, Scorecard())
         method_card = by_method.setdefault(page.capture_method.value, Scorecard())
+        layout_card = by_layout.setdefault(page.layout.value, Scorecard())
 
-        for card in (overall, device_card, method_card):
+        for card in (overall, device_card, method_card, layout_card):
             card.pages += 1
             card.expected_items += len(page.items)
             card.misnumbered_items += page_match.misnumbered_count
@@ -217,7 +220,9 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
             for expected_item, transcribed_item in page_match.matched:
                 _accumulate_matched(card, expected_item, transcribed_item)
 
-    return EvalReport(overall=overall, by_device=by_device, by_method=by_method)
+    return EvalReport(
+        overall=overall, by_device=by_device, by_method=by_method, by_layout=by_layout
+    )
 
 
 def _slugify(text: str) -> str:

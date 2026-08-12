@@ -6,6 +6,7 @@
   "capture_quality": "fair",
   "capture_device": "ipad-air-m1",
   "capture_method": "camera-roll",
+  "layout": "two-page-spread",
   "items": [
     {
       "problem_id": "1",
@@ -21,5 +22,6 @@
       "human_legible": true,
       "correct_answer": "346"
     }
-  ]
+  ],
+  "spread_side": "right"
 }

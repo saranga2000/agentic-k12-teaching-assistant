@@ -1,0 +1,83 @@
+{
+  "page_id": "img_0482",
+  "image": "pages/IMG_0482.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "",
+  "capture_device": "",
+  "capture_method": "camera-roll",
+  "layout": "two-page-spread",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "List all pairs of alternate exterior angles in the figure.",
+      "student_answer_raw": "\u2220S \u2220Z \u2220T \u2220Y",
+      "human_legible": false,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "List all pairs of alternate interior angles in the figure.",
+      "student_answer_raw": "\u2220U \u2220X \u2220V \u2220W",
+      "human_legible": false,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "3",
+      "prompt_text": "List all pairs of consecutive interior angles in the figure.",
+      "student_answer_raw": "\u2220V \u2220W \u2220V \u2220X",
+      "human_legible": false,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "4",
+      "prompt_text": "List all pairs of corresponding angles in the figure.",
+      "student_answer_raw": "S \u2220W \u2220T \u2220X \u2220Y \u2220V \u2220Z",
+      "human_legible": false,
+      "correct_answer": ""
+    },
+    {
+      "problem_id": "7",
+      "prompt_text": "\u2220I and \u2220M are ___ angles.",
+      "student_answer_raw": "corresponding",
+      "human_legible": true,
+      "correct_answer": "corresponding"
+    },
+    {
+      "problem_id": "8",
+      "prompt_text": "\u2220J and \u2220P are ___ angles.",
+      "student_answer_raw": "alternate exterior",
+      "human_legible": true,
+      "correct_answer": "alternate exterior"
+    },
+    {
+      "problem_id": "9",
+      "prompt_text": "\u2220K and \u2220M are ___ angles.\tc",
+      "student_answer_raw": "consecutive",
+      "human_legible": true,
+      "correct_answer": "consecutive interior"
+    },
+    {
+      "problem_id": "10",
+      "prompt_text": "\u2220L and \u2220M are ___ angles.",
+      "student_answer_raw": "alternate interior",
+      "human_legible": true,
+      "correct_answer": "alternate interior"
+    },
+    {
+      "problem_id": "11",
+      "prompt_text": "\u2220I and \u2220O are ___ angles.",
+      "student_answer_raw": "alternate exterior",
+      "human_legible": true,
+      "correct_answer": "alternate exterior"
+    },
+    {
+      "problem_id": "12",
+      "prompt_text": "\u2220K and \u2220O are ___ angles.",
+      "student_answer_raw": "corresponding",
+      "human_legible": true,
+      "correct_answer": "corresponding"
+    }
+  ],
+  "spread_side": "right"
+}

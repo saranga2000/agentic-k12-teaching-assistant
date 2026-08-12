@@ -14,6 +14,7 @@ One label file per page, named `<page_id>.json`:
   "capture_quality": "good",
   "capture_device": "ipad-air-m1",
   "capture_method": "camera-roll",
+  "layout": "single-page",
   "items": [
     {
       "problem_id": "3",
@@ -38,7 +39,26 @@ hyphens) so "Pixel 9a", "pixel 9a", and "pixel-9a" always land in the same slice
 and then copied over, or `app-ui` once pages start coming through the capture page built
 in M2. Unlike `capture_device`, this is a closed set of exactly those two values.
 
-The eval harness can report scores sliced by either field.
+`layout` is required and is `single-page` or `two-page-spread`. It does not carry
+forward between pages even when the other page-level fields do, because it is a
+judgement about this specific photo, not something that stays constant across a run.
+
+A `two-page-spread` photo shows two facing workbook pages at once, which means the
+image also contains problems from the page you did *not* label. Without recording
+that, the scoring harness would count those unlabelled problems as things the
+transcriber hallucinated, when really they were simply never in scope. When
+`layout` is `two-page-spread`, `spread_side` is also required — `left` or `right`,
+naming which of the two visible pages the labelled items came from. When `layout` is
+`single-page`, `spread_side` must be absent; the loader rejects a file that sets it
+anyway rather than silently ignore an inconsistency.
+
+Layout is never auto-detected from the image. That is image analysis inside a
+disposable labelling tool: it can be wrong, and a silently mislabelled fixture is a
+worse failure than one extra dropdown.
+
+The eval harness can report scores sliced by capture_device, capture_method, or
+layout. Single-page accuracy is expected to be materially better than two-page-spread
+accuracy, since a spread halves the effective resolution of each page.
 
 Aim for 40 to 60 pages before implementing any transcriber. Deliberately include: poor
 light, angled shots, pencil that has smudged, crossed-out work, work that wraps around

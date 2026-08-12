@@ -81,6 +81,32 @@ Done when: a skill practised in week one resurfaces on its own in week four.
   two dinner-table questions, list of items the coach refused to grade
 - Manual score entry: date, source, score. Ten seconds, one screen
 - Baseline chart: outside-programme scores plotted against practice minutes
+- Parent correction loop: after a session, a parent reviews every problem the coach
+  marked wrong or escalated to `NEEDS_HUMAN`, and can correct the transcription, the
+  verdict, or the diagnosis
+
+Hand-labelling fixtures is the most expensive part of M1 and does not scale. The
+correction loop turns fixture collection into a byproduct of ordinary use, producing
+calibration data across months of real work instead of one afternoon of deliberate
+labelling, and it lets a prompt change be measured against accumulated real corrections
+rather than a frozen set.
+
+Every correction writes two records: an audit row (who corrected, when, what changed,
+from what to what) and a fixture label in the same schema as `evals/fixtures/`, which
+automatically promotes that page into the eval corpus. Design constraints to hold from
+the start:
+
+- Correction requires the parent PIN, the same one that gates the feedback-policy
+  override in M3. A student correcting their own grade is a different feature, not
+  this one.
+- A correction never silently changes what the child already saw. A session corrected
+  after the fact is surfaced to the child as "I got this one wrong, you were right" —
+  the coach admitting error is more valuable than the coach appearing infallible.
+- Corrections do not fine-tune any model. They grow the eval corpus and inform prompt
+  iteration, nothing else. No training pipeline exists and none is implied.
+- Auto-promoted fixtures carry a provenance field distinguishing them from hand-labelled
+  ones. A tired parent correcting at 9pm and a deliberate labelling session are not the
+  same population of label quality, and the eval harness must be able to tell them apart.
 
 Done when: you read the digest instead of asking the children how it went.
 

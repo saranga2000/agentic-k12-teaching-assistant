@@ -1,0 +1,41 @@
+{
+  "page_id": "img_0481",
+  "image": "pages/IMG_0481.HEIC",
+  "source_id": "Summer Bridge 7th-8th",
+  "subject": "math",
+  "capture_quality": "",
+  "capture_device": "",
+  "capture_method": "camera-roll",
+  "layout": "two-page-spread",
+  "items": [
+    {
+      "problem_id": "1",
+      "prompt_text": "Whose class had a larger percentage of students with no pets?",
+      "student_answer_raw": "cho's class",
+      "human_legible": true,
+      "correct_answer": "Cho's class"
+    },
+    {
+      "problem_id": "2",
+      "prompt_text": "Who surveyed a larger population?",
+      "student_answer_raw": "cho",
+      "human_legible": true,
+      "correct_answer": "Cho"
+    },
+    {
+      "problem_id": "3",
+      "prompt_text": "Based on Ariana's data, about how many students per class will have 3 or more pets?",
+      "student_answer_raw": "4",
+      "human_legible": true,
+      "correct_answer": "3"
+    },
+    {
+      "problem_id": "4",
+      "prompt_text": "If a third class of 30 students were surveyed, predict about how many students would have 1 pet.",
+      "student_answer_raw": "9",
+      "human_legible": true,
+      "correct_answer": "9"
+    }
+  ],
+  "spread_side": "right"
+}

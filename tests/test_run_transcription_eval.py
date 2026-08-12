@@ -35,11 +35,13 @@ def _write_page(
     capture_device: str,
     capture_method: str,
     items: list[dict[str, object]],
+    layout: str = "single-page",
+    spread_side: str | None = None,
 ) -> None:
     image_path = tmp_path / image
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.touch()
-    page = {
+    page: dict[str, object] = {
         "page_id": page_id,
         "image": image,
         "source_id": "summer_bridge",
@@ -47,8 +49,11 @@ def _write_page(
         "capture_quality": "good",
         "capture_device": capture_device,
         "capture_method": capture_method,
+        "layout": layout,
         "items": items,
     }
+    if spread_side is not None:
+        page["spread_side"] = spread_side
     (tmp_path / f"{page_id}.json").write_text(json.dumps(page))
 
 
@@ -147,8 +152,52 @@ def test_hand_computed_scores_across_two_pages(tmp_path: Path) -> None:
     for field in ("expected_items", "matched_items", "misnumbered_items", "spurious_items"):
         device_sum = sum(getattr(c, field) for c in report.by_device.values())
         method_sum = sum(getattr(c, field) for c in report.by_method.values())
+        layout_sum = sum(getattr(c, field) for c in report.by_layout.values())
         assert device_sum == getattr(overall, field)
         assert method_sum == getattr(overall, field)
+        assert layout_sum == getattr(overall, field)
+
+
+def test_slices_by_layout_including_two_page_spread(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+        layout="single-page",
+    )
+    _write_page(
+        tmp_path,
+        "page-b",
+        "pages/b.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("2", "What is 3+3?", "6")],
+        layout="two-page-spread",
+        spread_side="left",
+    )
+    keys = {
+        "a": str(tmp_path / "pages/a.jpg"),
+        "b": str(tmp_path / "pages/b.jpg"),
+    }
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "What is 2+2?", "4", confidence=0.97)),
+            keys["b"]: _result(TranscribedItem("2", "What is 3+3?", "wrong", confidence=0.97)),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    single = report.by_layout["single-page"]
+    spread = report.by_layout["two-page-spread"]
+    assert (single.pages, single.matched_items, single.exact_matches) == (1, 1, 1)
+    assert (spread.pages, spread.matched_items, spread.exact_matches) == (1, 1, 0)
+    assert single.exact_match_rate() == pytest.approx(1.0)
+    assert spread.exact_match_rate() == pytest.approx(0.0)
 
 
 def test_misnumbered_item_excluded_from_spurious_missed_and_exact_match(tmp_path: Path) -> None:
