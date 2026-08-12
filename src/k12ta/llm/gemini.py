@@ -17,7 +17,14 @@ from typing import Any
 
 import httpx
 
-from k12ta.llm.base import DataRetention, VisionResponse
+from k12ta.llm.base import (
+    DataRetention,
+    MisconfiguredError,
+    RateLimitExhaustedError,
+    RequestCapExceededError,
+    TransientError,
+    VisionResponse,
+)
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 MIN_INTERVAL_SECONDS = 5.0  # ~12 requests/minute, under the ~15 rpm free-tier ceiling
@@ -26,6 +33,14 @@ INITIAL_BACKOFF_SECONDS = 10.0
 # httpx.Client()'s bare default is 5s total, far too short for a base64-encoded photo
 # plus vision-model generation time.
 REQUEST_TIMEOUT_SECONDS = 60.0
+# 1 preflight call + up to 4 non-exhausting retries/page (5 would trip the circuit
+# breaker instead) across a 9-page corpus, plus slack. Raise via
+# K12TA_LLM_MAX_REQUESTS_PER_RUN as the fixture corpus grows toward 40-60 pages.
+DEFAULT_MAX_REQUESTS_PER_RUN = 40
+# 401/403 (bad or missing key) and 404 (bad model name, verified against Google's own
+# error-code reference for model_not_found) are never worth retrying or continuing
+# past: every subsequent request in the run would fail identically.
+_MISCONFIGURED_STATUS_CODES = frozenset({401, 403, 404})
 
 
 def _default_client() -> httpx.Client:
@@ -33,7 +48,10 @@ def _default_client() -> httpx.Client:
 
 
 class GeminiError(RuntimeError):
-    """Gemini returned something the adapter could not turn into text."""
+    """Gemini returned a response this adapter could not turn into text. Distinct from
+    the classified errors in k12ta.llm.base: this is a malformed-but-delivered
+    response, not a request-level failure, so it stays on the existing low-confidence
+    path rather than aborting a run."""
 
 
 @dataclass
@@ -49,12 +67,14 @@ class GeminiVisionModel:
     api_key: str
     model: str
     data_retention: DataRetention = field(default=DataRetention.PROVIDER_MAY_TRAIN)
+    max_requests: int = DEFAULT_MAX_REQUESTS_PER_RUN
     client: httpx.Client = field(default_factory=_default_client)
     sleep: Callable[[float], None] = time.sleep
+    monotonic: Callable[[], float] = time.monotonic
+    request_count: int = field(default=0, init=False)
     _last_request_at: float | None = field(default=None, init=False, repr=False)
 
     def generate(self, prompt: str, image_bytes: bytes, mime_type: str) -> VisionResponse:
-        self._throttle()
         body = {
             "contents": [
                 {
@@ -71,38 +91,68 @@ class GeminiVisionModel:
             ]
         }
         url = f"{API_BASE}/models/{self.model}:generateContent"
-        started = time.monotonic()
-        response = self._post_with_backoff(url, body)
-        latency_ms = int((time.monotonic() - started) * 1000)
+        started = self.monotonic()
+        response = self._send_with_backoff("POST", url, json_body=body)
+        latency_ms = int((self.monotonic() - started) * 1000)
 
         text = _extract_text(response.json())
         return VisionResponse(text=text, cost_usd=Decimal("0"), latency_ms=latency_ms)
 
+    def verify(self) -> None:
+        """One cheap call confirming `model` exists and `api_key` works: model
+        metadata only, no generation, no token cost. Raises MisconfiguredError or
+        RateLimitExhaustedError on failure; raises nothing on success."""
+        url = f"{API_BASE}/models/{self.model}"
+        self._send_with_backoff("GET", url, json_body=None)
+
     def _throttle(self) -> None:
         if self._last_request_at is not None:
-            elapsed = time.monotonic() - self._last_request_at
+            elapsed = self.monotonic() - self._last_request_at
             if elapsed < MIN_INTERVAL_SECONDS:
                 self.sleep(MIN_INTERVAL_SECONDS - elapsed)
-        self._last_request_at = time.monotonic()
+        self._last_request_at = self.monotonic()
 
-    def _post_with_backoff(self, url: str, body: dict[str, Any]) -> httpx.Response:
+    def _send_with_backoff(
+        self, method: str, url: str, *, json_body: dict[str, Any] | None
+    ) -> httpx.Response:
         backoff = INITIAL_BACKOFF_SECONDS
         for attempt in range(MAX_RETRIES + 1):
+            if self.request_count >= self.max_requests:
+                raise RequestCapExceededError(
+                    f"reached the configured request cap ({self.max_requests}) for "
+                    "this run, including retries — aborting rather than continuing "
+                    "to spend requests"
+                )
+            # Throttled and counted on every attempt, not just the first: a retry is a
+            # real request and must be paced under the same per-minute ceiling as any
+            # other, not exempted because it happens inside this loop.
+            self._throttle()
+            self.request_count += 1
             # The key goes in a header, never the URL: a query-param key ends up
             # verbatim in any exception message, log line, or report that mentions
             # the request URL, including this adapter's own failure reporting.
-            response = self.client.post(
+            response = self.client.request(
+                method,
                 url,
-                json=body,
+                json=json_body,
                 headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             )
-            if response.status_code != 429:
-                response.raise_for_status()
-                return response
-            if attempt < MAX_RETRIES:
-                self.sleep(backoff)
-                backoff *= 2
-        raise GeminiError(f"Gemini rate-limited after {MAX_RETRIES} retries")
+            if response.status_code == 429:
+                if attempt < MAX_RETRIES:
+                    self.sleep(backoff)
+                    backoff *= 2
+                    continue
+                raise RateLimitExhaustedError(f"Gemini rate-limited after {MAX_RETRIES} retries")
+            if response.status_code in _MISCONFIGURED_STATUS_CODES:
+                raise MisconfiguredError(
+                    f"Gemini returned {response.status_code} for model {self.model!r} "
+                    "— check K12TA_LLM_MODEL and K12TA_LLM_API_KEY"
+                )
+            if response.status_code >= 500:
+                raise TransientError(f"Gemini returned {response.status_code}")
+            response.raise_for_status()
+            return response
+        raise AssertionError("unreachable: the loop above always returns or raises")
 
 
 def _extract_text(payload: dict[str, Any]) -> str:

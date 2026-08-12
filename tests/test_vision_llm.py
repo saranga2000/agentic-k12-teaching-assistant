@@ -8,8 +8,16 @@ from pathlib import Path
 import pytest
 
 import k12ta.transcribe.vision_llm as vision_llm
-from k12ta.llm.base import DataRetention, VisionResponse
+from k12ta.llm.base import (
+    DataRetention,
+    MisconfiguredError,
+    RateLimitExhaustedError,
+    RequestCapExceededError,
+    TransientError,
+    VisionResponse,
+)
 from k12ta.prompts import load_prompt
+from k12ta.transcribe.base import FailureKind
 from k12ta.transcribe.vision_llm import VisionLLMTranscriber
 
 
@@ -21,12 +29,19 @@ class FakeVisionModel:
     response_text: str = '{"items": []}'
     error: Exception | None = None
     last_call: tuple[str, bytes, str] | None = None
+    request_count: int = 0
 
     def generate(self, prompt: str, image_bytes: bytes, mime_type: str) -> VisionResponse:
         self.last_call = (prompt, image_bytes, mime_type)
+        self.request_count += 1
         if self.error is not None:
             raise self.error
         return VisionResponse(text=self.response_text, cost_usd=Decimal("0"), latency_ms=42)
+
+    def verify(self) -> None:
+        self.request_count += 1
+        if self.error is not None:
+            raise self.error
 
 
 def _transcriber(model: FakeVisionModel) -> VisionLLMTranscriber:
@@ -90,6 +105,7 @@ def test_parses_valid_response_into_items_with_no_failure(tmp_path: Path) -> Non
     result = _transcriber(model).transcribe(str(image))
 
     assert result.failure is None
+    assert result.failure_kind is None
     assert result.data_retention is DataRetention.PROVIDER_MAY_TRAIN
     assert result.cost_usd == 0.0
     assert result.latency_ms == 42
@@ -161,6 +177,7 @@ def test_unparseable_response_returns_empty_items_with_failure_not_exception(
 
     assert result.items == ()
     assert result.failure is not None
+    assert result.failure_kind is FailureKind.UNREADABLE
     assert result.data_retention is model.data_retention
 
 
@@ -175,6 +192,7 @@ def test_response_shaped_as_a_list_not_object_is_a_failure_not_a_silent_empty_su
 
     assert result.items == ()
     assert result.failure is not None
+    assert result.failure_kind is FailureKind.UNREADABLE
 
 
 def test_vision_model_raising_never_propagates_and_sets_failure(tmp_path: Path) -> None:
@@ -187,6 +205,7 @@ def test_vision_model_raising_never_propagates_and_sets_failure(tmp_path: Path) 
     assert result.items == ()
     assert result.failure is not None
     assert "network exploded" in result.failure
+    assert result.failure_kind is FailureKind.UNREADABLE
     assert result.data_retention is model.data_retention
 
 
@@ -199,3 +218,61 @@ def test_unsupported_image_extension_is_a_failure_not_an_exception(tmp_path: Pat
 
     assert result.items == ()
     assert result.failure is not None
+    assert result.failure_kind is FailureKind.UNREADABLE
+
+
+def test_misconfigured_error_maps_to_misconfigured_failure_kind(tmp_path: Path) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel(error=MisconfiguredError("bad model name"))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.items == ()
+    assert result.failure_kind is FailureKind.MISCONFIGURED
+    assert "bad model name" in (result.failure or "")
+
+
+def test_rate_limit_exhausted_maps_to_rate_limited_failure_kind(tmp_path: Path) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel(error=RateLimitExhaustedError("rate-limited after 4 retries"))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.items == ()
+    assert result.failure_kind is FailureKind.RATE_LIMITED
+
+
+def test_transient_error_maps_to_transient_failure_kind(tmp_path: Path) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel(error=TransientError("Gemini returned 503"))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.items == ()
+    assert result.failure_kind is FailureKind.TRANSIENT
+
+
+def test_request_cap_exceeded_maps_to_request_cap_exceeded_failure_kind(tmp_path: Path) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel(error=RequestCapExceededError("reached the cap"))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.items == ()
+    assert result.failure_kind is FailureKind.REQUEST_CAP_EXCEEDED
+
+
+def test_transcriber_exposes_request_count_from_the_vision_model(tmp_path: Path) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel()
+    transcriber = _transcriber(model)
+
+    transcriber.transcribe(str(image))
+    transcriber.transcribe(str(image))
+
+    assert transcriber.request_count == 2 == model.request_count

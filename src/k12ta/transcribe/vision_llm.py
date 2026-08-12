@@ -12,11 +12,34 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from k12ta.llm.base import VisionModel
+from k12ta.llm.base import (
+    MisconfiguredError,
+    RateLimitExhaustedError,
+    RequestCapExceededError,
+    TransientError,
+    VisionModel,
+)
 from k12ta.prompts import load_prompt
-from k12ta.transcribe.base import TranscribedItem, TranscriptionResult
+from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
 
 _MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+# Adapter exceptions that mean "the run should stop" or "this page failed for a
+# reason unrelated to its content" — everything else falls to UNREADABLE, the
+# existing catch-all for a page the model genuinely could not read.
+_FAILURE_KIND_BY_ERROR: dict[type[Exception], FailureKind] = {
+    MisconfiguredError: FailureKind.MISCONFIGURED,
+    RateLimitExhaustedError: FailureKind.RATE_LIMITED,
+    RequestCapExceededError: FailureKind.REQUEST_CAP_EXCEEDED,
+    TransientError: FailureKind.TRANSIENT,
+}
+
+
+def _classify(exc: Exception) -> FailureKind:
+    for error_type, kind in _FAILURE_KIND_BY_ERROR.items():
+        if isinstance(exc, error_type):
+            return kind
+    return FailureKind.UNREADABLE
 
 
 class VisionLLMTranscriber:
@@ -29,6 +52,10 @@ class VisionLLMTranscriber:
         self._provider = provider
         self._model = model
         self._prompt = load_prompt("transcribe_page")
+
+    @property
+    def request_count(self) -> int:
+        return self._vision_model.request_count
 
     def transcribe(self, image_path: str) -> TranscriptionResult:
         try:
@@ -52,6 +79,7 @@ class VisionLLMTranscriber:
                 latency_ms=0,
                 data_retention=self._vision_model.data_retention,
                 failure=f"{type(exc).__name__}: {exc}",
+                failure_kind=_classify(exc),
             )
 
 

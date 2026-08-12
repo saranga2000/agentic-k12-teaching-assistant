@@ -18,8 +18,8 @@ from k12ta.config import Settings
 from k12ta.evals.fixtures import FixtureItem, Layout, load_fixture_pages
 from k12ta.grading.key_grader import normalise
 from k12ta.llm import build_vision_model
-from k12ta.llm.base import DataRetention
-from k12ta.transcribe.base import TranscribedItem, Transcriber
+from k12ta.llm.base import DataRetention, MisconfiguredError, RateLimitExhaustedError
+from k12ta.transcribe.base import RUN_ABORTING_KINDS, FailureKind, TranscribedItem, Transcriber
 from k12ta.transcribe.vision_llm import VisionLLMTranscriber
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -118,10 +118,24 @@ class Scorecard:
 class FailedPage:
     """A page the transcriber could not score at all, kept apart from a page it read
     and scored zero on — conflating the two would make a bad network evening look like
-    a model regression."""
+    a model regression. Only ever holds a TRANSIENT or UNREADABLE kind: anything in
+    RUN_ABORTING_KINDS ends the run instead and is recorded as `EvalReport.aborted`."""
 
     page_id: str
     reason: str
+    kind: FailureKind
+
+
+@dataclass(frozen=True)
+class AbortInfo:
+    """Recorded when a page's failure means every remaining page would fail the same
+    way for a reason that has nothing to do with its content — the run stops rather
+    than repeating the same loss on each one (see FailureKind, RUN_ABORTING_KINDS)."""
+
+    page_id: str
+    kind: FailureKind
+    reason: str
+    pages_skipped: int
 
 
 @dataclass
@@ -132,7 +146,13 @@ class EvalReport:
     by_layout: dict[str, Scorecard]
     by_source: dict[str, Scorecard]
     data_retention: DataRetention | None
+    total_requests: int = 0
+    """Every model-provider request the run made, including retries — a cost, stated
+    next to the accuracy metrics rather than left to a provider dashboard to reveal."""
     failed_pages: list[FailedPage] = field(default_factory=list)
+    aborted: AbortInfo | None = None
+    """Set when the run stopped early. Every scorecard above reflects only the pages
+    that ran before the stop, not the full fixture corpus."""
 
     def to_markdown(self, transcriber_name: str, run_at: datetime) -> str:
         lines = [
@@ -140,17 +160,36 @@ class EvalReport:
             "",
             f"Run at {run_at.isoformat(timespec='minutes')}.",
         ]
+        if self.aborted is not None:
+            lines.append("")
+            lines.append(
+                f"## RUN ABORTED at page {self.aborted.page_id} ({self.aborted.kind.value})"
+            )
+            lines.append("")
+            lines.append(self.aborted.reason)
+            lines.append("")
+            lines.append(
+                f"{self.aborted.pages_skipped} page(s) never attempted. Every scorecard "
+                "below reflects only the pages that ran before the abort."
+            )
         if self.data_retention is not None:
             lines.append(
                 f"Data retention: {self.data_retention.value} (see docs/DATA_POLICY.md)."
             )
+        lines.append(f"Total API requests, including retries: {self.total_requests}.")
         lines.append("")
         if self.failed_pages:
             lines.append(f"## Failed pages ({len(self.failed_pages)}, excluded from scoring)")
             lines.append("")
-            for failed in self.failed_pages:
-                lines.append(f"- {failed.page_id}: {failed.reason}")
-            lines.append("")
+            for kind in (FailureKind.TRANSIENT, FailureKind.UNREADABLE):
+                in_kind = [f for f in self.failed_pages if f.kind is kind]
+                if not in_kind:
+                    continue
+                lines.append(f"### {kind.value.capitalize()} ({len(in_kind)})")
+                lines.append("")
+                for failed in in_kind:
+                    lines.append(f"- {failed.page_id}: {failed.reason}")
+                lines.append("")
         lines.append(self.overall.render("Overall"))
         lines.append("")
         for title, slices in (
@@ -268,6 +307,11 @@ def score(
     transcriber can spend minutes on a single page retrying a rate limit, so a caller
     watching a long run needs to see which page it is stuck on, not just a final
     report once every page is done.
+
+    A page whose failure_kind is in RUN_ABORTING_KINDS (misconfigured, rate-limited,
+    or the request cap) stops the run immediately rather than continuing to the next
+    page: that failure is evidence about the account or configuration, not about that
+    one page, and every remaining page would fail identically for free.
     """
     overall = Scorecard()
     by_device: dict[str, Scorecard] = {}
@@ -275,6 +319,7 @@ def score(
     by_layout: dict[str, Scorecard] = {}
     by_source: dict[str, Scorecard] = {}
     failed_pages: list[FailedPage] = []
+    aborted: AbortInfo | None = None
     data_retention: DataRetention | None = None
 
     pages = load_fixture_pages(fixtures_dir)
@@ -286,7 +331,22 @@ def score(
         data_retention = result.data_retention
 
         if result.failure is not None:
-            failed_pages.append(FailedPage(page_id=page.page_id, reason=result.failure))
+            kind = result.failure_kind or FailureKind.UNREADABLE
+            if kind in RUN_ABORTING_KINDS:
+                pages_skipped = total - index
+                aborted = AbortInfo(
+                    page_id=page.page_id,
+                    kind=kind,
+                    reason=result.failure,
+                    pages_skipped=pages_skipped,
+                )
+                if on_progress is not None:
+                    on_progress(
+                        f"[{index}/{total}] {page.page_id}: ABORTING RUN ({kind.value}): "
+                        f"{result.failure} — {pages_skipped} page(s) not attempted"
+                    )
+                break
+            failed_pages.append(FailedPage(page_id=page.page_id, reason=result.failure, kind=kind))
             if on_progress is not None:
                 on_progress(f"[{index}/{total}] {page.page_id}: failed ({result.failure})")
             continue
@@ -317,7 +377,9 @@ def score(
         by_layout=by_layout,
         by_source=by_source,
         data_retention=data_retention,
+        total_requests=transcriber.request_count,
         failed_pages=failed_pages,
+        aborted=aborted,
     )
 
 
@@ -366,6 +428,18 @@ def main() -> None:
 
     settings = Settings.from_env()
     vision_model = build_vision_model(settings)
+
+    print("Preflight: verifying configured model and API key...", flush=True)
+    try:
+        vision_model.verify()
+    except (MisconfiguredError, RateLimitExhaustedError) as exc:
+        print(
+            f"Preflight failed, aborting before sending any page: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return
+    print("Preflight passed.", flush=True)
+
     transcriber = VisionLLMTranscriber(
         vision_model, provider=settings.llm_provider, model=settings.llm_model
     )

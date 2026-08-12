@@ -15,6 +15,7 @@ def _settings(provider: str) -> Settings:
         llm_provider=provider,
         llm_api_key="key",
         llm_model="gemini-3.7-flash",
+        llm_max_requests_per_run=40,
         data_dir=Path("./data"),
         coach_name="Coach",
         daily_token_budget_usd=Decimal("1.50"),

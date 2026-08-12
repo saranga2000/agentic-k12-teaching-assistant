@@ -9,7 +9,7 @@ import pytest
 
 from evals.run_transcription_eval import Scorecard, _normalise_prompt, score, write_report
 from k12ta.llm.base import DataRetention
-from k12ta.transcribe.base import TranscribedItem, TranscriptionResult
+from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
 
 
 @dataclass
@@ -18,8 +18,10 @@ class FakeTranscriber:
 
     name: str
     responses: dict[str, TranscriptionResult]
+    request_count: int = 0
 
     def transcribe(self, image_path: str) -> TranscriptionResult:
+        self.request_count += 1
         return self.responses[image_path]
 
 
@@ -27,6 +29,7 @@ def _result(
     *items: TranscribedItem,
     data_retention: DataRetention = DataRetention.NO_RETENTION,
     failure: str | None = None,
+    failure_kind: FailureKind | None = None,
 ) -> TranscriptionResult:
     return TranscriptionResult(
         items=items,
@@ -36,6 +39,7 @@ def _result(
         latency_ms=0,
         data_retention=data_retention,
         failure=failure,
+        failure_kind=failure_kind,
     )
 
 
@@ -503,6 +507,170 @@ def test_markdown_lists_failed_pages_separately_from_zero_scores(tmp_path: Path)
     assert "boom" in markdown
     assert report.overall.pages == 0
     assert report.overall.expected_items == 0
+
+
+def test_failed_page_records_its_failure_kind(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                failure="TransientError: Gemini returned 503", failure_kind=FailureKind.TRANSIENT
+            )
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.failed_pages[0].kind is FailureKind.TRANSIENT
+
+
+@pytest.mark.parametrize(
+    "kind", [FailureKind.MISCONFIGURED, FailureKind.RATE_LIMITED, FailureKind.REQUEST_CAP_EXCEEDED]
+)
+def test_run_aborting_kind_stops_the_run_before_remaining_pages(
+    tmp_path: Path, kind: FailureKind
+) -> None:
+    # Three pages; the second is a run-aborting kind. The third must never be attempted
+    # — one page's misconfiguration/exhaustion is evidence about the account, not that
+    # page, so repeating the same loss on every remaining page would be pure waste.
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-c", "pages/c.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {name: str(tmp_path / f"pages/{name}.jpg") for name in ("a", "b", "c")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+            keys["b"]: _result(failure="boom", failure_kind=kind),
+            keys["c"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.overall.pages == 1  # only page-a was ever scored
+    assert report.failed_pages == []  # the aborting page is not a plain failed page
+    assert report.aborted is not None
+    assert report.aborted.page_id == "page-b"
+    assert report.aborted.kind is kind
+    assert report.aborted.reason == "boom"
+    assert report.aborted.pages_skipped == 1  # page-c never attempted
+    # Exactly two transcribe() calls happened (page-a, page-b) — page-c was never sent.
+    assert transcriber.request_count == 2
+
+
+@pytest.mark.parametrize("kind", [FailureKind.TRANSIENT, FailureKind.UNREADABLE])
+def test_non_aborting_kind_records_failure_and_continues(tmp_path: Path, kind: FailureKind) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(failure="boom", failure_kind=kind),
+            keys["b"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.aborted is None
+    assert len(report.failed_pages) == 1
+    assert report.failed_pages[0].kind is kind
+    assert report.overall.pages == 1  # page-b was still scored
+
+
+def test_report_states_total_requests(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+            keys["b"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.total_requests == 2
+    markdown = report.to_markdown("fake", datetime(2026, 8, 11, 10, 0))
+    assert "2" in markdown
+    assert "requests" in markdown.lower()
+
+
+def test_markdown_shows_abort_prominently_and_groups_failures_by_kind(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(
+                failure="Gemini returned 503", failure_kind=FailureKind.TRANSIENT
+            ),
+            keys["b"]: _result(
+                failure="no candidates in Gemini response", failure_kind=FailureKind.UNREADABLE
+            ),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+    markdown = report.to_markdown("fake", datetime(2026, 8, 11, 10, 0))
+
+    assert "transient" in markdown.lower()
+    assert "unreadable" in markdown.lower()
+    # The two kinds must appear as distinct groups, not one flat list a reader has to
+    # parse by hand to tell "unreadable" from "misconfigured".
+    transient_pos = markdown.lower().index("transient")
+    unreadable_pos = markdown.lower().index("unreadable")
+    assert transient_pos != unreadable_pos
+
+
+def test_markdown_abort_message_leads_the_report(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                failure="Gemini returned 404 for model 'bad-model'",
+                failure_kind=FailureKind.MISCONFIGURED,
+            )
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+    markdown = report.to_markdown("fake", datetime(2026, 8, 11, 10, 0))
+
+    assert "ABORTED" in markdown
+    # The abort notice must appear before the overall scorecard, not buried after it.
+    assert markdown.index("ABORTED") < markdown.index("Overall")
 
 
 def test_write_report_preserves_same_day_reruns(tmp_path: Path) -> None:

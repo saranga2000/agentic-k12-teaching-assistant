@@ -21,6 +21,7 @@ class Settings:
     llm_provider: str
     llm_api_key: str
     llm_model: str
+    llm_max_requests_per_run: int
     data_dir: Path
     coach_name: str
     daily_token_budget_usd: Decimal
@@ -32,6 +33,9 @@ class Settings:
             llm_provider=os.environ.get("K12TA_LLM_PROVIDER", "anthropic"),
             llm_api_key=os.environ.get("K12TA_LLM_API_KEY", ""),
             llm_model=os.environ.get("K12TA_LLM_MODEL", ""),
+            llm_max_requests_per_run=int(
+                os.environ.get("K12TA_LLM_MAX_REQUESTS_PER_RUN", "40")
+            ),
             data_dir=Path(os.environ.get("K12TA_DATA_DIR", "./data")),
             coach_name=os.environ.get("K12TA_COACH_NAME", COACH_NAME_PLACEHOLDER),
             daily_token_budget_usd=Decimal(
