@@ -30,12 +30,18 @@ def grade_against_key(
     student_answer: str,
     key_answer: str,
     transcription_confidence: float,
-    confidence_floor: float = 0.85,
+    confidence_floor: float = 0.95,
 ) -> GradeOutcome:
     """Compare one answer to the key.
 
     A low-confidence transcription can never produce INCORRECT. A confidently wrong
     mark costs far more trust than an escalation to a grown-up.
+
+    The default floor is 0.95, not 0.85. The 2026-08-12 transcription eval
+    (evals/results/2026-08-12-0825-vision_llm.md) measured calibration by confidence
+    band: the 0.85-0.95 band was only 60% accurate (n=5), while the 0.95-1.01 band was
+    100% accurate (n=13). A floor of 0.85 would admit that 0.85-0.95 band and grade
+    wrong answers as CORRECT or INCORRECT with confidence the data does not support.
     """
     if transcription_confidence < confidence_floor:
         return GradeOutcome.NEEDS_HUMAN

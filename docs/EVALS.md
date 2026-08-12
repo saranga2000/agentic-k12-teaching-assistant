@@ -13,8 +13,12 @@ Fixtures: real pages from both children, hand-labelled once. Metrics:
   wrong at high confidence is worse than one that is wrong at low confidence, because
   the confidence gate is the entire safety mechanism
 
-Target before M2 ships: exact match above 0.90 on legible pages, and zero errors in the
-top confidence band.
+Target before M2 ships: zero errors in the top confidence band. Exact match above 0.90
+on legible pages is a stated goal but is not what the M1 corpus measures: the corpus is
+entirely two-page spreads scored against a fixture that labels only one side, so exact
+match is currently reported only over matched, attributed items
+(`evals/results/2026-08-12-0825-vision_llm.md`), not over all legible pages. Restate this
+target once single-page fixtures exist to measure it directly.
 
 Fixtures carry a `provenance` field once M5 ships: `hand-labelled` for the original M1
 corpus, `parent-correction` for pages promoted automatically by the parent correction
