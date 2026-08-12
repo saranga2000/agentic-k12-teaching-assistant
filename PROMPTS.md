@@ -198,6 +198,20 @@ Build the capture page in src/k12ta/web/. Requirements, in priority order:
 Server rendered. No JavaScript framework. No build step.
 
 Show me the plan and a description of the exact tap sequence before writing anything.
+
+From reviewing the first real fixture photographs, taken by my 7th grader without
+coaching, the capture UI must guide framing, not just accept a file. Requirements:
+- One page per photo. The default framing guide must make a two-page spread obviously
+  wrong.
+- An on-screen frame outline showing where the page edges should sit.
+- A reject-and-retake path when the image is too small, too skewed, or too dark to be
+  worth transcribing.
+
+Rationale: the first uncoached photos were two-page spreads at an angle with shadow,
+which halves effective resolution before any model sees them. Guiding capture is far
+cheaper than correcting images downstream.
+
+Do not implement anything. Documentation only.
 ```
 
 **M2.3 The pipeline**
