@@ -28,7 +28,7 @@ Setup on the MacBook:
 
 ```bash
 make install
-uvicorn k12ta.web:app --host 0.0.0.0 --port 8080
+uvicorn k12ta.web.app:app --host 0.0.0.0 --port 8080
 ```
 
 On the iPad, open `http://<hostname>.local:8080`, then Share, then Add to Home Screen.

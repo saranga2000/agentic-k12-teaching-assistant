@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from k12ta.store import captures, content, db, mastery, migrate, sessions, students
+from k12ta.store import captures, content, db, mastery, migrate, schedule, sessions, students
 
 _EXPECTED_TABLES = {
     "schema_migrations",
@@ -18,6 +18,7 @@ _EXPECTED_TABLES = {
     "sessions",
     "graded_problems",
     "skill_mastery_traces",
+    "weekly_default_sources",
 }
 
 
@@ -197,5 +198,113 @@ def test_a_row_cannot_reference_another_students_parent_row() -> None:
                 assignment_id="a-1",  # belongs to s-marcus, not s-priya
                 captured_at="2026-08-12T09:00:00+00:00",
                 image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+
+
+def test_list_content_sources_is_scoped_to_one_student() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-priya",
+            source_id="daily_fluency_drill",
+            label="Daily timed fluency packet",
+            kind="fluency_drill",
+            subject="reading",
+            has_answer_key=True,
+            graded_by_someone_else=True,
+            default_mode="fluency",
+            typical_session_minutes=10,
+        ),
+    )
+
+    marcus_sources = content.list_content_sources(conn, "s-marcus")
+
+    assert [s.source_id for s in marcus_sources] == ["summer_bridge"]
+
+
+def test_list_students_returns_every_student() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+
+    all_students = students.list_students(conn)
+
+    assert {s.student_id for s in all_students} == {"s-marcus", "s-priya"}
+
+
+def test_weekly_default_source_round_trip_and_scoping() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+
+    assert schedule.get_default_source(conn, "s-marcus", weekday=2) is None
+
+    schedule.set_default_source(
+        conn,
+        schedule.WeeklyDefaultSourceRow(
+            student_id="s-marcus", weekday=2, source_id="summer_bridge"
+        ),
+    )
+
+    found = schedule.get_default_source(conn, "s-marcus", weekday=2)
+    assert found is not None
+    assert found.source_id == "summer_bridge"
+    # A different weekday and a different student both see nothing.
+    assert schedule.get_default_source(conn, "s-marcus", weekday=3) is None
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    assert schedule.get_default_source(conn, "s-priya", weekday=2) is None
+
+
+def test_weekly_default_source_cannot_reference_another_students_content_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        schedule.set_default_source(
+            conn,
+            schedule.WeeklyDefaultSourceRow(
+                student_id="s-priya",  # summer_bridge belongs to s-marcus
+                weekday=0,
+                source_id="summer_bridge",
             ),
         )

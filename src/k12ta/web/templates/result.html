@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{% if status == "success" %}Got it{% else %}Try again{% endif %}{% endblock %}
+{% block content %}
+<div class="screen">
+  {% if status == "success" %}
+  <p class="message">Got it! {{ coach_name }} is looking at it.</p>
+  {% else %}
+  <p class="message">{{ message }}</p>
+  <form id="retake-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
+    <input type="hidden" name="assignment_id" value="{{ assignment_id }}">
+    <label class="big-button secondary" for="retake-input">Retake</label>
+    <input id="retake-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
+  </form>
+  <script>
+    document.getElementById("retake-input").addEventListener("change", function () {
+      document.getElementById("retake-form").requestSubmit();
+    });
+  </script>
+  {% endif %}
+</div>
+{% endblock %}

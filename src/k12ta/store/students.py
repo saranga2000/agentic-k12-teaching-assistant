@@ -33,3 +33,11 @@ def get_student(conn: sqlite3.Connection, student_id: str) -> StudentRow | None:
     cur = conn.execute("SELECT * FROM students WHERE student_id = ?", (student_id,))
     row = cur.fetchone()
     return None if row is None else StudentRow(**dict(row))
+
+
+def list_students(conn: sqlite3.Connection) -> list[StudentRow]:
+    """Every student. The one deliberate exception to student_id-scoped reads: this
+    is the student picker's data source, and enumerating across students is the
+    point, not a leak. See tests/test_store_scoping.py."""
+    cur = conn.execute("SELECT * FROM students ORDER BY display_name")
+    return [StudentRow(**dict(row)) for row in cur.fetchall()]

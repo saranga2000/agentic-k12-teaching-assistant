@@ -49,6 +49,20 @@ def get_content_source(
     row = cur.fetchone()
     if row is None:
         return None
+    return _row_to_content_source(row)
+
+
+def list_content_sources(conn: sqlite3.Connection, student_id: str) -> list[ContentSourceRow]:
+    """Every content source configured for one student, for the M2.2 "change
+    assignment" picker. Not the exception `list_students` is: this still takes
+    student_id and only ever returns that student's rows."""
+    cur = conn.execute(
+        "SELECT * FROM content_sources WHERE student_id = ? ORDER BY label", (student_id,)
+    )
+    return [_row_to_content_source(row) for row in cur.fetchall()]
+
+
+def _row_to_content_source(row: sqlite3.Row) -> ContentSourceRow:
     data = dict(row)
     data["has_answer_key"] = bool(data["has_answer_key"])
     data["graded_by_someone_else"] = bool(data["graded_by_someone_else"])

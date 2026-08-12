@@ -32,11 +32,17 @@ contain the worked reasoning even when the child's view cannot.
 | `k12ta.respond` | Applying the policy filter and rendering student-facing text | Call a model directly for a verdict |
 | `k12ta.digest` | Weekly parent rollups | Reuse student-facing renderers |
 | `k12ta.web` | HTTP and templates | Contain business logic |
+| `k12ta.store` | SQLite schema, migrations, and typed repository functions | Contain business logic or render anything |
+| `k12ta.ingest` | Turning an uploaded photo into a validated `page_captures` row; resolving the day's default assignment | Render HTML, decide grading correctness, call a model |
 
-Four of these packages do not exist yet. They are listed because the pipeline has eight
-stages and the table originally named owners for six, which left diagnosis, response
-rendering, and the digest with no legal home under the stated rules. Create each one when
-its milestone arrives, not before.
+Three of these packages do not exist yet: `k12ta.diagnose`, `k12ta.respond`, and
+`k12ta.digest`. They are listed because the pipeline has eight stages and the table
+originally named owners for six, which left diagnosis, response rendering, and the
+digest with no legal home under the stated rules. Create each one when its milestone
+arrives, not before. `k12ta.store` (M2.1) and `k12ta.web` (M2.2) have since been built.
+`k12ta.ingest` lands alongside `k12ta.web` in M2.2, not later, because resolving a
+default assignment and grading image quality is business logic that `k12ta.web` is
+explicitly barred from holding — it needed a home the moment `k12ta.web` existed.
 
 `k12ta.domain` and `k12ta.mastery` have zero third-party imports. That is deliberate: they
 are the parts worth reading, and they should be testable in milliseconds.
@@ -50,6 +56,15 @@ are the parts worth reading, and they should be testable in milliseconds.
 - **sqlite via stdlib**: single household, single machine. No ORM. If schema pain
   arrives, that is the moment to reconsider, not before.
 - **httpx**: model calls.
+- **Pillow** (M2.2): decode a captured JPEG far enough to read its dimensions and mean
+  brightness for the capture-quality reject gate (too small, too dark). No other image
+  processing happens in this codebase; this is not a general vision or CV dependency,
+  and true skew/perspective detection is out of scope for it — that gate is an aspect
+  ratio heuristic, not real skew detection.
+- **python-multipart** (M2.2): FastAPI has no way to parse a `multipart/form-data`
+  request without it, and a `<input type=file>` capture upload has to be sent that
+  way — there's no working around it. Not a product dependency in its own right, it's
+  what makes the already-approved `fastapi` dependency's file-upload feature work.
 
 No LangChain, no agent framework, no vector database. The agentic behaviour here is a
 small number of explicit steps with typed handoffs, which is more legible to a reviewer

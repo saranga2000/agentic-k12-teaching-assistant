@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ student.display_name }}{% endblock %}
+{% block content %}
+<div class="screen">
+  {% if source %}
+    {% if all_sources|length > 1 %}
+    <form method="get" action="/capture/{{ student.student_id }}">
+      <select name="source_id" onchange="this.form.submit()" class="assignment-chip">
+        {% for candidate in all_sources %}
+        <option value="{{ candidate.source_id }}" {% if candidate.source_id == source.source_id %}selected{% endif %}>
+          {{ candidate.label }}
+        </option>
+        {% endfor %}
+      </select>
+    </form>
+    {% else %}
+    <div class="assignment-chip">{{ source.label }}</div>
+    {% endif %}
+  {% else %}
+    <p class="message">{{ no_assignment_message }}</p>
+  {% endif %}
+
+  <div class="framing-guide">
+    <div class="frame-good">
+      <div class="frame-outline"></div>
+      <p>✓ One page, filling the frame</p>
+    </div>
+    <div class="frame-bad">
+      <div class="frame-outline wide"></div>
+      <p>✗ Two pages — hold it closer</p>
+    </div>
+  </div>
+
+  {% if assignment %}
+  <form id="capture-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
+    <input type="hidden" name="assignment_id" value="{{ assignment.assignment_id }}">
+    <label class="big-button" for="photo-input">Take Photo</label>
+    <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
+  </form>
+  <script>
+    document.getElementById("photo-input").addEventListener("change", function () {
+      document.getElementById("capture-form").requestSubmit();
+    });
+  </script>
+  {% endif %}
+</div>
+<style>
+  .assignment-chip {
+    font-size: 1.1rem; padding: 0.6rem 1rem; border-radius: 999px;
+    background: #262a33; color: #f4f4f6; border: none;
+  }
+  .framing-guide { display: flex; gap: 1.5rem; }
+  .framing-guide p { font-size: 0.95rem; margin: 0.5rem 0 0; }
+  .frame-outline {
+    width: 70px; height: 96px; border: 3px solid #4ecdc4; border-radius: 6px;
+  }
+  .frame-outline.wide {
+    width: 120px; height: 70px; border-color: #ff6b6b;
+  }
+</style>
+{% endblock %}

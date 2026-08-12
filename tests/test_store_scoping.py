@@ -12,7 +12,10 @@ carefully by hand:
   constructed without one either.
 
 Either way, there is no path through the public API that reads or writes a table
-without a student_id supplied by the caller.
+without a student_id supplied by the caller — with one deliberate, named exception:
+`students.list_students` enumerates every student, because that is the one screen
+(the M2.2 student picker) where listing across students is the point, not a leak.
+The exception is asserted here rather than silently excluded, so it stays visible.
 """
 
 from __future__ import annotations
@@ -28,7 +31,10 @@ REPOSITORY_MODULES = [
     "k12ta.store.captures",
     "k12ta.store.sessions",
     "k12ta.store.mastery",
+    "k12ta.store.schedule",
 ]
+
+ROOT_LISTING_EXCEPTIONS = {"k12ta.store.students.list_students"}
 
 
 def _repository_functions() -> Iterator[tuple[str, object]]:
@@ -38,6 +44,8 @@ def _repository_functions() -> Iterator[tuple[str, object]]:
             if name.startswith("_") or not inspect.isfunction(obj):
                 continue
             if obj.__module__ != module_name:
+                continue
+            if f"{module_name}.{name}" in ROOT_LISTING_EXCEPTIONS:
                 continue
             yield f"{module_name}.{name}", obj
 
@@ -53,8 +61,8 @@ def _requires_student_id_via_row(func: object) -> bool:
     if "row" not in inspect.signature(func).parameters:
         return False
     # Modules use `from __future__ import annotations`, so annotations are strings;
-    # get_type_hints resolves them back to the real dataclass using the function's
-    # own module globals.
+    # eval_str resolves them back to the real dataclass using the function's own
+    # module globals.
     row_type = inspect.get_annotations(func, eval_str=True).get("row")
     if row_type is None or not dataclasses.is_dataclass(row_type):
         return False
@@ -82,3 +90,12 @@ def test_every_repository_function_requires_a_student_id_somewhere_mandatory() -
             f"{qualified_name} has no mandatory student_id, directly or via its row "
             "argument's dataclass fields"
         )
+
+
+def test_the_root_listing_exception_is_exactly_list_students() -> None:
+    """The one function excused from the invariant above is named, not swallowed."""
+    assert {"k12ta.store.students.list_students"} == ROOT_LISTING_EXCEPTIONS
+    module = importlib.import_module("k12ta.store.students")
+    assert inspect.isfunction(module.list_students)
+    first_param = next(iter(inspect.signature(module.list_students).parameters.values()))
+    assert first_param.name == "conn"

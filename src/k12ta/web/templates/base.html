@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>{% block title %}Capture{% endblock %}</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%; margin: 0; padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #12141a; color: #f4f4f6;
+    overscroll-behavior: none; user-select: none;
+  }
+  body {
+    display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .screen {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 1.5rem; padding: 1.5rem; text-align: center;
+  }
+  .big-button {
+    display: block; width: 100%; max-width: 560px;
+    padding: 2rem 1.5rem; font-size: 2rem; font-weight: 600;
+    color: #12141a; background: #ffd166; border: none; border-radius: 20px;
+    text-decoration: none; cursor: pointer;
+  }
+  .big-button:active { background: #f2b705; }
+  .big-button.secondary { background: #4ecdc4; }
+  p.message { font-size: 1.4rem; line-height: 1.4; max-width: 32rem; }
+</style>
+</head>
+<body>
+{% block content %}{% endblock %}
+</body>
+</html>

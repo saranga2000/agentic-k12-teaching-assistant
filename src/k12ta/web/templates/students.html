@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Who's working?{% endblock %}
+{% block content %}
+<div class="screen">
+  {% for student in all_students %}
+  <a class="big-button" href="/capture/{{ student.student_id }}">{{ student.display_name }}</a>
+  {% endfor %}
+</div>
+{% endblock %}
