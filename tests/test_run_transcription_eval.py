@@ -161,7 +161,13 @@ def test_hand_computed_scores_across_two_pages(tmp_path: Path) -> None:
     assert (app_ui.matched_items, app_ui.misnumbered_items) == (1, 1)
 
     # Slices must sum back to the overall scorecard.
-    for field in ("expected_items", "matched_items", "misnumbered_items", "spurious_items"):
+    for field in (
+        "expected_items",
+        "matched_items",
+        "misnumbered_items",
+        "spurious_items",
+        "unattributed_items",
+    ):
         device_sum = sum(getattr(c, field) for c in report.by_device.values())
         method_sum = sum(getattr(c, field) for c in report.by_method.values())
         layout_sum = sum(getattr(c, field) for c in report.by_layout.values())
@@ -251,6 +257,41 @@ def test_slices_by_layout_including_two_page_spread(tmp_path: Path) -> None:
     assert (spread.pages, spread.matched_items, spread.exact_matches) == (1, 1, 0)
     assert single.exact_match_rate() == pytest.approx(1.0)
     assert spread.exact_match_rate() == pytest.approx(0.0)
+
+
+def test_two_page_spread_extra_detection_is_unattributed_not_spurious(tmp_path: Path) -> None:
+    # Only the left page was labelled. The photo also shows the right page, so a
+    # detection with no matching fixture item might be a hallucination or might be a
+    # correct reading of the unlabelled right page — the fixture cannot tell us which,
+    # so it must not be scored as a model failure either way.
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+        layout="two-page-spread",
+        spread_side="left",
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                TranscribedItem("1", "What is 2+2?", "4", confidence=0.99),
+                TranscribedItem("9", "What is 9-4?", "5", confidence=0.95),
+            )
+        },
+    )
+
+    overall = score(transcriber, tmp_path).overall
+
+    assert overall.matched_items == 1
+    assert overall.spurious_items == 0
+    assert overall.unattributed_items == 1
+    assert overall.detection_recall() == pytest.approx(1.0)
+    assert overall.detection_precision() == pytest.approx(1.0)
 
 
 def test_misnumbered_item_excluded_from_spurious_missed_and_exact_match(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from k12ta.config import Settings
-from k12ta.evals.fixtures import FixtureItem, load_fixture_pages
+from k12ta.evals.fixtures import FixtureItem, Layout, load_fixture_pages
 from k12ta.grading.key_grader import normalise
 from k12ta.llm import build_vision_model
 from k12ta.llm.base import DataRetention
@@ -46,6 +46,15 @@ class Scorecard:
     was misread) and are deliberately excluded from exact-match and calibration: those
     metrics are about answer-reading fidelity on an item we are confident we identified
     correctly, and a misnumbering already signals we are not confident of that.
+
+    `spurious_items` are unmatched detections on a page whose whole image was labelled,
+    so we know they don't correspond to a real problem: a model failure. `unattributed_
+    items` are the same kind of unmatched detection, but on a `two-page-spread` page
+    where only one side was labelled — the detection may be invented, or it may be a
+    correct reading of the unlabelled side, and the fixture cannot say which. It is
+    excluded from `spurious_items`, from `detection_recall`, and from
+    `detection_precision`; it is reported on its own so it is never mistaken for a model
+    failure.
     """
 
     pages: int = 0
@@ -53,6 +62,7 @@ class Scorecard:
     matched_items: int = 0
     misnumbered_items: int = 0
     spurious_items: int = 0
+    unattributed_items: int = 0
     exact_matches: int = 0
     band_totals: dict[str, int] = field(default_factory=dict)
     band_correct: dict[str, int] = field(default_factory=dict)
@@ -89,6 +99,8 @@ class Scorecard:
             f"- detection precision: {self.detection_precision():.3f}",
             f"- misnumbered (right problem, wrong printed number): {self.misnumbered_items}",
             f"- spurious (problem not on the page): {self.spurious_items}",
+            f"- unattributed (found on the unlabelled side of a two-page spread, "
+            f"could be real or invented): {self.unattributed_items}",
             f"- answer exact match: {self.exact_match_rate():.3f} "
             f"({self.exact_matches}/{self.matched_items}, matched items only)",
             "- calibration:",
@@ -161,6 +173,7 @@ class _PageMatch:
     matched: list[tuple[FixtureItem, TranscribedItem]]
     misnumbered_count: int
     spurious_count: int
+    unattributed_count: int
 
 
 def _normalise_prompt(text: str) -> str:
@@ -179,7 +192,7 @@ def _find_prompt_match(item: FixtureItem, candidates: list[TranscribedItem]) -> 
 
 
 def _match_page(
-    expected: tuple[FixtureItem, ...], transcribed: tuple[TranscribedItem, ...]
+    expected: tuple[FixtureItem, ...], transcribed: tuple[TranscribedItem, ...], layout: Layout
 ) -> _PageMatch:
     """Match transcribed items to expected items, primarily by problem_id.
 
@@ -187,6 +200,12 @@ def _match_page(
     which distinguishes "the transcriber missed this problem" from "the transcriber
     found it but misread its printed number" — two different failure modes that would
     otherwise both look like a plain miss plus a plain spurious detection.
+
+    Detections still left over after that are spurious on a `single-page` page, where
+    the whole image was labelled and no real problem can explain them. On a
+    `two-page-spread` page, only one side was labelled, so a leftover detection may be
+    a correct reading of the unlabelled side rather than an invention; it is counted as
+    unattributed instead, never spurious.
     """
     transcribed_by_id = {t.problem_id: t for t in transcribed}
     matched: list[tuple[FixtureItem, TranscribedItem]] = []
@@ -207,10 +226,17 @@ def _match_page(
             unmatched_transcribed.pop(fallback_index)
             misnumbered_count += 1
 
+    leftover_count = len(unmatched_transcribed)
+    if layout is Layout.TWO_PAGE_SPREAD:
+        spurious_count, unattributed_count = 0, leftover_count
+    else:
+        spurious_count, unattributed_count = leftover_count, 0
+
     return _PageMatch(
         matched=matched,
         misnumbered_count=misnumbered_count,
-        spurious_count=len(unmatched_transcribed),
+        spurious_count=spurious_count,
+        unattributed_count=unattributed_count,
     )
 
 
@@ -249,7 +275,7 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
             failed_pages.append(FailedPage(page_id=page.page_id, reason=result.failure))
             continue
 
-        page_match = _match_page(page.items, result.items)
+        page_match = _match_page(page.items, result.items, page.layout)
 
         device_card = by_device.setdefault(page.capture_device, Scorecard())
         method_card = by_method.setdefault(page.capture_method.value, Scorecard())
@@ -261,6 +287,7 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
             card.expected_items += len(page.items)
             card.misnumbered_items += page_match.misnumbered_count
             card.spurious_items += page_match.spurious_count
+            card.unattributed_items += page_match.unattributed_count
             for expected_item, transcribed_item in page_match.matched:
                 _accumulate_matched(card, expected_item, transcribed_item)
 
