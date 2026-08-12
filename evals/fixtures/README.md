@@ -56,8 +56,8 @@ Layout is never auto-detected from the image. That is image analysis inside a
 disposable labelling tool: it can be wrong, and a silently mislabelled fixture is a
 worse failure than one extra dropdown.
 
-The eval harness can report scores sliced by capture_device, capture_method, or
-layout. Single-page accuracy is expected to be materially better than two-page-spread
+The eval harness can report scores sliced by capture_device, capture_method, layout, or
+source_id. Single-page accuracy is expected to be materially better than two-page-spread
 accuracy, since a spread halves the effective resolution of each page.
 
 Aim for 40 to 60 pages before implementing any transcriber. Deliberately include: poor

@@ -117,6 +117,7 @@ class EvalReport:
     by_device: dict[str, Scorecard]
     by_method: dict[str, Scorecard]
     by_layout: dict[str, Scorecard]
+    by_source: dict[str, Scorecard]
     data_retention: DataRetention | None
     failed_pages: list[FailedPage] = field(default_factory=list)
 
@@ -143,6 +144,7 @@ class EvalReport:
             ("By capture device", self.by_device),
             ("By capture method", self.by_method),
             ("By layout", self.by_layout),
+            ("By source", self.by_source),
         ):
             if not slices:
                 continue
@@ -235,6 +237,7 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
     by_device: dict[str, Scorecard] = {}
     by_method: dict[str, Scorecard] = {}
     by_layout: dict[str, Scorecard] = {}
+    by_source: dict[str, Scorecard] = {}
     failed_pages: list[FailedPage] = []
     data_retention: DataRetention | None = None
 
@@ -251,8 +254,9 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
         device_card = by_device.setdefault(page.capture_device, Scorecard())
         method_card = by_method.setdefault(page.capture_method.value, Scorecard())
         layout_card = by_layout.setdefault(page.layout.value, Scorecard())
+        source_card = by_source.setdefault(page.source_id, Scorecard())
 
-        for card in (overall, device_card, method_card, layout_card):
+        for card in (overall, device_card, method_card, layout_card, source_card):
             card.pages += 1
             card.expected_items += len(page.items)
             card.misnumbered_items += page_match.misnumbered_count
@@ -265,6 +269,7 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
         by_device=by_device,
         by_method=by_method,
         by_layout=by_layout,
+        by_source=by_source,
         data_retention=data_retention,
         failed_pages=failed_pages,
     )

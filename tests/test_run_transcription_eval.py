@@ -48,6 +48,7 @@ def _write_page(
     items: list[dict[str, object]],
     layout: str = "single-page",
     spread_side: str | None = None,
+    source_id: str = "summer_bridge",
 ) -> None:
     image_path = tmp_path / image
     image_path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +56,7 @@ def _write_page(
     page: dict[str, object] = {
         "page_id": page_id,
         "image": image,
-        "source_id": "summer_bridge",
+        "source_id": source_id,
         "subject": "math",
         "capture_quality": "good",
         "capture_device": capture_device,
@@ -164,9 +165,50 @@ def test_hand_computed_scores_across_two_pages(tmp_path: Path) -> None:
         device_sum = sum(getattr(c, field) for c in report.by_device.values())
         method_sum = sum(getattr(c, field) for c in report.by_method.values())
         layout_sum = sum(getattr(c, field) for c in report.by_layout.values())
+        source_sum = sum(getattr(c, field) for c in report.by_source.values())
         assert device_sum == getattr(overall, field)
         assert method_sum == getattr(overall, field)
         assert layout_sum == getattr(overall, field)
+        assert source_sum == getattr(overall, field)
+
+
+def test_slices_by_source_id(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path,
+        "page-a",
+        "pages/a.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("1", "What is 2+2?", "4")],
+        source_id="summer_bridge",
+    )
+    _write_page(
+        tmp_path,
+        "page-b",
+        "pages/b.jpg",
+        "ipad-air-m1",
+        "camera-roll",
+        [_item("2", "What is 3+3?", "6")],
+        source_id="rsm",
+    )
+    keys = {
+        "a": str(tmp_path / "pages/a.jpg"),
+        "b": str(tmp_path / "pages/b.jpg"),
+    }
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "What is 2+2?", "4", confidence=0.97)),
+            keys["b"]: _result(TranscribedItem("2", "What is 3+3?", "wrong", confidence=0.97)),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    bridge = report.by_source["summer_bridge"]
+    rsm = report.by_source["rsm"]
+    assert (bridge.pages, bridge.matched_items, bridge.exact_matches) == (1, 1, 1)
+    assert (rsm.pages, rsm.matched_items, rsm.exact_matches) == (1, 1, 0)
 
 
 def test_slices_by_layout_including_two_page_spread(tmp_path: Path) -> None:
