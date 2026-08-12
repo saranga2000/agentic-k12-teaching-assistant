@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from evals.run_transcription_eval import Scorecard, _normalise_prompt, score, write_report
+from k12ta.llm.base import DataRetention
 from k12ta.transcribe.base import TranscribedItem, TranscriptionResult
 
 
@@ -22,9 +23,19 @@ class FakeTranscriber:
         return self.responses[image_path]
 
 
-def _result(*items: TranscribedItem) -> TranscriptionResult:
+def _result(
+    *items: TranscribedItem,
+    data_retention: DataRetention = DataRetention.NO_RETENTION,
+    failure: str | None = None,
+) -> TranscriptionResult:
     return TranscriptionResult(
-        items=items, provider="fake", model="fake", cost_usd=0.0, latency_ms=0
+        items=items,
+        provider="fake",
+        model="fake",
+        cost_usd=0.0,
+        latency_ms=0,
+        data_retention=data_retention,
+        failure=failure,
     )
 
 
@@ -296,6 +307,90 @@ def test_missing_item_with_no_transcription_lowers_recall_only(tmp_path: Path) -
     assert overall.spurious_items == 0
     assert overall.detection_recall() == 0.0
     assert overall.detection_precision() == 0.0
+
+
+def test_data_retention_is_surfaced_at_the_report_level(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                TranscribedItem("1", "p", "a", confidence=0.9),
+                data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            )
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.data_retention is DataRetention.PROVIDER_MAY_TRAIN
+
+
+def test_markdown_header_states_data_retention_plainly(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            image_key: _result(
+                TranscribedItem("1", "p", "a", confidence=0.9),
+                data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            )
+        },
+    )
+    report = score(transcriber, tmp_path)
+
+    markdown = report.to_markdown("fake", datetime(2026, 8, 11, 10, 0))
+
+    assert "provider_may_train" in markdown.lower()
+
+
+def test_failed_page_is_excluded_from_scoring_and_reported_separately(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+            keys["b"]: _result(failure="RuntimeError: network exploded"),
+        },
+    )
+
+    report = score(transcriber, tmp_path)
+
+    assert report.overall.pages == 1
+    assert report.overall.expected_items == 1
+    assert len(report.failed_pages) == 1
+    assert report.failed_pages[0].page_id == "page-b"
+    assert "network exploded" in report.failed_pages[0].reason
+
+
+def test_markdown_lists_failed_pages_separately_from_zero_scores(tmp_path: Path) -> None:
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    image_key = str(tmp_path / "pages/a.jpg")
+    transcriber = FakeTranscriber(
+        name="fake", responses={image_key: _result(failure="RuntimeError: boom")}
+    )
+
+    report = score(transcriber, tmp_path)
+    markdown = report.to_markdown("fake", datetime(2026, 8, 11, 10, 0))
+
+    assert "page-a" in markdown
+    assert "boom" in markdown
+    assert report.overall.pages == 0
+    assert report.overall.expected_items == 0
 
 
 def test_write_report_preserves_same_day_reruns(tmp_path: Path) -> None:

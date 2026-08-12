@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from k12ta.llm.base import DataRetention
+
 
 @dataclass(frozen=True)
 class TranscribedItem:
@@ -27,6 +29,13 @@ class TranscriptionResult:
     model: str
     cost_usd: float
     latency_ms: int
+    data_retention: DataRetention
+    """What the provider's tier permits it to do with the image just sent. Sourced from
+    the adapter that produced this result, never hardcoded at the call site, so a
+    free-tier run cannot silently look free."""
+    failure: str | None = None
+    """None on success. A short reason otherwise, so a network failure and a genuinely
+    blank page are never conflated in downstream reporting."""
 
     def min_confidence(self) -> float:
         return min((i.confidence for i in self.items), default=0.0)

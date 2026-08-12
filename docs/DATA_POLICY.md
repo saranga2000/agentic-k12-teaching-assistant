@@ -11,9 +11,21 @@ no analytics, no telemetry.
 ## What leaves the house
 
 Only the page image and the derived text, sent to the model provider for transcription
-and diagnosis, over TLS, for the duration of the request. Nothing else. Choose a provider
-setting that excludes the data from training, and record which setting in this file when
-you configure it.
+and diagnosis, over TLS, for the duration of the request. Nothing else.
+
+**Current provider: Gemini API, free tier (M1.4).** State this plainly rather than bury
+it: the free tier's terms permit Google to use submitted content, including the images
+and the model's output, to improve its products, and human reviewers may read and
+annotate it, de-identified from the account first. This is not excluded from training.
+It applies to every image of the children's schoolwork sent for transcription while
+M1's eval harness runs on this tier.
+
+Moving to a paid tier — which Google states is not used to improve products — or a
+zero-retention provider is a prerequisite before M2, when this moves from a one-off
+labelled eval corpus to running against real schoolwork daily. Do not ship M2 on the
+free tier.
+
+Source: [Gemini API Additional Terms of Service](https://ai.google.dev/gemini-api/terms_preview).
 
 ## What goes into git
 

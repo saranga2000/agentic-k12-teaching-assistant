@@ -7,14 +7,19 @@ Run before implementing any transcriber, so that the first number is honest.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from k12ta.config import Settings
 from k12ta.evals.fixtures import FixtureItem, load_fixture_pages
 from k12ta.grading.key_grader import normalise
+from k12ta.llm import build_vision_model
+from k12ta.llm.base import DataRetention
 from k12ta.transcribe.base import TranscribedItem, Transcriber
+from k12ta.transcribe.vision_llm import VisionLLMTranscriber
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -96,22 +101,44 @@ class Scorecard:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class FailedPage:
+    """A page the transcriber could not score at all, kept apart from a page it read
+    and scored zero on — conflating the two would make a bad network evening look like
+    a model regression."""
+
+    page_id: str
+    reason: str
+
+
 @dataclass
 class EvalReport:
     overall: Scorecard
     by_device: dict[str, Scorecard]
     by_method: dict[str, Scorecard]
     by_layout: dict[str, Scorecard]
+    data_retention: DataRetention | None
+    failed_pages: list[FailedPage] = field(default_factory=list)
 
     def to_markdown(self, transcriber_name: str, run_at: datetime) -> str:
         lines = [
             f"# Transcription eval: {transcriber_name}",
             "",
             f"Run at {run_at.isoformat(timespec='minutes')}.",
-            "",
-            self.overall.render("Overall"),
-            "",
         ]
+        if self.data_retention is not None:
+            lines.append(
+                f"Data retention: {self.data_retention.value} (see docs/DATA_POLICY.md)."
+            )
+        lines.append("")
+        if self.failed_pages:
+            lines.append(f"## Failed pages ({len(self.failed_pages)}, excluded from scoring)")
+            lines.append("")
+            for failed in self.failed_pages:
+                lines.append(f"- {failed.page_id}: {failed.reason}")
+            lines.append("")
+        lines.append(self.overall.render("Overall"))
+        lines.append("")
         for title, slices in (
             ("By capture device", self.by_device),
             ("By capture method", self.by_method),
@@ -198,14 +225,27 @@ def _accumulate_matched(
 
 
 def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalReport:
-    """Run `transcriber` against every labelled page under `fixtures_dir` and score it."""
+    """Run `transcriber` against every labelled page under `fixtures_dir` and score it.
+
+    A page whose result carries a `failure` is excluded from every scorecard and
+    reported separately: a network failure and a page correctly read as having zero
+    problems must never be conflated into the same zero.
+    """
     overall = Scorecard()
     by_device: dict[str, Scorecard] = {}
     by_method: dict[str, Scorecard] = {}
     by_layout: dict[str, Scorecard] = {}
+    failed_pages: list[FailedPage] = []
+    data_retention: DataRetention | None = None
 
     for page in load_fixture_pages(fixtures_dir):
         result = transcriber.transcribe(str(fixtures_dir / page.image))
+        data_retention = result.data_retention
+
+        if result.failure is not None:
+            failed_pages.append(FailedPage(page_id=page.page_id, reason=result.failure))
+            continue
+
         page_match = _match_page(page.items, result.items)
 
         device_card = by_device.setdefault(page.capture_device, Scorecard())
@@ -221,7 +261,12 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
                 _accumulate_matched(card, expected_item, transcribed_item)
 
     return EvalReport(
-        overall=overall, by_device=by_device, by_method=by_method, by_layout=by_layout
+        overall=overall,
+        by_device=by_device,
+        by_method=by_method,
+        by_layout=by_layout,
+        data_retention=data_retention,
+        failed_pages=failed_pages,
     )
 
 
@@ -244,7 +289,21 @@ def write_report(
     return report_path
 
 
+def _load_dotenv(path: Path) -> None:
+    """Minimal .env loader. Real env vars already set take precedence. No new
+    dependency (python-dotenv) for a handful of KEY=value lines."""
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
 def main() -> None:
+    _load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     pages = load_fixture_pages(FIXTURE_DIR)
     if not pages:
         print(
@@ -253,8 +312,18 @@ def main() -> None:
             "See evals/fixtures/README.md."
         )
         return
-    print(f"{len(pages)} fixture pages loaded.")
-    print("Implement VisionLLMTranscriber, then wire it in here and score it.")
+
+    settings = Settings.from_env()
+    vision_model = build_vision_model(settings)
+    transcriber = VisionLLMTranscriber(
+        vision_model, provider=settings.llm_provider, model=settings.llm_model
+    )
+
+    report = score(transcriber, FIXTURE_DIR)
+    run_at = datetime.now()
+    print(report.to_markdown(transcriber.name, run_at))
+    report_path = write_report(report, transcriber.name, run_at=run_at)
+    print(f"Report written to {report_path}")
 
 
 if __name__ == "__main__":
