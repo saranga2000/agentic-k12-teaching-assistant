@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -252,12 +253,21 @@ def _accumulate_matched(
         card.band_correct[band] = card.band_correct.get(band, 0) + 1
 
 
-def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalReport:
+def score(
+    transcriber: Transcriber,
+    fixtures_dir: Path = FIXTURE_DIR,
+    on_progress: Callable[[str], None] | None = None,
+) -> EvalReport:
     """Run `transcriber` against every labelled page under `fixtures_dir` and score it.
 
     A page whose result carries a `failure` is excluded from every scorecard and
     reported separately: a network failure and a page correctly read as having zero
     problems must never be conflated into the same zero.
+
+    `on_progress`, if given, is called once before and once after each page. A real
+    transcriber can spend minutes on a single page retrying a rate limit, so a caller
+    watching a long run needs to see which page it is stuck on, not just a final
+    report once every page is done.
     """
     overall = Scorecard()
     by_device: dict[str, Scorecard] = {}
@@ -267,13 +277,22 @@ def score(transcriber: Transcriber, fixtures_dir: Path = FIXTURE_DIR) -> EvalRep
     failed_pages: list[FailedPage] = []
     data_retention: DataRetention | None = None
 
-    for page in load_fixture_pages(fixtures_dir):
+    pages = load_fixture_pages(fixtures_dir)
+    total = len(pages)
+    for index, page in enumerate(pages, start=1):
+        if on_progress is not None:
+            on_progress(f"[{index}/{total}] {page.page_id}: transcribing...")
         result = transcriber.transcribe(str(fixtures_dir / page.image))
         data_retention = result.data_retention
 
         if result.failure is not None:
             failed_pages.append(FailedPage(page_id=page.page_id, reason=result.failure))
+            if on_progress is not None:
+                on_progress(f"[{index}/{total}] {page.page_id}: failed ({result.failure})")
             continue
+
+        if on_progress is not None:
+            on_progress(f"[{index}/{total}] {page.page_id}: scored")
 
         page_match = _match_page(page.items, result.items, page.layout)
 
@@ -351,7 +370,9 @@ def main() -> None:
         vision_model, provider=settings.llm_provider, model=settings.llm_model
     )
 
-    report = score(transcriber, FIXTURE_DIR)
+    report = score(
+        transcriber, FIXTURE_DIR, on_progress=lambda msg: print(msg, flush=True)
+    )
     run_at = datetime.now()
     print(report.to_markdown(transcriber.name, run_at))
     report_path = write_report(report, transcriber.name, run_at=run_at)

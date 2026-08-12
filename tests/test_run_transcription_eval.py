@@ -392,6 +392,35 @@ def test_missing_item_with_no_transcription_lowers_recall_only(tmp_path: Path) -
     assert overall.detection_precision() == 0.0
 
 
+def test_score_reports_progress_per_page(tmp_path: Path) -> None:
+    # A real transcriber can spend minutes per page retrying a rate limit, so progress
+    # must be visible before and after each page, not only once the whole run ends.
+    _write_page(
+        tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    _write_page(
+        tmp_path, "page-b", "pages/b.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
+    )
+    keys = {"a": str(tmp_path / "pages/a.jpg"), "b": str(tmp_path / "pages/b.jpg")}
+    transcriber = FakeTranscriber(
+        name="fake",
+        responses={
+            keys["a"]: _result(TranscribedItem("1", "p", "a", confidence=0.9)),
+            keys["b"]: _result(failure="RuntimeError: network exploded"),
+        },
+    )
+    messages: list[str] = []
+
+    score(transcriber, tmp_path, on_progress=messages.append)
+
+    assert messages == [
+        "[1/2] page-a: transcribing...",
+        "[1/2] page-a: scored",
+        "[2/2] page-b: transcribing...",
+        "[2/2] page-b: failed (RuntimeError: network exploded)",
+    ]
+
+
 def test_data_retention_is_surfaced_at_the_report_level(tmp_path: Path) -> None:
     _write_page(
         tmp_path, "page-a", "pages/a.jpg", "ipad-air-m1", "camera-roll", [_item("1", "p", "a")]
