@@ -17,13 +17,34 @@ and diagnosis, over TLS, for the duration of the request. Nothing else.
 it: the free tier's terms permit Google to use submitted content, including the images
 and the model's output, to improve its products, and human reviewers may read and
 annotate it, de-identified from the account first. This is not excluded from training.
-It applies to every image of the children's schoolwork sent for transcription while
-M1's eval harness runs on this tier.
+It applies to every image of the children's schoolwork sent for transcription, for as
+long as the free tier is the provider.
 
-Moving to a paid tier — which Google states is not used to improve products — or a
-zero-retention provider is a prerequisite before M2, when this moves from a one-off
-labelled eval corpus to running against real schoolwork daily. Do not ship M2 on the
-free tier.
+## The free tier stays, deliberately
+
+M2 ships on the free tier. This is an accepted trade, not an oversight.
+
+- The earlier text in the previous version of this file — "Moving to a paid tier ... or a
+  zero-retention provider is a prerequisite before M2 ... Do not ship M2 on the free
+  tier" — was written as a prerequisite and **has not been met**. M2's pipeline runs
+  against the same free tier the eval harness ran on.
+- That means Google may retain the submitted content — photographs of my children's
+  schoolwork — and use it to improve its products, and human reviewers may read and
+  annotate it. That is the real cost, and it is being accepted on purpose.
+
+**Why the trade is worth taking now.** The system is unproven and barely used. Paying
+for a tier before knowing whether the tool earns daily use is premature spending on top
+of a product whose usefulness is still a hypothesis.
+
+**This is a decision, not a drift, and it has a trigger.** Move to a no-retention paid
+tier (which Google states is not used to improve products) or a zero-retention provider
+when either of these happens, whichever comes first:
+
+- both children use the system daily, or
+- the other parent starts using the parent surface.
+
+That trigger is recorded as a tracked task in docs/ROADMAP.md so it is honoured rather
+than remembered.
 
 Source: [Gemini API Additional Terms of Service](https://ai.google.dev/gemini-api/terms_preview).
 

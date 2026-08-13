@@ -183,6 +183,27 @@ Done when: you can state a precision number, not a vibe.
 
 ---
 
+## Standing obligation: leave the free provider tier
+
+Not a milestone — a trigger that must not drift into being remembered. The data policy
+accepts, deliberately, that the current free Gemini tier may retain photographs of the
+children's schoolwork and use them to improve Google's products. That trade is only
+acceptable while the system is unproven and barely used; it does not stay acceptable by
+inertia.
+
+**When it fires: move to a no-retention paid tier or a zero-retention provider as soon
+as either condition is met, whichever comes first.**
+
+1. Both children use the system daily.
+2. The other parent starts using the parent surface.
+
+This task is deliberately outside the "What to cut if evenings disappear" list. Cutting
+the wrong milestone reduces scope; losing this trigger changes what the household is
+willing to send to a provider, silently. See `docs/DATA_POLICY.md` for the reasoning
+and the exact disclosure.
+
+---
+
 ## P2. Good to have, not on the critical path
 
 - **Student profile photo.** Each student can have a photo taken or uploaded, shown
