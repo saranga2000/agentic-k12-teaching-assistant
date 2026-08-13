@@ -45,9 +45,61 @@ images. See `docs/DATA_POLICY.md`.
 - Key-based grading only, using a scanned answer key
 - Session persisted to SQLite with `student_id` on every row
 - NEEDS_HUMAN rendering that shows the child what was skipped and why
+- Parent notification of missing keys: when a page routes to NEEDS_HUMAN because no
+  answer key exists for it, record that. The parent-facing surface states it plainly:
+  "3 pages are waiting on an answer key: Summer Bridge pages 21, 23, 25."
+
+This is the only place the student flow and the parent flow currently talk to each
+other. Without it, ungraded pages accumulate silently, the child keeps seeing "ask a
+grown-up," and there is no way to know what to scan next. Naming specific page numbers
+depends on knowing which workbook page a given student capture is for, which grading
+does not track yet — `transcribe_page.md` has no page-number field, and M2.4's own
+key-store design deliberately deferred the matching step that would connect a capture
+to a specific key page. A count-only version ("3 problems from Summer Bridge are
+waiting on a key," no page numbers) is buildable without that; the page-number version
+above is not, and should wait for whichever task builds that matching, not ship as a
+guess.
 
 Done when: your 7th grader completes a real workbook page end to end without you
 touching a keyboard.
+
+## Parent surface: information architecture
+
+The parent-facing app's current shape (M2.4) puts "scan an answer key" at the top
+level — the first thing a parent sees. That's backwards: it reflects which piece got
+built first, not what a parent actually opens the app for. At 9pm the question is "how
+did they do today," not "let me scan a key." The intended structure, per child:
+
+1. **Daily progress.** The default view, and the reason to open the app at all: time
+   on task, what was worked on, what needs attention. Arrives with M5.
+2. **Enrollments.** The configured content sources — RSM, Kumon, school, workbooks.
+   Add, edit, and per-enrollment settings live here. "Content source" is the internal
+   name (`k12ta.content`, `content_sources`); the parent-facing word should be one a
+   parent recognises without translation. Three options, in order of preference:
+   - **"Enrollments"** — matches how a parent already thinks about this ("what is
+     she enrolled in this year"), covers a school subject and a tutoring programme
+     and a summer workbook with one word, and doesn't imply a subscription or a
+     course catalogue the way the alternatives below do.
+   - **"Programs"** — plain and short, but undersells school homework, which isn't a
+     "program" in a parent's head, and reads slightly software-vendor-ish.
+   - **"Subjects"** — the most natural fit for school and workbooks, but strains for
+     RSM/Kumon, which are programmes with their own pacing and materials, not just
+     "math" a second time.
+   Recommendation: **Enrollments**, used consistently as the parent-facing label from
+   here on, `content_sources` remaining the internal/schema name.
+3. **Per-enrollment detail.** Recent sessions, answer keys on file, which pages are
+   waiting on a key. Scanning a key lives *here*, under the enrollment it belongs to
+   — not at the top level, since a key only ever means something in the context of
+   one enrollment.
+4. **Review and correct.** The M5 correction loop: a parent fixes a wrong grade or
+   transcription, and each correction becomes an eval fixture as a byproduct (see M5).
+
+Most of this depends on milestones not yet built — daily progress needs M5's session
+rollups, review-and-correct needs M5's correction loop, and even "pages waiting on a
+key" needs the page-identity work named above. It lands incrementally, one real screen
+per milestone, as the data behind it becomes real. **Do not build placeholder screens
+for sections with no data behind them** — say so in a line of text instead (see M2.4's
+restructure, which does exactly this for the two sections above that don't exist yet).
 
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**
@@ -128,6 +180,19 @@ Done when: you can state a precision number, not a vibe.
 3. Targeted quiz generation from diagnosed misconceptions
 4. Voice output behind the same provider abstraction as transcription
 5. Study-buddy group mode, gated on the consent design already noted in the spec
+
+---
+
+## P2. Good to have, not on the critical path
+
+- **Student profile photo.** Each student can have a photo taken or uploaded, shown
+  on their name button on the home screen, so a child sees themselves rather than a
+  text label. Parent-controlled — a child must not be able to change another child's
+  photo, the same boundary the parent PIN already draws elsewhere in the system.
+  Stored locally with the rest of the data and covered by `docs/DATA_POLICY.md` as an
+  image of a child, not carved out under a separate policy. Must not add a tap or a
+  load delay to the two-tap capture path: the photo decorates a screen the student is
+  already looking at, it is not a new step.
 
 ---
 

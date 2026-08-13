@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/">&larr; {{ student.display_name }}</a></p>
+<h1>{{ source.label }}</h1>
+
+<h2>Answer keys</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan a key</a></p>
+
+<h2>Recent sessions</h2>
+<p class="message">Session history is not shown here yet.</p>
+
+<h2>Pages waiting on a key</h2>
+<p class="message">Not tracked yet — see docs/ROADMAP.md for what this needs first.</p>
+{% endblock %}

@@ -81,17 +81,21 @@ def _get(data: dict[str, list[str]], key: str, default: str = "") -> str:
 
 
 @app.get("/", response_class=HTMLResponse)
-def pick_source(
+def home(
     request: Request,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse:
+    """Children first, then their enrollments -- not "scan an answer key" as the
+    top-level action. See docs/ROADMAP.md, "Parent surface: information
+    architecture": this is what a parent actually opens the app for, once daily
+    progress (M5) exists to put here; until then it's the enrollment list."""
     rows = [
         {"student": student, "sources": content.list_content_sources(conn, student.student_id)}
         for student in students.list_students(conn)
     ]
     return templates.TemplateResponse(
         request,
-        "pick_source.html",
+        "home.html",
         {"rows": rows, "no_students_message": NO_STUDENTS_MESSAGE},
     )
 
@@ -106,6 +110,23 @@ def _require_student_and_source(
     if source is None:
         raise HTTPException(404, "no such content source")
     return student, source
+
+
+@app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
+def enrollment_detail(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """Scanning a key lives under the enrollment it belongs to, not at the top
+    level -- a key only ever means something in the context of one enrollment.
+    Recent sessions and pages-waiting-on-a-key say plainly they're not built yet
+    rather than showing an empty panel; neither is a feature of this task."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    return templates.TemplateResponse(
+        request, "enrollment.html", {"student": student, "source": source}
+    )
 
 
 @app.get("/keys/{student_id}/{source_id}/upload", response_class=HTMLResponse)

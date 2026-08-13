@@ -1,18 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Scan an answer key{% endblock %}
+{% block title %}Children{% endblock %}
 {% block content %}
-<h1>Scan an answer key</h1>
 {% if rows %}
   {% for row in rows %}
   <h2>{{ row.student.display_name }}</h2>
   {% if row.sources %}
   <ul class="source-list">
     {% for source in row.sources %}
-    <li><a href="/keys/{{ row.student.student_id }}/{{ source.source_id }}/upload">{{ source.label }}</a></li>
+    <li><a href="/keys/{{ row.student.student_id }}/{{ source.source_id }}">{{ source.label }}</a></li>
     {% endfor %}
   </ul>
   {% else %}
-  <p class="message">No content sources configured for {{ row.student.display_name }} yet.</p>
+  <p class="message">No enrollments configured for {{ row.student.display_name }} yet.</p>
   {% endif %}
   {% endfor %}
 {% else %}

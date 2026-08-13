@@ -131,7 +131,7 @@ def _success_result() -> KeyPageResult:
     )
 
 
-def test_picker_lists_students_and_their_content_sources(
+def test_picker_lists_students_and_their_enrollments(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus_with_source(conn)
@@ -141,6 +141,10 @@ def test_picker_lists_students_and_their_content_sources(
     assert response.status_code == 200
     assert "Marcus" in response.text
     assert "Summer bridge workbook" in response.text
+    # Scanning a key is not a top-level action any more -- the picker links to the
+    # enrollment, not straight to /upload.
+    assert 'href="/keys/s-marcus/summer_bridge"' in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/upload"' not in response.text
 
 
 def test_picker_with_no_students_shows_an_intelligible_message(client: TestClient) -> None:
@@ -148,6 +152,27 @@ def test_picker_with_no_students_shows_an_intelligible_message(client: TestClien
 
     assert response.status_code == 200
     assert "No students" in response.text
+
+
+def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_yet(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "Summer bridge workbook" in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/upload"' in response.text
+    # No dashboard, no invented metrics -- a plain line for each thing that has no
+    # data behind it yet, not an empty panel.
+    assert "not shown here yet" in response.text.lower()
+    assert "not tracked yet" in response.text.lower()
+
+
+def test_enrollment_detail_for_unknown_student_or_source_is_404(client: TestClient) -> None:
+    assert client.get("/keys/does-not-exist/summer_bridge").status_code == 404
+    assert client.get("/keys/s-marcus/does-not-exist").status_code == 404
 
 
 def test_upload_screen_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -240,6 +265,24 @@ def test_confirming_a_brand_new_entry_logs_a_created_audit_row(
     assert len(log) == 1
     assert log[0].action == "created"
     assert log[0].new_answer_text == "8 m"
+
+
+def test_saved_screen_finish_link_returns_to_the_enrollment_not_past_it(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+        },
+    )
+
+    assert 'href="/keys/s-marcus/summer_bridge"' in response.text
 
 
 def test_reconfirming_an_identical_answer_is_idempotent_and_logs_matched(

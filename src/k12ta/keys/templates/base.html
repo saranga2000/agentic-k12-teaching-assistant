@@ -4,16 +4,26 @@
 <meta charset="utf-8">
 <title>{% block title %}Answer keys{% endblock %}</title>
 <style>
-  /* This app is desk-based and form-dense (a parent working through 30 answers),
-     the opposite context from the student app's dark, one-glance kiosk screens --
-     kept light and information-dense on purpose, matching k12ta.label's precedent,
-     just with the same restrained, muted colour language: affirm/attention/neutral,
-     never a scoreboard red or green. */
+  /* Same design system as k12ta.web/templates/base.html -- identical token names
+     and values, not just a thematically-similar palette. This app is still
+     desk-based and form-dense (a parent working through 30 answers, not a child's
+     one-glance kiosk screen), so the layout differs -- a scrolling document with
+     dense tables instead of a full-screen centred .screen -- but the colours,
+     type, and glyph language are the one shared system across both apps. */
   :root {
-    --bg: #faf9f7; --surface: #ffffff; --text: #22242a; --text-dim: #6b7280;
-    --border: #e2e0db; --accent: #c98f5e; --accent-text: #22242a;
-    --affirm: #2f7d6b; --affirm-bg: #e7f3f0;
-    --attention: #a8632f; --attention-bg: #faf1e8;
+    --bg: #12141a;
+    --text: #f4f4f6;
+    --text-dim: #b8bcc4;
+    --surface: #1b1e26;
+    --border: #2c2f38;
+    --accent: #ffd166;
+    --accent-active: #f2b705;
+    --affirm: #4ecdc4;
+    --affirm-bg: #1a3c30;
+    --attention: #c98f5e;
+    --attention-bg: #3a2a20;
+    --neutral: #8b93a1;
+    --neutral-bg: #262a33;
   }
   * { box-sizing: border-box; }
   body {
@@ -39,6 +49,7 @@
   input[type=text], input[type=number] {
     width: 100%; box-sizing: border-box; padding: 0.35rem 0.5rem;
     border: 1px solid var(--border); border-radius: 6px; font-size: 1rem;
+    background: var(--surface); color: var(--text);
   }
   fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; }
   .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
@@ -48,7 +59,7 @@
   }
   button, .button-link {
     font-size: 1rem; padding: 0.6rem 1.2rem; border-radius: 8px; border: none;
-    background: var(--accent); color: var(--accent-text); cursor: pointer;
+    background: var(--accent); color: #12141a; cursor: pointer;
     text-decoration: none; display: inline-block; font-weight: 600;
   }
 </style>

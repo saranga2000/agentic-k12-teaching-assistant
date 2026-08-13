@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Scan {{ source.label }}{% endblock %}
 {% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
 <h1>{{ source.label }} — {{ student.display_name }}</h1>
 <p>Photograph or choose a page of the answer key. One photo can cover several
 workbook pages, so a whole key is usually 6-8 photos.</p>
