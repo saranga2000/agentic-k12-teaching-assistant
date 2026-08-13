@@ -172,9 +172,7 @@ class EvalReport:
                 "below reflects only the pages that ran before the abort."
             )
         if self.data_retention is not None:
-            lines.append(
-                f"Data retention: {self.data_retention.value} (see docs/DATA_POLICY.md)."
-            )
+            lines.append(f"Data retention: {self.data_retention.value} (see docs/DATA_POLICY.md).")
         lines.append(f"Total API requests, including retries: {self.total_requests}.")
         lines.append("")
         if self.failed_pages:
@@ -419,10 +417,7 @@ def main() -> None:
     try:
         vision_model.verify()
     except (MisconfiguredError, RateLimitExhaustedError) as exc:
-        print(
-            f"Preflight failed, aborting before sending any page: "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"Preflight failed, aborting before sending any page: {type(exc).__name__}: {exc}")
         return
     print("Preflight passed.", flush=True)
 
@@ -430,9 +425,7 @@ def main() -> None:
         vision_model, provider=settings.llm_provider, model=settings.llm_model
     )
 
-    report = score(
-        transcriber, FIXTURE_DIR, on_progress=lambda msg: print(msg, flush=True)
-    )
+    report = score(transcriber, FIXTURE_DIR, on_progress=lambda msg: print(msg, flush=True))
     run_at = datetime.now()
     print(report.to_markdown(transcriber.name, run_at))
     report_path = write_report(report, transcriber.name, run_at=run_at)

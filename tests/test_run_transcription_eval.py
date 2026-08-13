@@ -629,9 +629,7 @@ def test_markdown_shows_abort_prominently_and_groups_failures_by_kind(tmp_path: 
     transcriber = FakeTranscriber(
         name="fake",
         responses={
-            keys["a"]: _result(
-                failure="Gemini returned 503", failure_kind=FailureKind.TRANSIENT
-            ),
+            keys["a"]: _result(failure="Gemini returned 503", failure_kind=FailureKind.TRANSIENT),
             keys["b"]: _result(
                 failure="no candidates in Gemini response", failure_kind=FailureKind.UNREADABLE
             ),

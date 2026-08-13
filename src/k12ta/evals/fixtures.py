@@ -79,8 +79,7 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
     except ValueError as exc:
         allowed = ", ".join(m.value for m in CaptureMethod)
         raise FixtureValidationError(
-            f"{label_path}: capture_method must be one of {allowed}, "
-            f"got {capture_method_raw!r}"
+            f"{label_path}: capture_method must be one of {allowed}, got {capture_method_raw!r}"
         ) from exc
 
     layout, spread_side = _parse_layout(page, label_path)
@@ -99,9 +98,7 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
     )
 
 
-def _parse_layout(
-    page: dict[str, object], label_path: Path
-) -> tuple[Layout, SpreadSide | None]:
+def _parse_layout(page: dict[str, object], label_path: Path) -> tuple[Layout, SpreadSide | None]:
     layout_raw = _require_str(page, "layout", label_path)
     try:
         layout = Layout(layout_raw)

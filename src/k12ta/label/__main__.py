@@ -1,6 +1,6 @@
 """Entry point for the labelling tool.
 
-    python -m k12ta.label
+python -m k12ta.label
 """
 
 from __future__ import annotations

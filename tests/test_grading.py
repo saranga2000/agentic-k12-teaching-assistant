@@ -9,9 +9,7 @@ def test_normalisation_handles_unicode_minus_and_spacing() -> None:
 
 
 def test_low_confidence_never_produces_an_incorrect_mark() -> None:
-    assert (
-        grade_against_key("14", "-14", transcription_confidence=0.4) is GradeOutcome.NEEDS_HUMAN
-    )
+    assert grade_against_key("14", "-14", transcription_confidence=0.4) is GradeOutcome.NEEDS_HUMAN
 
 
 def test_blank_answer_escalates_rather_than_failing_the_student() -> None:

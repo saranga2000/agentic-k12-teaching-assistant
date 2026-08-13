@@ -275,9 +275,7 @@ def test_request_count_increases_with_each_attempt_including_retries() -> None:
 
 
 def test_request_cap_exceeded_raises_before_sending_the_next_request() -> None:
-    client, calls = _client_and_calls(
-        [httpx.Response(200, json=_envelope("{}")) for _ in range(5)]
-    )
+    client, calls = _client_and_calls([httpx.Response(200, json=_envelope("{}")) for _ in range(5)])
     monotonic, sleep, _ = _fake_clock()
     model = _model(client, sleep, monotonic, max_requests=2)
 

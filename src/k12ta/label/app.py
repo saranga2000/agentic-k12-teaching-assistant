@@ -194,8 +194,10 @@ def serve_image(stem: str) -> FileResponse:
 @app.get("/pages", response_class=HTMLResponse)
 def list_pages(request: Request) -> HTMLResponse:
     done = _labelled_stems()
-    rows = [{"stem": _stem(image), "filename": image.name, "done": _stem(image) in done}
-            for image in _all_images()]
+    rows = [
+        {"stem": _stem(image), "filename": image.name, "done": _stem(image) in done}
+        for image in _all_images()
+    ]
     context = {"rows": rows, "done": len(done), "total": len(rows)}
     return templates.TemplateResponse(request, "pages.html", context)
 

@@ -58,14 +58,10 @@ class Settings:
             llm_provider=os.environ.get("K12TA_LLM_PROVIDER", "anthropic"),
             llm_api_key=os.environ.get("K12TA_LLM_API_KEY", ""),
             llm_model=os.environ.get("K12TA_LLM_MODEL", ""),
-            llm_max_requests_per_run=int(
-                os.environ.get("K12TA_LLM_MAX_REQUESTS_PER_RUN", "40")
-            ),
+            llm_max_requests_per_run=int(os.environ.get("K12TA_LLM_MAX_REQUESTS_PER_RUN", "40")),
             data_dir=Path(os.environ.get("K12TA_DATA_DIR", "./data")),
             coach_name=os.environ.get("K12TA_COACH_NAME", COACH_NAME_PLACEHOLDER),
-            daily_token_budget_usd=Decimal(
-                os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")
-            ),
+            daily_token_budget_usd=Decimal(os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")),
             daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "20")),
             log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),
         )

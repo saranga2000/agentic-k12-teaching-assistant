@@ -1,6 +1,6 @@
 """Entry point for the parent-only answer-key ingestion app.
 
-    python -m k12ta.keys --host 127.0.0.1 --port 8082
+python -m k12ta.keys --host 127.0.0.1 --port 8082
 """
 
 from __future__ import annotations

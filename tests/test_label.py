@@ -89,9 +89,7 @@ def test_skip_writes_zero_item_label_and_advances(client: TestClient) -> None:
     _touch(label_app.PAGES_DIR, "a.jpg")
     _touch(label_app.PAGES_DIR, "b.jpg")
 
-    r = client.post(
-        "/label", data=_minimal_save("a", action="skip"), follow_redirects=False
-    )
+    r = client.post("/label", data=_minimal_save("a", action="skip"), follow_redirects=False)
 
     assert r.status_code == 303
     saved = json.loads((label_app.FIXTURES_DIR / "a.json").read_text())
@@ -109,9 +107,7 @@ def test_prefill_carries_source_subject_method_but_not_device_or_quality(
     _touch(label_app.PAGES_DIR, "b.jpg")
     client.post(
         "/label",
-        data=_minimal_save(
-            "a", capture_device="Pixel 9a", capture_quality="poor", action="skip"
-        ),
+        data=_minimal_save("a", capture_device="Pixel 9a", capture_quality="poor", action="skip"),
     )
 
     r = client.get("/label")
@@ -119,7 +115,7 @@ def test_prefill_carries_source_subject_method_but_not_device_or_quality(
     assert 'value="summer_bridge"' in r.text  # source_id carried forward
     assert 'name="capture_device" value=""' in r.text  # never carried forward
     assert 'name="capture_quality" value=""' in r.text  # never carried forward
-    assert 'selected>camera-roll' in r.text  # capture_method carried forward
+    assert "selected>camera-roll" in r.text  # capture_method carried forward
     assert 'value="single-page" selected' not in r.text  # layout never carried forward
     assert 'value="two-page-spread" selected' not in r.text
 
@@ -161,9 +157,7 @@ def test_blank_rows_are_dropped_but_filled_rows_are_kept(client: TestClient) -> 
 
     client.post(
         "/label",
-        data=_minimal_save(
-            "a", problem_id_0="1", student_answer_raw_0="4", problem_id_3="4"
-        ),
+        data=_minimal_save("a", problem_id_0="1", student_answer_raw_0="4", problem_id_3="4"),
     )
 
     saved = json.loads((label_app.FIXTURES_DIR / "a.json").read_text())
@@ -241,9 +235,7 @@ def test_single_page_drops_any_submitted_spread_side(client: TestClient) -> None
 def test_layout_never_carries_forward_even_when_skipped(client: TestClient) -> None:
     _touch(label_app.PAGES_DIR, "a.jpg")
     _touch(label_app.PAGES_DIR, "b.jpg")
-    client.post(
-        "/label", data=_minimal_save("a", layout="two-page-spread", spread_side="left")
-    )
+    client.post("/label", data=_minimal_save("a", layout="two-page-spread", spread_side="left"))
 
     r = client.get("/label")
 

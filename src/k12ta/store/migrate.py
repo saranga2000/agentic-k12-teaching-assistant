@@ -27,9 +27,7 @@ def applied_versions(conn: sqlite3.Connection) -> set[str]:
     return {row[0] for row in rows}
 
 
-def apply_migrations(
-    conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR
-) -> list[str]:
+def apply_migrations(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """Apply every not-yet-applied migration in order. Returns newly applied versions."""
     already = applied_versions(conn)
     newly_applied: list[str] = []

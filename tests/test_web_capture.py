@@ -522,9 +522,9 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     response = client.get("/session/s-marcus/sess-synthetic")
 
     assert response.status_code == 200
-    assert 'outcome-correct' in response.text
-    assert 'outcome-incorrect' in response.text
-    assert 'outcome-needs-human' in response.text
+    assert "outcome-correct" in response.text
+    assert "outcome-incorrect" in response.text
+    assert "outcome-needs-human" in response.text
 
 
 @pytest.mark.parametrize(

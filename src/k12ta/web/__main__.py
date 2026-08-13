@@ -1,6 +1,6 @@
 """Entry point for the capture surface.
 
-    python -m k12ta.web --host 0.0.0.0 --port 8080
+python -m k12ta.web --host 0.0.0.0 --port 8080
 """
 
 from __future__ import annotations

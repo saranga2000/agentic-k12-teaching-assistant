@@ -27,12 +27,10 @@ from k12ta.store import answer_key_audit, answer_keys, content, db, migrate, stu
 from k12ta.transcribe.key_page import KeyTranscriber, VisionLLMKeyTranscriber
 
 QUOTA_EXHAUSTED_MESSAGE = (
-    "Today's reading budget is used up. Try again tomorrow, or raise "
-    "K12TA_DAILY_REQUEST_LIMIT."
+    "Today's reading budget is used up. Try again tomorrow, or raise K12TA_DAILY_REQUEST_LIMIT."
 )
 NO_STUDENTS_MESSAGE = (
-    "No students yet. Run `python scripts/seed_dev_data.py` against this server's "
-    "K12TA_DATA_DIR."
+    "No students yet. Run `python scripts/seed_dev_data.py` against this server's K12TA_DATA_DIR."
 )
 UNGRADEABLE_REASONS = ("answers_vary", "graph_or_table")
 
