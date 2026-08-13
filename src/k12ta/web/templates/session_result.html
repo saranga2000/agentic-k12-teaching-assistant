@@ -9,11 +9,11 @@
       <div class="prompt">{{ item.prompt_text }}</div>
       <div class="answer">You wrote: {{ item.student_answer_raw }}</div>
       {% if item.outcome == "correct" %}
-      <div class="outcome-label">Correct!</div>
+      <div class="outcome-label"><span class="outcome-glyph">✓</span> Correct!</div>
       {% elif item.outcome == "incorrect" %}
-      <div class="outcome-label">Not quite — let's look at this one together.</div>
+      <div class="outcome-label"><span class="outcome-glyph">✎</span> Not quite — let's look at this one together.</div>
       {% else %}
-      <div class="outcome-label">{{ item.needs_human_reason }}</div>
+      <div class="outcome-label"><span class="outcome-glyph">{{ item.needs_human_glyph }}</span> {{ item.needs_human_reason }}</div>
       {% endif %}
     </li>
     {% endfor %}
@@ -25,12 +25,19 @@
 <style>
   .results { justify-content: flex-start; padding-top: 3rem; }
   .problem-list { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 1rem; }
-  .problem { border-radius: 16px; padding: 1rem 1.25rem; text-align: left; }
-  .problem .prompt { font-size: 1.2rem; font-weight: 600; }
-  .problem .answer { opacity: 0.85; margin-top: 0.25rem; }
-  .problem .outcome-label { margin-top: 0.5rem; font-weight: 600; }
-  .outcome-correct { background: #1f4d3a; border: 2px solid #4ecdc4; }
-  .outcome-incorrect { background: #4d1f1f; border: 2px solid #ff6b6b; }
-  .outcome-needs-human { background: #2a2d36; border: 2px solid #6b7280; }
+  .problem { border-radius: 16px; padding: 1.1rem 1.3rem; text-align: left; }
+  .problem .prompt { font-size: 1.15rem; font-weight: 600; }
+  .problem .answer { color: var(--text-dim); margin-top: 0.3rem; }
+  .problem .outcome-label { margin-top: 0.6rem; font-weight: 600; display: flex; align-items: baseline; gap: 0.5rem; }
+  .outcome-glyph { font-size: 1.1rem; font-weight: 700; }
+  /* Solid border = affirmed, dashed = needs a look -- same language as the capture
+     screen's framing guide, so the whole app speaks one visual dialect. Colour is
+     the third signal here, after the glyph and the label, never the only one. */
+  .outcome-correct { background: var(--affirm-bg); border: 2px solid var(--affirm); }
+  .outcome-correct .outcome-glyph { color: var(--affirm); }
+  .outcome-incorrect { background: var(--attention-bg); border: 2px dashed var(--attention); }
+  .outcome-incorrect .outcome-glyph { color: var(--attention); }
+  .outcome-needs-human { background: var(--neutral-bg); border: 2px dashed var(--neutral); }
+  .outcome-needs-human .outcome-glyph { color: var(--neutral); }
 </style>
 {% endblock %}

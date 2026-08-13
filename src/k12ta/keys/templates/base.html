@@ -4,17 +4,53 @@
 <meta charset="utf-8">
 <title>{% block title %}Answer keys{% endblock %}</title>
 <style>
-  body { font-family: sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  /* This app is desk-based and form-dense (a parent working through 30 answers),
+     the opposite context from the student app's dark, one-glance kiosk screens --
+     kept light and information-dense on purpose, matching k12ta.label's precedent,
+     just with the same restrained, muted colour language: affirm/attention/neutral,
+     never a scoreboard red or green. */
+  :root {
+    --bg: #faf9f7; --surface: #ffffff; --text: #22242a; --text-dim: #6b7280;
+    --border: #e2e0db; --accent: #c98f5e; --accent-text: #22242a;
+    --affirm: #2f7d6b; --affirm-bg: #e7f3f0;
+    --attention: #a8632f; --attention-bg: #faf1e8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 17px; max-width: 960px; margin: 2rem auto; padding: 0 1.25rem;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+  }
   h1, h2 { margin-top: 0; }
-  img.key-photo { max-width: 100%; max-height: 55vh; display: block; margin-bottom: 1rem; border: 1px solid #ccc; }
+  h1 { font-size: 1.6rem; } h2 { font-size: 1.2rem; color: var(--text-dim); font-weight: 600; }
+  img.key-photo {
+    max-width: 100%; max-height: 55vh; display: block; margin-bottom: 1rem;
+    border: 1px solid var(--border); border-radius: 10px;
+  }
   .source-list { list-style: none; padding: 0; }
   .source-list li { margin-bottom: 0.5rem; }
+  .source-list a {
+    display: inline-block; padding: 0.6rem 1rem; border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    text-decoration: none;
+  }
   table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
-  td, th { padding: 0.25rem; border-bottom: 1px solid #eee; text-align: left; }
-  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; }
+  td, th { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); text-align: left; }
+  input[type=text], input[type=number] {
+    width: 100%; box-sizing: border-box; padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border); border-radius: 6px; font-size: 1rem;
+  }
+  fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; }
   .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
-  .message { background: #eef; padding: 0.75rem 1rem; border-radius: 4px; }
-  button, .button-link { font-size: 1rem; padding: 0.5rem 1rem; }
+  .message {
+    background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    padding: 0.85rem 1.1rem; border-radius: 8px;
+  }
+  button, .button-link {
+    font-size: 1rem; padding: 0.6rem 1.2rem; border-radius: 8px; border: none;
+    background: var(--accent); color: var(--accent-text); cursor: pointer;
+    text-decoration: none; display: inline-block; font-weight: 600;
+  }
 </style>
 </head>
 <body>

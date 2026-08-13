@@ -89,30 +89,31 @@
 </div>
 <style>
   .assignment-chip {
-    font-size: 1.1rem; padding: 0.6rem 1rem; border-radius: 999px;
-    background: #262a33; color: #f4f4f6; border: none;
+    font-size: 1rem; padding: 0.6rem 1.1rem; border-radius: 999px;
+    background: var(--surface); color: var(--text); border: none;
   }
   .framing-guide { display: flex; align-items: flex-end; gap: 2rem; }
   .frame-good, .frame-bad { display: flex; flex-direction: column; align-items: center; }
   .frame-outline {
     display: flex; align-items: center; justify-content: center;
-    width: 84px; height: 112px; border-radius: 8px;
+    width: 84px; height: 112px; border-radius: 10px;
   }
   /* The two examples are deliberately NOT equal in visual weight: one is the
      answer, one is the warning. Relying on border colour alone made them read as
      two equally-valid options with no cue which to copy -- fixed with a filled
      background, a large distinct glyph, and an explicit text label, stacked so no
-     single signal is load-bearing on its own. */
-  .frame-good .frame-outline { background: #1f4d3a; border: 4px solid #4ecdc4; }
+     single signal is load-bearing on its own. Solid border = affirmed, dashed =
+     needs attention -- the same language the results page uses. */
+  .frame-good .frame-outline { background: var(--affirm-bg); border: 4px solid var(--affirm); }
   .frame-bad .frame-outline {
-    width: 108px; height: 76px; background: #241417; border: 4px dashed #8a4a4a;
-    opacity: 0.75;
+    width: 108px; height: 76px; background: var(--attention-bg); border: 4px dashed var(--attention);
+    opacity: 0.85;
   }
-  .frame-glyph { font-size: 2.5rem; font-weight: 900; line-height: 1; }
-  .frame-good .frame-glyph { color: #4ecdc4; }
-  .frame-bad .frame-glyph { color: #ff6b6b; font-size: 2rem; }
-  .frame-label { font-size: 1.05rem; font-weight: 700; margin: 0.6rem 0 0; }
-  .frame-good .frame-label { color: #4ecdc4; }
-  .frame-bad .frame-label { color: #c98686; font-weight: 500; font-size: 0.9rem; }
+  .frame-glyph { font-size: 2.5rem; font-weight: 700; line-height: 1; }
+  .frame-good .frame-glyph { color: var(--affirm); }
+  .frame-bad .frame-glyph { color: var(--attention); font-size: 2rem; }
+  .frame-label { font-size: 1.05rem; font-weight: 700; margin: 0.65rem 0 0; }
+  .frame-good .frame-label { color: var(--affirm); }
+  .frame-bad .frame-label { color: var(--attention); font-weight: 500; font-size: 0.9rem; }
 </style>
 {% endblock %}

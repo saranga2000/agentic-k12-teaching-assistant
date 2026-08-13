@@ -46,6 +46,11 @@ QUOTA_EXHAUSTED_MESSAGE = "I have done all my reading for today, ask a grown-up.
 NO_PROBLEMS_FOUND_MESSAGE = "I did not find any problems on this page."
 NO_ANSWER_KEY_MESSAGE = "I don't have an answer key for this one yet — ask a grown-up to check it."
 COULD_NOT_READ_MESSAGE = "I could not read this one clearly."
+# Distinct glyphs per needs_human cause, so the three read differently at a glance --
+# reinforcement alongside the message text, never the only signal (see rule 11 spirit
+# extended to "meaning is never colour- or glyph-alone").
+COULD_NOT_READ_GLYPH = "?"
+NO_ANSWER_KEY_GLYPH = "—"
 
 load_dotenv()  # must run before any Settings.from_env() call in this module
 logging.basicConfig(
@@ -94,6 +99,12 @@ def _needs_human_reason(transcription_confidence: float) -> str:
     if transcription_confidence < CONFIDENCE_FLOOR:
         return COULD_NOT_READ_MESSAGE
     return NO_ANSWER_KEY_MESSAGE
+
+
+def _needs_human_glyph(transcription_confidence: float) -> str:
+    if transcription_confidence < CONFIDENCE_FLOOR:
+        return COULD_NOT_READ_GLYPH
+    return NO_ANSWER_KEY_GLYPH
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -240,6 +251,11 @@ def session_results(
             "outcome": g.outcome,
             "needs_human_reason": (
                 _needs_human_reason(problems_by_id[g.problem_id].transcription_confidence)
+                if g.outcome == "needs_human" and g.problem_id in problems_by_id
+                else None
+            ),
+            "needs_human_glyph": (
+                _needs_human_glyph(problems_by_id[g.problem_id].transcription_confidence)
                 if g.outcome == "needs_human" and g.problem_id in problems_by_id
                 else None
             ),
