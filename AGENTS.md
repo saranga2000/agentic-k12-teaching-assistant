@@ -48,6 +48,10 @@ introduced without being asked.
 - [ ] No secret, student name, or photo committed
 - [ ] If behaviour is user-visible, `docs/ROADMAP.md` milestone table updated
 - [ ] Every CI step run locally before pushing, not only the one that failed last time
+- [ ] After any file edit, verify the result with a terminal command, never with a cached
+      file read. Report `git diff --stat` alongside the diff. On an additive change,
+      deletions substantially exceeding insertions is a signal the edit truncated the
+      file. Re-check before trusting an edit tool's "success" message.
 
 ## Repo conventions
 
@@ -60,6 +64,15 @@ introduced without being asked.
   subdirectories only once a package has three or more test files. Do not create empty
   test directories in advance.
 - Hidden files and directories are part of this repo, search them
+- File-edit tooling, verified empirically (2026-08): relative to this workspace,
+  `single_find_and_replace` with flat parameters is safe and preserves surrounding
+  content. `edit_existing_file` is NOT safe for whole-file edits: if its snippet omits
+  the trailing content it silently truncates the file (observed 8 lines -> 4), and even
+  an edit at end-of-file added a spurious blank line. Prefer `single_find_and_replace`
+  for file edits; when you must use `edit_existing_file`, restate every line through
+  end-of-file in the snippet and re-verify with the terminal. File-edit tools resolve
+  paths against the workspace root and cannot reach `/tmp` or other absolute paths
+  outside it.
 - When verifying a rename, `grep -w` treats underscore as a word character, so it will
   not catch `OLDNAME_SUFFIX`. Search for the literal substring case-insensitively as
   well as on word boundaries.
