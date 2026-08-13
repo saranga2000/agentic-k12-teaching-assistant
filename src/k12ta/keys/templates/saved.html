@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Saved — {{ source.label }}{% endblock %}
+{% block content %}
+<h1>{{ source.label }} — {{ student.display_name }}</h1>
+<p class="message">Saved {{ saved_count }} entr{{ "y" if saved_count == 1 else "ies" }}.</p>
+<div class="actions">
+  <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan next page</a>
+  <a class="button-link" href="/">Finish</a>
+</div>
+{% endblock %}

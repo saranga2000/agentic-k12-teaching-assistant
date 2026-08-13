@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ source.label }}{% endblock %}
+{% block content %}
+<h1>{{ source.label }} — {{ student.display_name }}</h1>
+<p class="message">{{ message }}</p>
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Back to upload</a></p>
+{% endblock %}

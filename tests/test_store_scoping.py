@@ -32,6 +32,8 @@ REPOSITORY_MODULES = [
     "k12ta.store.sessions",
     "k12ta.store.mastery",
     "k12ta.store.schedule",
+    "k12ta.store.answer_keys",
+    "k12ta.store.answer_key_audit",
 ]
 
 ROOT_LISTING_EXCEPTIONS = {"k12ta.store.students.list_students"}

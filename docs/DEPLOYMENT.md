@@ -47,6 +47,20 @@ tab (Chrome or Safari) doesn't hit it: the camera opens correctly. That drops th
 "no browser chrome" requirement from the original M2.2 spec — a live camera that
 sometimes doesn't work is a worse trade than a visible address bar.
 
+### Answer keys (parent-only)
+
+`k12ta.keys` (M2.4) is a second, separate process — its own port, never linked from
+the student-facing app:
+
+```bash
+make keys   # or: uvicorn k12ta.keys.app:app --host 0.0.0.0 --port 8082
+```
+
+Open `http://<hostname>.local:8082` on whatever device you're scanning the printed key
+with (the MacBook itself, or a phone/tablet — the same `capture="environment"` file
+input the capture app uses works the same way here). Nothing in `k12ta.web` links to
+this; reaching it means typing the URL.
+
 ## The always-on problem
 
 The MacBook has to be awake when a child wants to work, and it is your work machine.

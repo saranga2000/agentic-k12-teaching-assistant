@@ -67,9 +67,12 @@ def process_capture(
     construction cost anyway -- and a broken provider config would 500 even requests
     that were never going to call the model at all.
 
-    M2.3 has no answer-key storage anywhere yet (M2.4 builds that), so every
-    transcribed item is graded NEEDS_HUMAN unconditionally -- this never calls
-    k12ta.grading.key_grader, because there is nothing to grade against.
+    Every transcribed item is graded NEEDS_HUMAN unconditionally. Do not add a
+    fallback here that solves a problem independently when no key entry covers it.
+    Keyless grading is M6, explicitly gated on a measured precision number before it
+    ships behind a flag -- it does not exist yet, and "no key for this page" must
+    never quietly become "the model's best guess instead." That guess is exactly the
+    failure this system is built to avoid: a confident wrong grade.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:

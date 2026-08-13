@@ -20,6 +20,7 @@ from k12ta.llm.base import (
     VisionModel,
 )
 from k12ta.prompts import load_prompt
+from k12ta.transcribe._shared import strip_code_fence
 from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
 
 _MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
@@ -100,7 +101,7 @@ def _read_image(path: Path) -> tuple[bytes, str]:
 
 
 def _parse_items(text: str) -> tuple[TranscribedItem, ...]:
-    payload = json.loads(_strip_code_fence(text))
+    payload = json.loads(strip_code_fence(text))
     if not isinstance(payload, dict):
         raise ValueError(f"expected a JSON object, got {type(payload).__name__}")
     raw_items = payload.get("items")
@@ -118,13 +119,3 @@ def _parse_item(raw: dict[str, object]) -> TranscribedItem:
         student_answer_raw=str(raw.get("student_answer_raw", "")),
         confidence=float(confidence) if valid_confidence else 0.0,  # type: ignore[arg-type]
     )
-
-
-def _strip_code_fence(text: str) -> str:
-    """The prompt says no markdown fence, but models do not always listen."""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.strip("`")
-        if stripped.lower().startswith("json"):
-            stripped = stripped[4:]
-    return stripped.strip()

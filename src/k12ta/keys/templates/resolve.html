@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Resolve differences — {{ source.label }}{% endblock %}
+{% block content %}
+<h1>These don't match what's already stored</h1>
+<p>A wrong key marks correct work wrong, so nothing here was saved automatically.
+Pick which answer is right for each one below.</p>
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/resolve">
+  <input type="hidden" name="row_count" value="{{ conflicts|length }}">
+  {% for c in conflicts %}
+  <fieldset>
+    <legend>Page {{ c.page_number }}, problem {{ c.problem_number }}</legend>
+    <input type="hidden" name="page_number_{{ loop.index0 }}" value="{{ c.page_number }}">
+    <input type="hidden" name="problem_number_{{ loop.index0 }}" value="{{ c.problem_number }}">
+    <input type="hidden" name="new_answer_text_{{ loop.index0 }}" value="{{ c.new_answer_text or '' }}">
+    <input type="hidden" name="new_ungradeable_reason_{{ loop.index0 }}" value="{{ c.new_ungradeable_reason or '' }}">
+    <table>
+      <tr><th></th><th>Stored</th><th>Just scanned</th></tr>
+      <tr>
+        <td>Answer</td>
+        <td>{{ c.old_answer_text if c.old_answer_text is not none else c.old_ungradeable_reason }}</td>
+        <td>{{ c.new_answer_text if c.new_answer_text is not none else c.new_ungradeable_reason }}</td>
+      </tr>
+    </table>
+    <label><input type="radio" name="resolution_{{ loop.index0 }}" value="kept_old" checked> Keep stored answer</label>
+    <label><input type="radio" name="resolution_{{ loop.index0 }}" value="used_new"> Use newly scanned answer</label>
+  </fieldset>
+  {% endfor %}
+  <div class="actions">
+    <button type="submit">Save choices</button>
+  </div>
+</form>
+{% endblock %}

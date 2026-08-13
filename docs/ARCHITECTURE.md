@@ -35,6 +35,7 @@ contain the worked reasoning even when the child's view cannot.
 | `k12ta.store` | SQLite schema, migrations, and typed repository functions | Contain business logic or render anything |
 | `k12ta.ingest` | Turning an uploaded photo into a validated `page_captures` row; resolving the day's default assignment | Render HTML, decide grading correctness, call a model |
 | `k12ta.pipeline` | Orchestrating one capture through ingest → transcribe → grade → persist, including the daily quota gate | Render HTML, call a model directly (it goes through `k12ta.transcribe`) |
+| `k12ta.keys` | Parent-only answer-key ingestion: upload, transcribe, present for confirmation, persist confirmed entries | Be reachable from the student capture flow, store an unconfirmed entry, call a model directly |
 
 Three of these packages do not exist yet: `k12ta.diagnose`, `k12ta.respond`, and
 `k12ta.digest`. They are listed because the pipeline has eight stages and the table
@@ -46,7 +47,10 @@ default assignment and grading image quality is business logic that `k12ta.web` 
 explicitly barred from holding — it needed a home the moment `k12ta.web` existed.
 `k12ta.pipeline` (M2.3) exists for the same reason: `k12ta.ingest`'s own contract says
 it must not decide grading correctness, so the step that walks a capture through
-transcription and grading needed a package that is allowed to.
+transcription and grading needed a package that is allowed to. `k12ta.keys` (M2.4) is
+a fully separate app from `k12ta.web` — own process, own port, matching `k12ta.label`'s
+precedent — so "not reachable from the student flow" is structurally true, not a
+convention resting on nobody adding a link.
 
 `k12ta.domain` and `k12ta.mastery` have zero third-party imports. That is deliberate: they
 are the parts worth reading, and they should be testable in milliseconds.

@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from k12ta.store import (
+    answer_key_audit,
+    answer_keys,
     captures,
     content,
     db,
@@ -32,6 +34,8 @@ _EXPECTED_TABLES = {
     "skill_mastery_traces",
     "weekly_default_sources",
     "daily_request_counts",
+    "answer_key_entries",
+    "answer_key_audit_log",
 }
 
 
@@ -368,3 +372,241 @@ def test_quota_count_persists_across_separate_connections_to_the_same_file(
     quota.record_request(second_conn, on)
     assert quota.get_count(second_conn, on) == 3
     second_conn.close()
+
+
+def _seed_marcus_source(conn: sqlite3.Connection) -> None:
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+
+
+def test_answer_key_entry_round_trips_a_gradeable_and_an_ungradeable_entry() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="8 m",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="2",
+            answer_text=None,
+            ungradeable_reason="answers_vary",
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+
+    assert len(entries) == 2
+    by_problem = {e.problem_number: e for e in entries}
+    assert by_problem["1"].answer_text == "8 m"
+    assert by_problem["1"].ungradeable_reason is None
+    assert by_problem["2"].answer_text is None
+    assert by_problem["2"].ungradeable_reason == "answers_vary"
+
+
+def test_answer_key_entry_check_constraint_rejects_both_or_neither_set() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id="s-marcus",
+                source_id="summer_bridge",
+                page_number=17,
+                problem_number="1",
+                answer_text="8 m",
+                ungradeable_reason="answers_vary",  # both set
+                confirmed_at="2026-08-13T08:00:00+00:00",
+            ),
+        )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id="s-marcus",
+                source_id="summer_bridge",
+                page_number=17,
+                problem_number="2",
+                answer_text=None,
+                ungradeable_reason=None,  # neither set
+                confirmed_at="2026-08-13T08:00:00+00:00",
+            ),
+        )
+
+
+def test_answer_key_entry_upsert_corrects_rather_than_duplicates() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+    row = answer_keys.AnswerKeyEntryRow(
+        student_id="s-marcus",
+        source_id="summer_bridge",
+        page_number=17,
+        problem_number="1",
+        answer_text="8 m",
+        ungradeable_reason=None,
+        confirmed_at="2026-08-13T08:00:00+00:00",
+    )
+    answer_keys.upsert_entry(conn, row)
+
+    corrected = answer_keys.AnswerKeyEntryRow(
+        student_id="s-marcus",
+        source_id="summer_bridge",
+        page_number=17,
+        problem_number="1",
+        answer_text="8 meters",
+        ungradeable_reason=None,
+        confirmed_at="2026-08-13T09:00:00+00:00",
+    )
+    answer_keys.upsert_entry(conn, corrected)
+
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert len(entries) == 1
+    assert entries[0].answer_text == "8 meters"
+
+
+def test_answer_key_entry_fk_rejects_another_students_content_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id="s-priya",  # summer_bridge belongs to s-marcus
+                source_id="summer_bridge",
+                page_number=17,
+                problem_number="1",
+                answer_text="8 m",
+                ungradeable_reason=None,
+                confirmed_at="2026-08-13T08:00:00+00:00",
+            ),
+        )
+
+
+def test_list_entries_for_source_is_scoped_to_one_student() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="8 m",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+
+    assert len(answer_keys.list_entries_for_source(conn, "s-marcus", "summer_bridge")) == 1
+    assert answer_keys.list_entries_for_source(conn, "s-priya", "summer_bridge") == []
+
+
+def test_get_entry_returns_none_when_missing_and_the_row_when_present() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+
+    assert answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 17, "1") is None
+
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="8 m",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+
+    found = answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 17, "1")
+    assert found is not None
+    assert found.answer_text == "8 m"
+
+
+def test_answer_key_audit_log_round_trips_and_is_scoped_to_one_student() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+    row = answer_key_audit.AnswerKeyAuditRow(
+        student_id="s-marcus",
+        source_id="summer_bridge",
+        page_number=17,
+        problem_number="1",
+        action="conflict_resolved",
+        old_answer_text="8 m",
+        old_ungradeable_reason=None,
+        new_answer_text="8 meters",
+        new_ungradeable_reason=None,
+        resolution="used_new",
+        recorded_at="2026-08-13T09:00:00+00:00",
+    )
+
+    answer_key_audit.insert_audit_row(conn, row)
+
+    entries = answer_key_audit.list_audit_log_for_source(conn, "s-marcus", "summer_bridge")
+    assert len(entries) == 1
+    assert entries[0].action == "conflict_resolved"
+    assert entries[0].resolution == "used_new"
+    assert answer_key_audit.list_audit_log_for_source(conn, "s-priya", "summer_bridge") == []

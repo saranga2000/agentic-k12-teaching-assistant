@@ -1,4 +1,4 @@
-.PHONY: install test check fmt run seed eval label
+.PHONY: install test check fmt run seed eval label keys
 
 install:
 	pip install -e ".[dev]"
@@ -26,3 +26,6 @@ seed:
 
 label:
 	python -m k12ta.label
+
+keys:
+	python -m k12ta.keys
