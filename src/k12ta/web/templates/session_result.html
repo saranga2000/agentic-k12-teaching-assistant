@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Results{% endblock %}
+{% block content %}
+<div class="screen results">
+  {% if items %}
+  <ul class="problem-list">
+    {% for item in items %}
+    <li class="problem outcome-{{ item.outcome | replace('_', '-') }}">
+      <div class="prompt">{{ item.prompt_text }}</div>
+      <div class="answer">You wrote: {{ item.student_answer_raw }}</div>
+      {% if item.outcome == "correct" %}
+      <div class="outcome-label">Correct!</div>
+      {% elif item.outcome == "incorrect" %}
+      <div class="outcome-label">Not quite — let's look at this one together.</div>
+      {% else %}
+      <div class="outcome-label">{{ item.needs_human_reason }}</div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="message">{{ no_problems_message }}</p>
+  {% endif %}
+</div>
+<style>
+  .results { justify-content: flex-start; padding-top: 3rem; }
+  .problem-list { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 1rem; }
+  .problem { border-radius: 16px; padding: 1rem 1.25rem; text-align: left; }
+  .problem .prompt { font-size: 1.2rem; font-weight: 600; }
+  .problem .answer { opacity: 0.85; margin-top: 0.25rem; }
+  .problem .outcome-label { margin-top: 0.5rem; font-weight: 600; }
+  .outcome-correct { background: #1f4d3a; border: 2px solid #4ecdc4; }
+  .outcome-incorrect { background: #4d1f1f; border: 2px solid #ff6b6b; }
+  .outcome-needs-human { background: #2a2d36; border: 2px solid #6b7280; }
+</style>
+{% endblock %}

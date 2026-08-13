@@ -22,10 +22,32 @@ def _jpeg_bytes(size: tuple[int, int], color: tuple[int, int, int]) -> bytes:
     return buf.getvalue()
 
 
+_EXIF_ORIENTATION_TAG = 0x0112
+
+
+def _jpeg_bytes_with_exif_orientation(
+    size: tuple[int, int], color: tuple[int, int, int], orientation: int
+) -> bytes:
+    """A JPEG whose raw pixel buffer is `size`, tagged with an EXIF orientation --
+    exactly how a phone/tablet camera stores a photo: the sensor buffer is not
+    physically rotated, a metadata tag says how to display it upright instead."""
+    image = Image.new("RGB", size, color=color)
+    exif = image.getexif()
+    exif[_EXIF_ORIENTATION_TAG] = orientation
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", exif=exif)
+    return buf.getvalue()
+
+
 TOO_SMALL = _jpeg_bytes((10, 10), (255, 255, 255))
 TOO_DARK = _jpeg_bytes((1200, 1600), (5, 5, 5))
 LOOKS_LIKE_TWO_PAGES = _jpeg_bytes((1600, 1200), (200, 200, 200))
 ACCEPTED = _jpeg_bytes((1200, 1600), (200, 200, 200))
+
+# A single page held in portrait, as an iPad camera actually stores it: raw buffer
+# 1600x1200 (landscape), EXIF orientation 6 ("rotate 90 CW to display upright"). Every
+# consumer that ignores the tag sees a 1600x1200 image and misreads it as a spread.
+PORTRAIT_STORED_SIDEWAYS = _jpeg_bytes_with_exif_orientation((1600, 1200), (210, 210, 210), 6)
 
 
 def test_rejects_an_image_that_is_too_small() -> None:
@@ -50,6 +72,42 @@ def test_accepts_a_large_bright_portrait_image() -> None:
     verdict = capture.evaluate_image_quality(ACCEPTED)
     assert verdict.accepted is True
     assert verdict.reason is None
+
+
+def test_normalize_orientation_corrects_a_sideways_stored_portrait_photo() -> None:
+    normalized = capture.normalize_orientation(PORTRAIT_STORED_SIDEWAYS)
+
+    assert Image.open(io.BytesIO(normalized)).size == (1200, 1600)
+
+
+def test_normalize_orientation_leaves_an_already_upright_photo_unchanged_in_size() -> None:
+    normalized = capture.normalize_orientation(ACCEPTED)
+
+    assert Image.open(io.BytesIO(normalized)).size == (1200, 1600)
+
+
+def test_a_sideways_stored_single_page_photo_is_accepted_once_normalized() -> None:
+    """The exact bug reported live: a portrait single-page photo, stored the way a
+    real camera stores it, was rejected as a two-page spread every time because the
+    quality gate read the raw (landscape) buffer dimensions instead of the corrected
+    ones. This is the regression test for that."""
+    normalized = capture.normalize_orientation(PORTRAIT_STORED_SIDEWAYS)
+
+    verdict = capture.evaluate_image_quality(normalized)
+
+    assert verdict.accepted is True
+    assert verdict.reason is None
+
+
+def test_unnormalized_sideways_photo_still_misreads_as_a_spread() -> None:
+    """Documents why normalization has to run first: without it, the exact same
+    photo is misclassified. If this test ever starts failing, evaluate_image_quality
+    has started reading orientation correctly on its own and this test (not the
+    normalization step) is what's now redundant."""
+    verdict = capture.evaluate_image_quality(PORTRAIT_STORED_SIDEWAYS)
+
+    assert verdict.accepted is False
+    assert verdict.reason == "looks_like_two_pages"
 
 
 def _migrated_connection() -> sqlite3.Connection:
@@ -139,6 +197,7 @@ def test_save_capture_writes_the_image_and_a_page_captures_row(tmp_path: Path) -
         data_dir=tmp_path,
         coach_name="Coach",
         daily_token_budget_usd=Decimal("1.50"),
+        daily_request_limit=20,
         log_level="INFO",
     )
 

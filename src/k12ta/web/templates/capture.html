@@ -22,25 +22,68 @@
 
   <div class="framing-guide">
     <div class="frame-good">
-      <div class="frame-outline"></div>
-      <p>✓ One page, filling the frame</p>
+      <div class="frame-outline">
+        <span class="frame-glyph">✓</span>
+      </div>
+      <p class="frame-label">Like this</p>
     </div>
     <div class="frame-bad">
-      <div class="frame-outline wide"></div>
-      <p>✗ Two pages — hold it closer</p>
+      <div class="frame-outline wide">
+        <span class="frame-glyph">✗</span>
+      </div>
+      <p class="frame-label">Not this — two pages</p>
     </div>
   </div>
 
   {% if assignment %}
   <form id="capture-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
     <input type="hidden" name="assignment_id" value="{{ assignment.assignment_id }}">
-    <label class="big-button" for="photo-input">Take Photo</label>
+    <label id="take-photo-button" class="big-button" for="photo-input">Take Photo</label>
     <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
   </form>
+  <div id="working-state" class="working-state" hidden>
+    <div class="working-spinner"></div>
+    <p class="message">Got it! Checking your page&hellip;</p>
+    <p class="working-detail">This can take up to a minute.</p>
+  </div>
+  <p id="submit-error" class="message" hidden>Could not reach the coach — check the WiFi and try again.</p>
   <script>
-    document.getElementById("photo-input").addEventListener("change", function () {
-      document.getElementById("capture-form").requestSubmit();
-    });
+    (function () {
+      var form = document.getElementById("capture-form");
+      var input = document.getElementById("photo-input");
+      var button = document.getElementById("take-photo-button");
+      var working = document.getElementById("working-state");
+      var submitError = document.getElementById("submit-error");
+      input.addEventListener("change", function () {
+        if (!input.files || !input.files.length) return;
+        // 1. Immediate confirmation, before any network call starts.
+        // 3. Disable the control so a second tap in flight cannot fire a second
+        //    API call for the same page.
+        button.hidden = true;
+        input.disabled = true;
+        submitError.hidden = true;
+        working.hidden = false;
+        // Submitting the plain form hands the page to the browser's own
+        // navigation for the whole wait, with nothing of ours on screen until it
+        // finishes -- exactly why a real wait read as a blank, broken screen.
+        // fetch() keeps this page in control throughout.
+        var formData = new FormData(form);
+        fetch(form.action, { method: "POST", body: formData })
+          .then(function (response) { return response.text(); })
+          .then(function (html) {
+            document.open();
+            document.write(html);
+            document.close();
+          })
+          .catch(function () {
+            working.hidden = true;
+            button.hidden = false;
+            input.disabled = false;
+            input.value = "";
+            submitError.hidden = false;
+          });
+      });
+    })();
   </script>
   {% endif %}
 </div>
@@ -49,13 +92,27 @@
     font-size: 1.1rem; padding: 0.6rem 1rem; border-radius: 999px;
     background: #262a33; color: #f4f4f6; border: none;
   }
-  .framing-guide { display: flex; gap: 1.5rem; }
-  .framing-guide p { font-size: 0.95rem; margin: 0.5rem 0 0; }
+  .framing-guide { display: flex; align-items: flex-end; gap: 2rem; }
+  .frame-good, .frame-bad { display: flex; flex-direction: column; align-items: center; }
   .frame-outline {
-    width: 70px; height: 96px; border: 3px solid #4ecdc4; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    width: 84px; height: 112px; border-radius: 8px;
   }
-  .frame-outline.wide {
-    width: 120px; height: 70px; border-color: #ff6b6b;
+  /* The two examples are deliberately NOT equal in visual weight: one is the
+     answer, one is the warning. Relying on border colour alone made them read as
+     two equally-valid options with no cue which to copy -- fixed with a filled
+     background, a large distinct glyph, and an explicit text label, stacked so no
+     single signal is load-bearing on its own. */
+  .frame-good .frame-outline { background: #1f4d3a; border: 4px solid #4ecdc4; }
+  .frame-bad .frame-outline {
+    width: 108px; height: 76px; background: #241417; border: 4px dashed #8a4a4a;
+    opacity: 0.75;
   }
+  .frame-glyph { font-size: 2.5rem; font-weight: 900; line-height: 1; }
+  .frame-good .frame-glyph { color: #4ecdc4; }
+  .frame-bad .frame-glyph { color: #ff6b6b; font-size: 2rem; }
+  .frame-label { font-size: 1.05rem; font-weight: 700; margin: 0.6rem 0 0; }
+  .frame-good .frame-label { color: #4ecdc4; }
+  .frame-bad .frame-label { color: #c98686; font-weight: 500; font-size: 0.9rem; }
 </style>
 {% endblock %}

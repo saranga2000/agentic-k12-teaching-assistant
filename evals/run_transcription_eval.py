@@ -7,14 +7,13 @@ Run before implementing any transcriber, so that the first number is honest.
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from k12ta.config import Settings
+from k12ta.config import Settings, load_dotenv
 from k12ta.evals.fixtures import FixtureItem, Layout, load_fixture_pages
 from k12ta.grading.key_grader import normalise
 from k12ta.llm import build_vision_model
@@ -402,21 +401,8 @@ def write_report(
     return report_path
 
 
-def _load_dotenv(path: Path) -> None:
-    """Minimal .env loader. Real env vars already set take precedence. No new
-    dependency (python-dotenv) for a handful of KEY=value lines."""
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
 def main() -> None:
-    _load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    load_dotenv()
     pages = load_fixture_pages(FIXTURE_DIR)
     if not pages:
         print(

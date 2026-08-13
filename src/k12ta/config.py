@@ -8,6 +8,26 @@ from decimal import Decimal
 from pathlib import Path
 
 COACH_NAME_PLACEHOLDER = "Coach"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def load_dotenv(path: Path = _REPO_ROOT / ".env") -> None:
+    """Minimal .env loader: KEY=value lines, comments and blank lines ignored, an
+    already-set real environment variable always wins over the file. No new
+    dependency (python-dotenv) for a handful of lines.
+
+    The single shared implementation for every entry point that needs it --
+    `k12ta.web.app` and `evals/run_transcription_eval.py` -- so `.env` support
+    can't quietly work in one and not the other.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
 
 
 @dataclass(frozen=True)
@@ -25,6 +45,11 @@ class Settings:
     data_dir: Path
     coach_name: str
     daily_token_budget_usd: Decimal
+    daily_request_limit: int
+    """Hard ceiling on transcribe attempts per calendar day, persisted in the database
+    (see k12ta.store.quota) so a server restart cannot reset it. Default 20: two
+    children, a handful of pages per sitting, generous headroom, still a real ceiling.
+    Raise it via K12TA_DAILY_REQUEST_LIMIT once real usage patterns are known."""
     log_level: str
 
     @staticmethod
@@ -41,5 +66,6 @@ class Settings:
             daily_token_budget_usd=Decimal(
                 os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")
             ),
+            daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "20")),
             log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),
         )

@@ -2,11 +2,10 @@
 
 Parents will configure students, content sources, and the weekly schedule through the
 M3.1 setup flow. Until that exists, the M2.2 capture screen has nothing to show
-without *something* in the database. This inserts two fabricated students (never a
-real child's name, per docs/DATA_POLICY.md), seeds `k12ta.content.registry`'s example
-content sources for each, and points Monday-Friday at the workbook source so the
-capture screen has a default assignment to demo. Safe to rerun: existing rows are left
-alone.
+without *something* in the database. This inserts the two students, seeds
+`k12ta.content.registry`'s example content sources for each, and points Monday-Friday
+at the workbook source so the capture screen has a default assignment to demo. Safe to
+rerun: existing rows are left alone.
 
     python scripts/seed_dev_data.py
 """
@@ -19,7 +18,7 @@ from k12ta.config import Settings
 from k12ta.content.registry import example_sources
 from k12ta.store import content, db, migrate, schedule, students
 
-DEV_STUDENT_IDS = ("dev-alex", "dev-sam")
+DEV_STUDENT_IDS = ("dev-jahnvi", "dev-vihani")
 WEEKDAY_SOURCE_ID = "summer_bridge"
 
 
@@ -68,8 +67,8 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     conn = db.connect(str(settings.data_dir / "k12ta.db"))
     migrate.apply_migrations(conn)
-    _seed_student(conn, "dev-alex", "Alex", grade_level=7)
-    _seed_student(conn, "dev-sam", "Sam", grade_level=4)
+    _seed_student(conn, "dev-jahnvi", "Jahnvi", grade_level=7)
+    _seed_student(conn, "dev-vihani", "Vihani", grade_level=1)
     conn.close()
     print(f"Seeded dev students {DEV_STUDENT_IDS} into {settings.data_dir / 'k12ta.db'}")
 

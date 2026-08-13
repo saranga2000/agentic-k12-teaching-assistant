@@ -72,10 +72,17 @@ class Transcriber(Protocol):
     """Anything that turns a page image into structured problems and answers."""
 
     name: str
-    request_count: int
-    """Total model-provider requests made so far by this transcriber, including
-    retries. A run reuses one instance across every page, so this is a running total
-    for the run — the cost the eval report states alongside its accuracy metrics."""
+
+    @property
+    def request_count(self) -> int:
+        """Total model-provider requests made so far by this transcriber, including
+        retries. A run reuses one instance across every page, so this is a running
+        total for the run — the cost the eval report states alongside its accuracy
+        metrics. Declared read-only: implementers may expose it as a computed
+        property (VisionLLMTranscriber delegates to its adapter) or a plain settable
+        attribute (a mutable attribute always satisfies a read-only expectation) —
+        but never as something callers are meant to assign to."""
+        ...
 
     def transcribe(self, image_path: str) -> TranscriptionResult:
         """Read one page. Must not raise; classify any failure and return it instead."""

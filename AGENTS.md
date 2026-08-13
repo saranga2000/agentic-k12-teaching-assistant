@@ -34,6 +34,11 @@ introduced without being asked.
    calls a model through that adapter. Swapping providers is a new file, not a refactor.
 10. **Fail loud on unreadable input.** A confident wrong grade is the worst outcome in
     this system. When confidence is below threshold, return `NEEDS_HUMAN`, never a guess.
+11. **Every screen renders something intelligible when its data is empty or a call
+    fails.** No blank screens, no unstyled tracebacks reaching a child or parent. An
+    empty list is a message, not silence; a failed call is a plain-language state, not
+    a crash. First hit in M2.2: an unseeded student picker returned 200 OK with an
+    empty body and nothing in the log to explain it.
 
 ## Definition of done for any task
 

@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
+from pathlib import Path
 
 import pytest
 
-from k12ta.store import captures, content, db, mastery, migrate, schedule, sessions, students
+from k12ta.store import (
+    captures,
+    content,
+    db,
+    mastery,
+    migrate,
+    quota,
+    schedule,
+    sessions,
+    students,
+)
 
 _EXPECTED_TABLES = {
     "schema_migrations",
@@ -19,6 +31,7 @@ _EXPECTED_TABLES = {
     "graded_problems",
     "skill_mastery_traces",
     "weekly_default_sources",
+    "daily_request_counts",
 }
 
 
@@ -308,3 +321,50 @@ def test_weekly_default_source_cannot_reference_another_students_content_source(
                 source_id="summer_bridge",
             ),
         )
+
+
+def test_quota_count_starts_at_zero_and_increments_on_record() -> None:
+    conn = _migrated_connection()
+    on = date(2026, 8, 12)
+
+    assert quota.get_count(conn, on) == 0
+
+    first = quota.record_request(conn, on)
+    second = quota.record_request(conn, on)
+
+    assert first == 1
+    assert second == 2
+    assert quota.get_count(conn, on) == 2
+
+
+def test_quota_count_is_scoped_to_one_calendar_day() -> None:
+    conn = _migrated_connection()
+    day_one = date(2026, 8, 12)
+    day_two = date(2026, 8, 13)
+
+    quota.record_request(conn, day_one)
+    quota.record_request(conn, day_one)
+    quota.record_request(conn, day_two)
+
+    assert quota.get_count(conn, day_one) == 2
+    assert quota.get_count(conn, day_two) == 1
+
+
+def test_quota_count_persists_across_separate_connections_to_the_same_file(
+    tmp_path: Path,
+) -> None:
+    db_path = str(tmp_path / "quota-test.db")
+    on = date(2026, 8, 12)
+
+    first_conn = db.connect(db_path)
+    migrate.apply_migrations(first_conn)
+    quota.record_request(first_conn, on)
+    quota.record_request(first_conn, on)
+    first_conn.close()
+
+    second_conn = db.connect(db_path)
+    migrate.apply_migrations(second_conn)
+    assert quota.get_count(second_conn, on) == 2
+    quota.record_request(second_conn, on)
+    assert quota.get_count(second_conn, on) == 3
+    second_conn.close()

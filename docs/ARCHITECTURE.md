@@ -34,6 +34,7 @@ contain the worked reasoning even when the child's view cannot.
 | `k12ta.web` | HTTP and templates | Contain business logic |
 | `k12ta.store` | SQLite schema, migrations, and typed repository functions | Contain business logic or render anything |
 | `k12ta.ingest` | Turning an uploaded photo into a validated `page_captures` row; resolving the day's default assignment | Render HTML, decide grading correctness, call a model |
+| `k12ta.pipeline` | Orchestrating one capture through ingest → transcribe → grade → persist, including the daily quota gate | Render HTML, call a model directly (it goes through `k12ta.transcribe`) |
 
 Three of these packages do not exist yet: `k12ta.diagnose`, `k12ta.respond`, and
 `k12ta.digest`. They are listed because the pipeline has eight stages and the table
@@ -43,6 +44,9 @@ arrives, not before. `k12ta.store` (M2.1) and `k12ta.web` (M2.2) have since been
 `k12ta.ingest` lands alongside `k12ta.web` in M2.2, not later, because resolving a
 default assignment and grading image quality is business logic that `k12ta.web` is
 explicitly barred from holding — it needed a home the moment `k12ta.web` existed.
+`k12ta.pipeline` (M2.3) exists for the same reason: `k12ta.ingest`'s own contract says
+it must not decide grading correctness, so the step that walks a capture through
+transcription and grading needed a package that is allowed to.
 
 `k12ta.domain` and `k12ta.mastery` have zero third-party imports. That is deliberate: they
 are the parts worth reading, and they should be testable in milliseconds.
@@ -80,9 +84,20 @@ covers it must be rerun and the number recorded in the commit message.
 
 Every stage emits a confidence. The pipeline enforces one rule: any stage below its
 floor short-circuits the item to `NEEDS_HUMAN` and it is presented to the child as
-"I could not read this one clearly", never as an error.
+"I could not read this one clearly", never as an error. `NEEDS_HUMAN` has a second,
+distinct cause as of M2.3 — no answer key exists for the item at all, independent of
+how confidently it was transcribed — and that case gets its own honest message ("I
+don't have an answer key for this one yet") rather than being folded into the
+low-confidence copy above. Both render in the same neutral visual treatment; only the
+wording differs.
 
 ## Multi-user
 
-Every row carries `student_id`. There is no authentication in v1 and there should not
-be; the parent PIN gates exactly one action, which is overriding feedback policy.
+Every row carries `student_id`, with one deliberate category of exception:
+tables that track operational state for the system itself, never scoped to a student
+— `schema_migrations`, and `daily_request_counts` (M2.3, the persisted daily API-quota
+counter). The resource being protected there (one shared API key's daily quota) is a
+household-level resource, not a per-child one. Every table holding anything about a
+student's work, identity, or progress still carries `student_id`, no exceptions. There
+is no authentication in v1 and there should not be; the parent PIN gates exactly one
+action, which is overriding feedback policy.

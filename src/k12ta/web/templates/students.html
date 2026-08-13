@@ -4,6 +4,8 @@
 <div class="screen">
   {% for student in all_students %}
   <a class="big-button" href="/capture/{{ student.student_id }}">{{ student.display_name }}</a>
+  {% else %}
+  <p class="message">{{ no_students_message }}</p>
   {% endfor %}
 </div>
 {% endblock %}

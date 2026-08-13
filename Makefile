@@ -1,4 +1,4 @@
-.PHONY: install test check fmt run eval label
+.PHONY: install test check fmt run seed eval label
 
 install:
 	pip install -e ".[dev]"
@@ -20,6 +20,9 @@ eval:
 
 run:
 	python -m k12ta.web --host 0.0.0.0 --port 8080
+
+seed:
+	python scripts/seed_dev_data.py
 
 label:
 	python -m k12ta.label

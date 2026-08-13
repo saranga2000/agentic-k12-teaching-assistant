@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageOps, ImageStat
 
 from k12ta.config import Settings
 from k12ta.store import captures
@@ -36,6 +36,26 @@ class QualityVerdict:
     accepted: bool
     reason: str | None
     """One of "too_small", "too_dark", "looks_like_two_pages" when not accepted."""
+
+
+def normalize_orientation(image_bytes: bytes) -> bytes:
+    """Physically rotate pixels to match the photo's EXIF orientation, then
+    re-encode without it.
+
+    Phone and tablet cameras record orientation as metadata rather than rotating
+    the sensor's buffer, so a portrait photo is commonly stored with a landscape
+    width/height and an EXIF tag saying how to display it upright. Every consumer
+    downstream -- the reject gate, the saved file, whatever eventually reads the
+    file -- needs to agree on which way is up, so this runs once, first, before
+    `evaluate_image_quality` or `save_capture` ever sees the bytes. Re-encoding
+    without carrying the EXIF block forward is deliberate, not an oversight: it
+    also strips whatever else a phone embeds by default, GPS location included,
+    from a photo of a child's homework.
+    """
+    image = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes)))
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG")
+    return buf.getvalue()
 
 
 def evaluate_image_quality(image_bytes: bytes) -> QualityVerdict:

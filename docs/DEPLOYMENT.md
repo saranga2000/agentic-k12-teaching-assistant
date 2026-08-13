@@ -19,7 +19,7 @@ data leaving the house. All three are worse than plugging in a laptop.
 ## Layout
 
 ```
-iPad Air M1  (Safari, added to home screen)  --> http://<macbook>.local:8080
+iPad Air M1  (Chrome, ordinary browser tab)  --> http://<macbook>.local:8080
 Pixel 9a / iPhone 16 (same URL, backup capture)
 MacBook Air  runs uvicorn + sqlite, data stays on disk
 ```
@@ -28,13 +28,24 @@ Setup on the MacBook:
 
 ```bash
 make install
-uvicorn k12ta.web.app:app --host 0.0.0.0 --port 8080
+make seed   # until M3.1's real setup flow exists, seeds two example students
+make run    # or: uvicorn k12ta.web.app:app --host 0.0.0.0 --port 8080
 ```
 
-On the iPad, open `http://<hostname>.local:8080`, then Share, then Add to Home Screen.
-It launches full screen with no browser chrome and is indistinguishable from an app to a
-child. Camera capture works through a standard file input with `capture="environment"`,
-which opens the camera directly.
+`make seed` and `make run` must see the same `K12TA_DATA_DIR` (unset is fine — both
+default to `./data` — but if you set it, set it for both). A mismatch, or skipping
+`make seed` entirely, doesn't error: the student picker renders a normal 200 page with
+a "no students yet" message instead of the name buttons, which reads as a blank screen
+at a glance.
+
+On the iPad, open `http://<hostname>.local:8080` in Chrome as an ordinary tab. **Do not
+add it to the home screen.** `<input type=file capture="environment">` opening the
+camera directly is unreliable inside Safari's standalone (home-screen, no-chrome)
+launch mode on iOS — a real-device test produced a blank black camera screen with no
+way to take a photo, a known category of WebKit bug in that mode. An ordinary browser
+tab (Chrome or Safari) doesn't hit it: the camera opens correctly. That drops the
+"no browser chrome" requirement from the original M2.2 spec — a live camera that
+sometimes doesn't work is a worse trade than a visible address bar.
 
 ## The always-on problem
 

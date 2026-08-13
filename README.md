@@ -54,8 +54,8 @@ There is nothing to install yet, but here is what it will look like. Your child
 photographs a finished page on a tablet, and a few seconds later the same screen shows
 what they got right, what they got wrong, and why — one page that appears after a tap,
 not a conversation. The whole thing runs on one laptop in your house: no account to
-create, no app to install beyond adding a browser tab to the home screen, no cloud
-service holding your child's work.
+create, no app to install beyond an ordinary browser tab, no cloud service holding your
+child's work.
 
 The setup guide for families arrives at M3, once the app can actually capture a page,
 grade it, and be trusted not to hand over an answer on work someone else is going to

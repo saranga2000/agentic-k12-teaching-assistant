@@ -19,6 +19,7 @@ def _settings(provider: str) -> Settings:
         data_dir=Path("./data"),
         coach_name="Coach",
         daily_token_budget_usd=Decimal("1.50"),
+        daily_request_limit=20,
         log_level="INFO",
     )
 
