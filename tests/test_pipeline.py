@@ -17,7 +17,10 @@ from k12ta.store import captures, content, db, migrate, quota, sessions, student
 from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
 from tests.fakes import FakeTranscriber
 
-TODAY = date(2026, 8, 12)
+TODAY = date.today()
+"""`process_capture` calls `date.today()` internally (it has no injectable clock), so
+this must track the real date rather than a fixed one -- a hardcoded past date only
+matches by coincidence on the day it was written and silently breaks the next day."""
 
 
 def _migrated_connection(path: str = ":memory:") -> sqlite3.Connection:
