@@ -9,6 +9,7 @@ fmt:
 
 check:
 	ruff check src tests evals
+	ruff format --check src tests evals
 	mypy --strict src
 	pytest -q
 
