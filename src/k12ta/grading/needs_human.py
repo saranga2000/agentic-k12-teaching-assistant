@@ -11,13 +11,21 @@ honest about what is and is not known:
 - `NEEDS_PERSON`: a key entry exists but is explicitly ungradeable, or the student's
   answer leaves nothing to confidently compare.
 - `CONFLICTING_PAGE_MARKERS`: `k12ta.grading.page_identity` saw two different values
-  for the same page-identity marker on one photo (e.g. two "Day N" banners on a
+  for some identity component on one photo (e.g. two "Day N" banners on a
   two-page spread) and refused to pick one. Decided upstream of `decide` below, not
   here -- by the time `decide` runs, page identity is already resolved-or-not, and
   `decide` only ever produces `UNKNOWN_PAGE` for "not," never this cause. Kept as
   its own enum value rather than folded into `UNKNOWN_PAGE`'s copy, on purpose: the
   fix for a parent is different (photograph one page at a time, not "wait for a
   key"), and the eval harness needs to count how often each actually fires.
+- `PARTIAL_PAGE_MARKERS`: `k12ta.grading.page_identity` read some but not all of
+  this source's identity components on one photo (e.g. the day banner but not the
+  section marker). Also decided upstream of `decide`, for the same reason as
+  `CONFLICTING_PAGE_MARKERS` above, and also its own cause rather than folded into
+  `UNKNOWN_PAGE`: unlike a page with no marker at all, this is recoverable by
+  re-photographing with the missing part in frame, and the message can say so
+  specifically because `k12ta.grading.page_identity.PageIdentityResolution` names
+  which components were seen and which were missing.
 
 `NEEDS_PERSON` deliberately bundles two situations that genuinely both need a
 person: the key says the answer varies, and the answer field is empty. No separate
@@ -49,8 +57,12 @@ class NeedsHumanCause(StrEnum):
     """Key marks the item ungradeable, or the answer leaves nothing to compare."""
 
     CONFLICTING_PAGE_MARKERS = "conflicting_page_markers"
-    """Two different values seen for the same page-identity marker on one photo --
+    """Two different values seen for some identity component on one photo --
     decided by k12ta.grading.page_identity, never by decide() below."""
+
+    PARTIAL_PAGE_MARKERS = "partial_page_markers"
+    """Some but not all of this source's identity components were seen on one
+    photo -- decided by k12ta.grading.page_identity, never by decide() below."""
 
 
 @dataclass(frozen=True)

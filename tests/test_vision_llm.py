@@ -16,7 +16,6 @@ from k12ta.llm.base import (
     TransientError,
     VisionResponse,
 )
-from k12ta.prompts import load_prompt
 from k12ta.transcribe.base import FailureKind
 from k12ta.transcribe.vision_llm import VisionLLMTranscriber
 
@@ -48,7 +47,12 @@ def _transcriber(model: FakeVisionModel) -> VisionLLMTranscriber:
     return VisionLLMTranscriber(vision_model=model, provider="fake", model="fake-model")
 
 
-def test_sends_loaded_prompt_and_raw_bytes_for_jpeg(tmp_path: Path) -> None:
+def test_sends_raw_bytes_for_jpeg_and_the_base_prompt_with_no_placeholder_left(
+    tmp_path: Path,
+) -> None:
+    """No `identity_schema` given -- discovery mode -- so nothing is known to
+    look for yet; the {{SCHEMA_COMPONENTS}} placeholder must be filled in (never
+    sent to the model literally), and the surrounding prompt text is unchanged."""
     image = tmp_path / "page.jpg"
     image.write_bytes(b"jpeg-bytes")
     model = FakeVisionModel()
@@ -57,9 +61,30 @@ def test_sends_loaded_prompt_and_raw_bytes_for_jpeg(tmp_path: Path) -> None:
 
     assert model.last_call is not None
     prompt, image_bytes, mime_type = model.last_call
-    assert prompt == load_prompt("transcribe_page")
+    assert "{{SCHEMA_COMPONENTS}}" not in prompt
+    assert "Return JSON only" in prompt  # stable base-prompt text, unaffected
     assert image_bytes == b"jpeg-bytes"
     assert mime_type == "image/jpeg"
+
+
+def test_sends_targeted_schema_components_in_the_prompt_when_given(tmp_path: Path) -> None:
+    """Once a source's identity schema is known, the model is told exactly which
+    named markers to look for -- not left to invent its own labels every call."""
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel()
+
+    _transcriber(model).transcribe(
+        str(image), identity_schema=[("day", "Day 5"), ("section", "Section 1")]
+    )
+
+    assert model.last_call is not None
+    prompt, _, _ = model.last_call
+    assert "{{SCHEMA_COMPONENTS}}" not in prompt
+    assert '"day"' in prompt
+    assert "Day 5" in prompt
+    assert '"section"' in prompt
+    assert "Section 1" in prompt
 
 
 def test_converts_heic_via_sips_before_sending(
@@ -266,20 +291,23 @@ def test_request_cap_exceeded_maps_to_request_cap_exceeded_failure_kind(tmp_path
     assert result.failure_kind is FailureKind.REQUEST_CAP_EXCEEDED
 
 
-def test_parses_page_identity_candidates_and_confidence(tmp_path: Path) -> None:
-    """Scope B: a student capture's page-identity extraction feeds
-    k12ta.grading.page_identity.resolve() the same shape as the key-scan side
-    already does -- kind -> every distinct value seen, plus one confidence for
+def test_parses_page_identity_candidates_under_whatever_names_the_model_used(
+    tmp_path: Path,
+) -> None:
+    """Scope B rework: candidate names are open-ended, not one of a fixed four --
+    discovery mode has the model invent its own names, targeted mode uses the
+    schema's names, and this layer doesn't care which; it just carries whatever
+    string keys came back, feeding k12ta.grading.page_identity.resolve() the same
+    shape either way: name -> every distinct value seen, plus one confidence for
     the whole extraction, separate from any item's answer confidence."""
     image = tmp_path / "page.jpg"
     image.write_bytes(b"x")
     payload = {
         "items": [],
         "page_identity": {
-            "day_or_unit_banner": ["Day 1"],
-            "printed_worksheet_code": [],
-            "printed_page_number": ["13"],
-            "unique_problem_ids": [],
+            "day": ["Day 1"],
+            "worksheet_code": [],
+            "section": ["Section 1"],
             "confidence": 0.9,
         },
     }
@@ -289,8 +317,8 @@ def test_parses_page_identity_candidates_and_confidence(tmp_path: Path) -> None:
 
     assert result.failure is None
     assert result.page_identity.candidates == {
-        "day_or_unit_banner": ("Day 1",),
-        "printed_page_number": ("13",),
+        "day": ("Day 1",),
+        "section": ("Section 1",),
     }
     assert result.page_identity.confidence == 0.9
 
@@ -303,13 +331,13 @@ def test_page_identity_conflicting_markers_on_a_spread_keep_every_distinct_value
     from k12ta.transcribe.vision_llm import _parse_page_identity
 
     raw = {
-        "day_or_unit_banner": ["Day 2", "Day 3"],
+        "day": ["Day 2", "Day 3"],
         "confidence": 0.85,
     }
 
     extraction = _parse_page_identity(raw)
 
-    assert extraction.candidates["day_or_unit_banner"] == ("Day 2", "Day 3")
+    assert extraction.candidates["day"] == ("Day 2", "Day 3")
 
 
 def test_missing_page_identity_defaults_to_no_candidates_and_zero_confidence(
@@ -326,18 +354,22 @@ def test_missing_page_identity_defaults_to_no_candidates_and_zero_confidence(
     assert result.page_identity.confidence == 0.0
 
 
-def test_page_identity_ignores_unknown_kinds_and_non_string_values() -> None:
+def test_page_identity_ignores_the_confidence_key_and_non_string_values() -> None:
+    """`confidence` is a sibling field, never a candidate name, however the model
+    labels its markers -- and a non-string value in a candidate's list (the model
+    not following the schema) is dropped rather than crashing the parse."""
     from k12ta.transcribe.vision_llm import _parse_page_identity
 
     raw = {
-        "day_or_unit_banner": ["Day 1", 42, None],
-        "some_kind_the_model_invented": ["x"],
+        "day": ["Day 1", 42, None],
+        "section": ["Section 1"],
         "confidence": 0.5,
     }
 
     extraction = _parse_page_identity(raw)
 
-    assert extraction.candidates == {"day_or_unit_banner": ("Day 1",)}
+    assert extraction.candidates == {"day": ("Day 1",), "section": ("Section 1",)}
+    assert "confidence" not in extraction.candidates
 
 
 def test_transcriber_exposes_request_count_from_the_vision_model(tmp_path: Path) -> None:

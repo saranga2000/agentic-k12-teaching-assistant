@@ -385,6 +385,40 @@ def test_low_confidence_item_shows_the_could_not_read_message(
     assert "i could not read this one clearly" in response.text.lower()
 
 
+def test_needs_human_copy_for_partial_page_markers_names_seen_and_missing() -> None:
+    """The whole point of storing structured detail: the message tells a child
+    something actionable ("I can see the Day but not the Section"), not the
+    generic "I'm not sure which page this is." """
+    import json
+
+    detail = json.dumps({"seen": ["Day"], "missing": ["Section"]})
+
+    glyph, message = web_app._needs_human_copy("partial_page_markers", detail)
+
+    assert "Day" in message
+    assert "Section" in message
+    assert message != web_app.UNKNOWN_PAGE_MESSAGE
+
+
+def test_needs_human_copy_for_partial_page_markers_with_no_detail_falls_back_honestly() -> None:
+    """A row with the cause but no detail (malformed, or predates this column)
+    must still render something intelligible, never crash."""
+    glyph, message = web_app._needs_human_copy("partial_page_markers", None)
+
+    assert message
+    assert glyph
+
+
+def test_needs_human_copy_joins_more_than_two_missing_labels_readably() -> None:
+    import json
+
+    detail = json.dumps({"seen": ["Day"], "missing": ["Section", "Chapter", "Unit"]})
+
+    _, message = web_app._needs_human_copy("partial_page_markers", detail)
+
+    assert "Section, Chapter, and Unit" in message
+
+
 def test_post_capture_when_quota_is_exhausted_calls_the_transcriber_never(
     client: TestClient,
     conn: sqlite3.Connection,

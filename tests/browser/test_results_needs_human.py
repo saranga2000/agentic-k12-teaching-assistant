@@ -3,20 +3,22 @@ the answer-key store existed, every graded problem was told "I don't have an ans
 key for this one yet" unconditionally -- correct by construction back then, but
 nothing in the pipeline actually checked, and the same code would have kept saying
 it after a key was added. `k12ta.grading.needs_human` now decides and persists one
-of five honest causes per problem; this proves the *rendering* layer actually reads
-that cause and shows five distinct messages, not two.
+of six honest causes per problem; this proves the *rendering* layer actually reads
+that cause (and, for PARTIAL_PAGE_MARKERS, its structured detail) and shows six
+distinct messages, not two.
 
-Seeded directly via the store, not driven through a photo upload: k12ta.web's
-capture route never collects a page number today (see docs/ROADMAP.md's page-identity
-discussion), so two of the five causes -- NO_KEY_FOR_PAGE and NEEDS_PERSON, both of
-which require a page number -- are not reachable through the real upload flow at
-all yet, and CONFLICTING_PAGE_MARKERS is decided upstream of `decide()` by
-`k12ta.grading.page_identity`, not persisted through this store call at all in real
-use. This test is about the rendering contract in isolation from those separate,
-already-tracked gaps.
+Seeded directly via the store, not driven through a photo upload: two of the six
+causes -- NO_KEY_FOR_PAGE and NEEDS_PERSON, both of which require a page number --
+are not reachable through a real upload without a confirmed key on file, and
+CONFLICTING_PAGE_MARKERS/PARTIAL_PAGE_MARKERS are decided upstream of `decide()` by
+`k12ta.grading.page_identity`, not persisted through this store call directly in
+real use. This test is about the rendering contract in isolation from those
+separate, already-tracked gaps.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -31,16 +33,20 @@ _STUDENT_ID = "s-browser-needs-human"
 _SESSION_ID = "sess-needs-human"
 _CAPTURE_ID = "c-needs-human"
 
-_CAUSES_IN_ORDER = (
-    NeedsHumanCause.LOW_CONFIDENCE,
-    NeedsHumanCause.UNKNOWN_PAGE,
-    NeedsHumanCause.NO_KEY_FOR_PAGE,
-    NeedsHumanCause.NEEDS_PERSON,
-    NeedsHumanCause.CONFLICTING_PAGE_MARKERS,
+_ROWS_IN_ORDER: tuple[tuple[NeedsHumanCause, str | None], ...] = (
+    (NeedsHumanCause.LOW_CONFIDENCE, None),
+    (NeedsHumanCause.UNKNOWN_PAGE, None),
+    (NeedsHumanCause.NO_KEY_FOR_PAGE, None),
+    (NeedsHumanCause.NEEDS_PERSON, None),
+    (NeedsHumanCause.CONFLICTING_PAGE_MARKERS, None),
+    (
+        NeedsHumanCause.PARTIAL_PAGE_MARKERS,
+        json.dumps({"seen": ["Day"], "missing": ["Section"]}),
+    ),
 )
 
 
-def _seed_session_with_all_five_causes(conn: object) -> None:
+def _seed_session_with_all_six_causes(conn: object) -> None:
     students.insert_student(
         conn,
         students.StudentRow(
@@ -93,7 +99,7 @@ def _seed_session_with_all_five_causes(conn: object) -> None:
             started_at="2026-08-13T08:05:00+00:00",
         ),
     )
-    for i, cause in enumerate(_CAUSES_IN_ORDER, start=1):
+    for i, (cause, detail) in enumerate(_ROWS_IN_ORDER, start=1):
         problem_id = str(i)
         captures.insert_problem(
             conn,
@@ -116,20 +122,22 @@ def _seed_session_with_all_five_causes(conn: object) -> None:
                 outcome="needs_human",
                 grader_confidence=0.99,
                 needs_human_cause=cause.value,
+                needs_human_detail=detail,
             ),
         )
 
 
-def test_all_five_needs_human_causes_render_distinct_messages(
+def test_all_six_needs_human_causes_render_distinct_messages(
     page: Page, web_server: LiveServer
 ) -> None:
-    _seed_session_with_all_five_causes(web_server.connection())
+    _seed_session_with_all_six_causes(web_server.connection())
 
     page.goto(f"{web_server.base_url}/session/{_STUDENT_ID}/{_SESSION_ID}")
 
     labels = page.locator(".outcome-label")
-    expect(labels).to_have_count(5)
+    expect(labels).to_have_count(6)
     texts = labels.all_text_contents()
-    # Five causes, five genuinely different messages -- not the same string twice
+    # Six causes, six genuinely different messages -- not the same string twice
     # or a generic fallback repeated across several of them.
-    assert len(set(texts)) == 5, f"expected 5 distinct messages, got {texts}"
+    assert len(set(texts)) == 6, f"expected 6 distinct messages, got {texts}"
+    assert any("Day" in t and "Section" in t for t in texts)

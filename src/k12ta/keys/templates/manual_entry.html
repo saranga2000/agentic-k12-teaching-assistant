@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Enter a page mapping — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>Enter a page mapping — {{ source.label }}</h1>
+
+{% if not schema %}
+<p class="message">This source has no identity schema yet — set one up first at
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">page identity</a>.</p>
+{% else %}
+<p class="message">For a page you already know, verified against the book itself — no photo,
+  no re-scan. Recorded as a manual entry, not a model result.</p>
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">
+  <label for="page_number">Page number</label>
+  <input type="text" name="page_number" id="page_number">
+  {% for component in schema %}
+  <label for="component_{{ component.component_name }}">{{ component.label }}</label>
+  <input type="text" name="component_{{ component.component_name }}" id="component_{{ component.component_name }}"
+         placeholder="{{ component.example or '' }}">
+  {% endfor %}
+  <div class="actions">
+    <button type="submit">Save</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

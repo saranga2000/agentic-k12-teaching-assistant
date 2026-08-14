@@ -288,14 +288,19 @@ def test_page_identity_preserves_two_conflicting_values_on_a_spread(tmp_path: Pa
     assert pages[0].page_identity["day_or_unit_banner"] == ("Day 2", "Day 3")
 
 
-def test_rejects_unknown_page_identity_kind(tmp_path: Path) -> None:
+def test_page_identity_accepts_any_component_name(tmp_path: Path) -> None:
+    """Scope B's composite-schema rework: component names are open-ended,
+    parent-defined per source (Summer Bridge's "section", RSM's "chapter"), not
+    drawn from a fixed enum -- ground truth must accept whatever a real source's
+    schema actually calls its markers."""
     page = _valid_page()
     page["page_identity"] = {"chapter_stamp": ["Ch. 3"]}
     _touch_image(tmp_path, str(page["image"]))
     _write_label(tmp_path, page)
 
-    with pytest.raises(FixtureValidationError, match="chapter_stamp"):
-        load_fixture_pages(tmp_path)
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].page_identity == {"chapter_stamp": ("Ch. 3",)}
 
 
 def test_rejects_page_identity_value_that_is_not_a_list_of_strings(tmp_path: Path) -> None:

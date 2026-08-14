@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from k12ta.llm.base import (
@@ -25,7 +25,7 @@ from k12ta.llm.base import (
     VisionModel,
 )
 from k12ta.prompts import load_prompt
-from k12ta.transcribe._shared import strip_code_fence
+from k12ta.transcribe._shared import build_identity_prompt, strip_code_fence
 from k12ta.transcribe.base import FailureKind
 
 
@@ -40,17 +40,19 @@ class KeyPageEntry:
     """The model's probability that `answer_text` (or the ungradeable
     classification) is exactly correct. Says nothing about the page heading --
     see `identifier_confidence`."""
-    identifier_value: str = ""
-    """The "Day N" banner text for this entry's block, as printed -- the marker a
-    student's own photo will show, distinct from and more legible than the small
-    printed page number (docs/ROADMAP.md's page-identity discussion). Empty string
-    if the model didn't report one, never a guess."""
+    identity_values: dict[str, str] = field(default_factory=dict)
+    """This block's identity component values, keyed by component name (e.g.
+    {"section": "Section 1", "day": "Day 5"}) -- a composite, not one string,
+    since a single marker is not assumed globally unique (docs/ROADMAP.md's
+    page-identity discussion). Discovery mode reports whatever names the model
+    chose; targeted mode reports values under a source's confirmed schema names.
+    Empty if the model found none, never a guess."""
     identifier_confidence: float = 0.0
-    """The model's probability that `identifier_value` and `page_number` are
-    exactly correct, independent of `confidence` -- a block heading can be
-    smudged even when the answer next to it reads perfectly clearly. This is
-    what gates the confirm screen's "unconfirmed" marking on manual identifier
-    entry (k12ta.keys.app), never `confidence`."""
+    """The model's probability that every value in `identity_values` and
+    `page_number` is exactly correct, independent of `confidence` -- a block
+    heading can be smudged even when the answer next to it reads perfectly
+    clearly. This is what gates the confirm screen's "unconfirmed" marking on
+    manual identifier entry (k12ta.keys.app), never `confidence`."""
 
 
 @dataclass(frozen=True)
@@ -74,12 +76,17 @@ class KeyTranscriber(Protocol):
     def request_count(self) -> int: ...
 
     def transcribe(
-        self, image_bytes: bytes, on_progress: Callable[[int], None] | None = None
+        self,
+        image_bytes: bytes,
+        on_progress: Callable[[int], None] | None = None,
+        identity_schema: Sequence[tuple[str, str | None]] = (),
     ) -> KeyPageResult:
         """Read one key page. Must not raise; classify any failure and return it.
         `on_progress`, if given, is called with the cumulative character count
         received so far -- passed straight through to the underlying VisionModel,
-        see its docstring."""
+        see its docstring. `identity_schema` is the source's current identity
+        components as `(component_name, example)` pairs, in schema position
+        order -- empty when the source has no schema yet (discovery mode)."""
         ...
 
 
@@ -121,12 +128,16 @@ class VisionLLMKeyTranscriber:
         return self._vision_model.request_count
 
     def transcribe(
-        self, image_bytes: bytes, on_progress: Callable[[int], None] | None = None
+        self,
+        image_bytes: bytes,
+        on_progress: Callable[[int], None] | None = None,
+        identity_schema: Sequence[tuple[str, str | None]] = (),
     ) -> KeyPageResult:
         started = self._monotonic()
         try:
+            prompt = build_identity_prompt(self._prompt, identity_schema)
             response = self._vision_model.generate(
-                self._prompt, image_bytes, "image/jpeg", on_progress=on_progress
+                prompt, image_bytes, "image/jpeg", on_progress=on_progress
             )
             entries = _parse_entries(response.text)
             return KeyPageResult(
@@ -166,6 +177,21 @@ def _parse_entries(text: str) -> tuple[KeyPageEntry, ...]:
     return tuple(_parse_entry(entry) for entry in raw_entries if isinstance(entry, dict))
 
 
+def _parse_identity_values(raw: object) -> dict[str, str]:
+    """Open-ended component names, same reasoning as `vision_llm._parse_page_
+    identity`: discovery mode has the model invent its own names, targeted mode
+    uses a source's schema names, and this layer carries whatever string key
+    came back either way. A non-string value (the model not following the
+    schema) is dropped rather than crashing the parse."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: value
+        for name, value in raw.items()
+        if isinstance(name, str) and isinstance(value, str)
+    }
+
+
 def _parse_entry(raw: dict[str, object]) -> KeyPageEntry:
     confidence = raw.get("confidence")
     valid_confidence = isinstance(confidence, int | float) and not isinstance(confidence, bool)
@@ -176,14 +202,13 @@ def _parse_entry(raw: dict[str, object]) -> KeyPageEntry:
     page_number = raw.get("page_number")
     answer_text = raw.get("answer_text")
     ungradeable_reason = raw.get("ungradeable_reason")
-    identifier_value = raw.get("identifier_value")
     return KeyPageEntry(
         page_number=int(page_number) if isinstance(page_number, int | float) else 0,
         problem_number=str(raw.get("problem_number", "")),
         answer_text=answer_text if isinstance(answer_text, str) else None,
         ungradeable_reason=ungradeable_reason if isinstance(ungradeable_reason, str) else None,
         confidence=float(confidence) if valid_confidence else 0.0,  # type: ignore[arg-type]
-        identifier_value=identifier_value if isinstance(identifier_value, str) else "",
+        identity_values=_parse_identity_values(raw.get("identity")),
         identifier_confidence=(
             float(identifier_confidence)  # type: ignore[arg-type]
             if valid_identifier_confidence

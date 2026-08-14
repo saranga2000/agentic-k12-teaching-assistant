@@ -10,6 +10,7 @@ docs/ARCHITECTURE.md.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -70,6 +71,13 @@ NEEDS_PERSON_GLYPH = "~"
 # docstring.
 CONFLICTING_PAGE_MARKERS_MESSAGE = "I can see two page markers. Take a photo of just one page."
 CONFLICTING_PAGE_MARKERS_GLYPH = "⇄"
+# Recoverable, unlike CONFLICTING_PAGE_MARKERS above -- re-photographing with the
+# missing part in frame fixes it. The real message is built dynamically from
+# graded_problems.needs_human_detail (which components were seen/missing, see
+# k12ta.pipeline.process); this static text is only the fallback for a row with
+# the cause but no usable detail (malformed, or predates this column).
+PARTIAL_PAGE_MARKERS_MESSAGE = "I can see part of the page marker, but not all of it."
+PARTIAL_PAGE_MARKERS_GLYPH = "◐"
 # A row graded before the needs_human_cause column existed (migration 0006) has no
 # claimed reason -- genuinely unknown, not a guess dressed up as one.
 UNKNOWN_CAUSE_MESSAGE = "I need a grown-up to look at this one."
@@ -84,17 +92,42 @@ _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
         CONFLICTING_PAGE_MARKERS_GLYPH,
         CONFLICTING_PAGE_MARKERS_MESSAGE,
     ),
+    NeedsHumanCause.PARTIAL_PAGE_MARKERS: (
+        PARTIAL_PAGE_MARKERS_GLYPH,
+        PARTIAL_PAGE_MARKERS_MESSAGE,
+    ),
 }
 
 
-def _needs_human_copy(cause_value: str | None) -> tuple[str, str]:
-    """Glyph and message for a graded_problems row's stored `needs_human_cause`.
-    The one place this decision is rendered from -- never re-derived from
-    confidence or any other proxy, see docs/PROGRESS.md's M2 entry for why that
-    was wrong before."""
+def _join_labels(labels: list[str]) -> str:
+    if len(labels) <= 1:
+        return "".join(labels)
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
+def _needs_human_copy(cause_value: str | None, detail_json: str | None = None) -> tuple[str, str]:
+    """Glyph and message for a graded_problems row's stored `needs_human_cause`
+    (and, for PARTIAL_PAGE_MARKERS, its `needs_human_detail`). The one place this
+    decision is rendered from -- never re-derived from confidence or any other
+    proxy, see docs/PROGRESS.md's M2 entry for why that was wrong before. The
+    facts (which components were seen/missing) come from `k12ta.pipeline.process`
+    -- this function only interpolates them into a sentence, it never infers a
+    source's schema itself."""
     if cause_value is None:
         return UNKNOWN_CAUSE_GLYPH, UNKNOWN_CAUSE_MESSAGE
-    return _NEEDS_HUMAN_COPY[NeedsHumanCause(cause_value)]
+    cause = NeedsHumanCause(cause_value)
+    if cause is NeedsHumanCause.PARTIAL_PAGE_MARKERS and detail_json:
+        try:
+            detail = json.loads(detail_json)
+            seen = _join_labels(list(detail.get("seen", [])))
+            missing = _join_labels(list(detail.get("missing", [])))
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            seen, missing = "", ""
+        if seen and missing:
+            return PARTIAL_PAGE_MARKERS_GLYPH, f"I can see the {seen} but not the {missing}."
+    return _NEEDS_HUMAN_COPY[cause]
 
 
 load_dotenv()  # must run before any Settings.from_env() call in this module
@@ -275,7 +308,9 @@ def session_results(
     items = []
     for g in graded:
         needs_human_glyph, needs_human_reason = (
-            _needs_human_copy(g.needs_human_cause) if g.outcome == "needs_human" else (None, None)
+            _needs_human_copy(g.needs_human_cause, g.needs_human_detail)
+            if g.outcome == "needs_human"
+            else (None, None)
         )
         items.append(
             {

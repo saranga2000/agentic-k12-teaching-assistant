@@ -38,6 +38,7 @@ _EXPECTED_TABLES = {
     "answer_key_audit_log",
     "page_identities",
     "page_identity_resolutions",
+    "page_identity_schemas",
 }
 
 

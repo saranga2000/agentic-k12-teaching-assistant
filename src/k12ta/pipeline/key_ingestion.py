@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -68,6 +68,7 @@ def transcribe_key_page(
     get_transcriber: Callable[[], KeyTranscriber],
     image_bytes: bytes,
     on_progress: Callable[[int], None] | None = None,
+    identity_schema: Sequence[tuple[str, str | None]] = (),
 ) -> KeyIngestionOutcome:
     """Quota-gated, one call to `get_transcriber()().transcribe`, no retry loop.
 
@@ -76,6 +77,12 @@ def transcribe_key_page(
     adapter, and a broken provider config must never 500 a request that was never
     going to reach the model. `on_progress`, if given, is passed straight through to
     the transcriber -- see `k12ta.llm.base.VisionModel.generate`'s docstring.
+    `identity_schema` is the source's current identity components, as
+    `(component_name, example)` pairs in schema position order -- this module has
+    no student/source context of its own (that lives one layer up, in
+    `k12ta.keys`, which already loaded `source` to get here), so the caller loads
+    the schema and passes it straight through. Empty means discovery mode: no
+    schema exists yet for this source, or this is deliberately its first scan.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -87,7 +94,9 @@ def transcribe_key_page(
 
     try:
         transcriber = get_transcriber()
-        result = transcriber.transcribe(normalized, on_progress=on_progress)
+        result = transcriber.transcribe(
+            normalized, on_progress=on_progress, identity_schema=identity_schema
+        )
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
         logger.info("key page transcribe outcome=failed reason=%s", reason)

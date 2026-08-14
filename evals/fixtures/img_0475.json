@@ -26,6 +26,7 @@
   "spread_side": "right",
   "page_identity": {
     "day_or_unit_banner": ["Day 1"],
-    "printed_page_number": ["12", "13"]
+    "printed_page_number": ["12", "13"],
+    "section": ["Section 1"]
   }
 }

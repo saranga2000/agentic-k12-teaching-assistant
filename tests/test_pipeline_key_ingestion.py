@@ -144,6 +144,22 @@ def test_transcribe_passes_on_progress_through_to_the_transcriber(tmp_path: Path
     assert seen == [50, 400]
 
 
+def test_transcribe_passes_identity_schema_through_to_the_transcriber(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeKeyTranscriber(result=_success_result(17))
+
+    transcribe_key_page(
+        conn,
+        settings,
+        lambda: transcriber,
+        _sideways_portrait_jpeg(),
+        identity_schema=[("day", "Day 5"), ("section", "Section 1")],
+    )
+
+    assert transcriber.identity_schemas_seen == [[("day", "Day 5"), ("section", "Section 1")]]
+
+
 def test_quota_already_exhausted_never_calls_the_transcriber(tmp_path: Path) -> None:
     conn = _migrated_connection()
     settings = _settings(tmp_path, daily_request_limit=1)

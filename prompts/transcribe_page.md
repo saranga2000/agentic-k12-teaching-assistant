@@ -1,6 +1,6 @@
 ---
 id: transcribe_page
-version: 2
+version: 3
 covered_by: evals/run_transcription_eval.py
 ---
 
@@ -26,32 +26,41 @@ Rules:
 - Never add a problem that is not on the page.
 
 Alongside `items`, also report `page_identity`: whatever markers identify which
-workbook page this is, independent of the problems themselves. Report every kind
-you can see evidence for, not just one -- a photo can show more than one:
-- `day_or_unit_banner`: a prominent heading like "Day 11" or "Unit 3", as printed
-- `printed_worksheet_code`: a worksheet code or label printed on the page (e.g. a
-  Kumon-style code), as printed
-- `printed_page_number`: a small printed page number, as printed, distinct from
-  the prominent banner above -- workbooks often print both
-- `unique_problem_ids`: globally unique problem numbers printed on the page (e.g.
-  a chapter-scoped numbering scheme), as printed
+workbook page this is, independent of the problems themselves.
 
-Each of these four fields is a list of the distinct values you actually see for
-that kind on this photo -- usually zero or one, but exactly two when a two-page
-spread shows two different values for the same kind (e.g. "Day 2" on the left
+{{SCHEMA_COMPONENTS}}
+If the list above is non-empty, report a value for exactly those markers, using
+exactly the names given, and nothing else -- ignore any other marker on the page,
+even a legible one, if it is not in that list.
+
+If the list above is empty, no marker names are known for this page yet: report
+every identifier-like marker you can see -- a prominent heading, a printed code,
+a small page number, anything that could help tell one page apart from another --
+each under your own short, descriptive name for it (e.g. `"day"`, `"section"`,
+`"worksheet_code"`).
+
+Either way, each reported marker is a list of the distinct values you actually
+see for it on this photo -- usually zero or one, but exactly two when a two-page
+spread shows two different values for the same marker (e.g. "Day 2" on the left
 page and "Day 3" on the right). Never invent a value or infer one from anything
-not printed on the page. An empty list means you saw no evidence of that kind at
-all -- that is a normal, expected result, not an error.
+not printed on the page. Reporting no markers at all is a normal, expected result
+on a page with none printed, not an error.
 
 Also report `confidence`: 0.0 to 1.0, your probability that the values you
 reported for `page_identity` are exactly correct. This is independent of any
 single problem's own `confidence` above -- a page's heading can be perfectly
 legible even when an answer next to it is not, and the reverse also happens.
 
-Output shape:
+Output shape when specific markers are known to look for:
 
 ```
 {"items": [{"problem_id": "...", "prompt_text": "...", "student_answer_raw": "...", "confidence": 0.0}],
- "page_identity": {"day_or_unit_banner": ["Day 1"], "printed_worksheet_code": [],
-                    "printed_page_number": ["13"], "unique_problem_ids": [], "confidence": 0.9}}
+ "page_identity": {"section": ["Section 1"], "day": ["Day 5"], "confidence": 0.9}}
+```
+
+Output shape when no markers are known yet (report whatever you see, your own names):
+
+```
+{"items": [...],
+ "page_identity": {"day": ["Day 5"], "worksheet_code": [], "confidence": 0.9}}
 ```

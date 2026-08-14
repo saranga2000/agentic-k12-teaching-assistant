@@ -25,6 +25,7 @@
   ],
   "spread_side": "left",
   "page_identity": {
-    "printed_page_number": ["10", "11"]
+    "printed_page_number": ["10", "11"],
+    "section": ["Section 1"]
   }
 }

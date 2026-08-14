@@ -88,28 +88,70 @@ made this look like a hard problem in general; it is not.
 - RSM carries a chapter marker ("CH.4"), a footer ("Page 4 of 24"), and globally unique
   problem numbers (4019-4026, 118-124) that do not repeat across pages.
 
-`page_identity_kind` is recorded as a per-source property with at least:
-`printed_page_number`, `printed_worksheet_code`, `unique_problem_ids`,
-`day_or_unit_banner`. **Built:** a parent sets this per enrollment through the
-enrollment screen itself (`k12ta.keys`'s "How does this source show which page
-you're on?" picker, plain-language options, `POST .../identity-kind`) — never by
-hand-editing the database. The default is "not sure yet" (`NULL`), which is a real,
-re-selectable choice, not a placeholder: it produces `k12ta.grading.page_identity`'s
-honest `NOT_FOUND` refusal until a parent picks one.
+**Identity is a composite, discovered per source, not a single declared kind.**
+The first version of this (a single `page_identity_kind` enum: `printed_page_number`
+| `printed_worksheet_code` | `unique_problem_ids` | `day_or_unit_banner`, declared by
+a parent at enrollment through a picker) shipped, was used on real data, and broke on
+the first real curriculum: Summer Bridge's own day numbering is not safe to assume
+globally unique across the whole workbook (it plausibly resets per section), so "Day
+1" alone cannot be trusted as a lookup key — it needs `section` *and* `day` together.
+Worse, the single-string design was a live data-integrity risk: a future "Day 1" in
+a second section would have silently overwritten the already-correct mapping for the
+first section's "Day 1", grading real work against the wrong page — exactly the
+"confident wrong grade" this whole system exists to refuse. Replaced with:
+
+- **`k12ta.store.page_identity_schemas`**: a per-source, *versioned*, ordered list of
+  named components (Summer Bridge: `section` + `day`; Kumon: `worksheet_code` alone;
+  RSM: `chapter` + `problem_range`). A source with zero components has legitimately
+  never had a schema taught to it and never auto-resolves — an honest `NO_SCHEMA`
+  outcome, not an error.
+- **Learned at first scan, not declared at enrollment.** A parent does not know what
+  identifies a page in a programme they have not scanned a key page from yet. The
+  first key-page confirm screen for a source with no schema shows a discovery panel
+  of whatever identifier-like markers that scan found (or blank rows to name one by
+  hand if it found nothing), and saving both teaches the schema *and* confirms that
+  scan's page under it in the same submit.
+- **Revisable, never a one-shot commitment.** `k12ta.keys`'s `/identity-schema` route
+  edits a schema any time — add, remove, reorder, relabel a component. Editing
+  inserts the next schema *version* rather than mutating the current one in place, so
+  an old version's mappings are never dropped or silently reinterpreted under a new
+  shape; they simply stop being eligible for auto-resolution until re-confirmed, and
+  the enrollment screen counts exactly how many need review after a schema change.
+- **Composite-conflict semantics, stated explicitly:** if *any single component* has
+  more than one distinct value on one photo, the whole resolution is `CONFLICTING`,
+  checked first, unconditionally — agreement on the other components never rescues
+  it, because the page still can't be safely named. Two sections and one day, one
+  section and two days, and a spread showing two of everything are all this same
+  outcome.
+- **A missing component is not the same as no markers at all.** `PARTIAL` (some but
+  not all required components read — recoverable by re-photographing with the
+  missing part in frame, see `NeedsHumanCause.PARTIAL_PAGE_MARKERS`, "I can see the
+  Day but not the Section") is a distinct outcome from `NO_MARKERS` (nothing on the
+  page at all — not recoverable by re-photographing, needs a person).
+- A no-photo **manual-mapping route** (`/identity/manual-entry`) exists for a mapping
+  a parent has already verified against the physical book — always recorded
+  `source="manual"`, so the eval never mistakes a hand-entered value for a model
+  success.
+
+`k12ta.grading.page_identity.resolve()` now has seven outcomes (`NO_SCHEMA`,
+`CONFLICTING`, `NO_MARKERS`, `PARTIAL`, `BELOW_FLOOR`, `NO_MAPPING`, `RESOLVED`),
+each mapping to a genuinely different fix for a parent — surfaced as counts on the
+enrollment screen precisely so it's possible to tell, from real use, which one
+dominates.
 
 **Known limitation: page-identity accuracy is measured only on Summer Bridge.**
 `k12ta.grading.page_identity` and its extraction/resolution machinery (Scope B) ship
 against 9 real, hand-verified Summer Bridge fixtures (`evals/fixtures/img_047*.json`)
-— every one of which could be labelled directly from the photographs already on hand,
-with two-banner conflicts confirmed on 7 of the 9. Kumon and RSM have no fixtures and
-no real key data at all yet, so `printed_worksheet_code` and `unique_problem_ids` are
-implemented (or, for `unique_problem_ids`, deliberately not implemented — see
-`k12ta.grading.page_identity`'s module docstring) against zero measured accuracy. The
-paragraph above argues Kumon and RSM should be *easier* than Summer Bridge, and that
-argument has not been tested against a single real photograph. Do not treat that
-argument as validated until it is. September is when this gap becomes load-bearing —
-both programmes resume then, and Summer Bridge ends. Photograph completed Kumon and
-RSM pages once school starts, label them the same way the Summer Bridge fixtures were
+— every one of which could be labelled directly from the photographs already on hand
+(including the `section` component, confirmed present and constant, "Section 1", on
+all 9), with two-banner conflicts confirmed on 7 of the 9. Kumon and RSM have no
+fixtures and no real key data at all yet, so their schemas (a `worksheet_code`
+component for Kumon; `chapter` + `problem_range` for RSM) are unvalidated against a
+single real photograph. The paragraph above argues Kumon and RSM should be *easier*
+than Summer Bridge, and that argument has not been tested. Do not treat it as
+validated until it is. September is when this gap becomes load-bearing — both
+programmes resume then, and Summer Bridge ends. Photograph completed Kumon and RSM
+pages once school starts, label them the same way the Summer Bridge fixtures were
 labelled, and close this gap before leaning on either source's page-identity path for
 a real grade.
 
@@ -129,10 +171,10 @@ one page." (`k12ta.web.app.CONFLICTING_PAGE_MARKERS_MESSAGE`).
 page at a time") is worth building, separate from the refusal message above. Not
 building it now — there is no measured rate of how often a child actually hits this
 refusal in real use to justify the added screen against. The resolution-outcome
-counts already surfaced on the enrollment screen (`k12ta.keys`'s per-source
-resolved/below-floor/not-found/conflicting counts) are what will answer this: once
-`conflicting` is a real, non-trivial fraction of real captures over time, build the
-guidance screen; until then, the refusal message carries the load alone.
+counts already surfaced on the enrollment screen (`k12ta.keys`'s per-source counts,
+one per `PageIdentityOutcome`) are what will answer this: once `conflicting` is a
+real, non-trivial fraction of real captures over time, build the guidance screen;
+until then, the refusal message carries the load alone.
 
 Done when: your 7th grader completes a real workbook page end to end without you
 touching a keyboard.

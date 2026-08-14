@@ -7,6 +7,7 @@ harness can score any provider through one interface.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
@@ -103,6 +104,11 @@ class Transcriber(Protocol):
         but never as something callers are meant to assign to."""
         ...
 
-    def transcribe(self, image_path: str) -> TranscriptionResult:
-        """Read one page. Must not raise; classify any failure and return it instead."""
+    def transcribe(
+        self, image_path: str, identity_schema: Sequence[tuple[str, str | None]] = ()
+    ) -> TranscriptionResult:
+        """Read one page. Must not raise; classify any failure and return it
+        instead. `identity_schema` is the source's current identity components
+        as `(component_name, example)` pairs, in schema position order -- empty
+        when the source has no schema yet (discovery mode)."""
         ...

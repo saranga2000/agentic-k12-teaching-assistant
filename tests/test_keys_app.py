@@ -34,6 +34,7 @@ from k12ta.store import (
     migrate,
     page_identities,
     page_identity_resolutions,
+    page_identity_schemas,
     quota,
     students,
 )
@@ -214,89 +215,242 @@ def test_enrollment_detail_for_unknown_student_or_source_is_404(client: TestClie
     assert client.get("/keys/s-marcus/does-not-exist").status_code == 404
 
 
-def test_enrollment_detail_shows_page_identity_kind_picker_with_plain_language_options(
+def test_enrollment_detail_links_to_the_identity_schema_editor(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """A parent sees plain language, never the internal enum names -- see
-    k12ta.keys.app.PAGE_IDENTITY_KIND_LABELS."""
     _seed_marcus_with_source(conn)
 
     response = client.get("/keys/s-marcus/summer_bridge")
 
     assert response.status_code == 200
-    assert "Day or unit number shown on the page" in response.text
-    assert "Worksheet code in the corner" in response.text
-    assert "Chapter and problem numbers" in response.text
-    assert "Printed page number" in response.text
-    assert "Not sure yet" in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/identity-schema"' in response.text
 
 
-def test_enrollment_detail_preselects_the_configured_kind(
+def test_identity_schema_screen_for_a_source_with_no_schema_shows_blank_rows(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus_with_source(conn)
-    content.set_page_identity_kind(conn, "s-marcus", "summer_bridge", "day_or_unit_banner")
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/identity-schema")
 
-    option_html = response.text.split('value="day_or_unit_banner"')[1].split("</option>")[0]
-    assert "selected" in option_html
+    assert response.status_code == 200
+    assert 'name="component_name_0"' in response.text
 
 
-def test_submit_identity_kind_updates_the_content_source_and_redirects(
+def test_identity_schema_screen_prefills_the_current_schema(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus_with_source(conn)
-    assert content.get_content_source(conn, "s-marcus", "summer_bridge").page_identity_kind is None
+    page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/identity-schema")
+
+    assert response.status_code == 200
+    assert 'value="section"' in response.text
+    assert 'value="Section"' in response.text
+    assert 'value="day"' in response.text
+
+
+def test_submit_identity_schema_saves_components_and_redirects(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    assert page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge") == ()
 
     response = client.post(
-        "/keys/s-marcus/summer_bridge/identity-kind",
-        data={"page_identity_kind": "day_or_unit_banner"},
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "2",
+            "component_name_0": "section",
+            "component_label_0": "Section",
+            "component_example_0": "Section 1",
+            "component_name_1": "day",
+            "component_label_1": "Day",
+            "component_example_1": "Day 5",
+        },
         follow_redirects=False,
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/keys/s-marcus/summer_bridge"
-    row = content.get_content_source(conn, "s-marcus", "summer_bridge")
-    assert row.page_identity_kind == "day_or_unit_banner"
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["section", "day"]
 
 
-def test_submit_identity_kind_of_not_sure_yet_clears_it_to_none(
+def test_submit_identity_schema_with_no_components_leaves_the_schema_unchanged(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus_with_source(conn)
-    content.set_page_identity_kind(conn, "s-marcus", "summer_bridge", "day_or_unit_banner")
+    page_identity_schemas.save_new_schema(conn, "s-marcus", "summer_bridge", [("day", "Day", None)])
 
     client.post(
-        "/keys/s-marcus/summer_bridge/identity-kind",
-        data={"page_identity_kind": ""},
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "3",
+            "component_name_0": "",
+            "component_name_1": "",
+            "component_name_2": "",
+        },
     )
 
-    row = content.get_content_source(conn, "s-marcus", "summer_bridge")
-    assert row.page_identity_kind is None
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["day"]
 
 
-def test_submit_identity_kind_rejects_an_unrecognised_value(
+def test_editing_the_schema_bumps_the_version_and_does_not_touch_existing_mappings(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The explicit requirement: a schema change must flag an existing mapping
+    for review, never drop it or silently reinterpret it -- see
+    k12ta.store.page_identities' staleness rule."""
+    _seed_marcus_with_source(conn)
+    v1 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", None)]
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1",
+            schema_version=v1,
+            confirmed_at="2026-08-14T00:00:00+00:00",
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "2",
+            "component_name_0": "section",
+            "component_label_0": "Section",
+            "component_name_1": "day",
+            "component_label_1": "Day",
+        },
+    )
+
+    new_version = page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge")
+    assert new_version == 2
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 1", 1) == 13
+    )  # untouched, still there under the old version
+    assert (
+        page_identities.count_stale_for_source(conn, "s-marcus", "summer_bridge", new_version) == 1
+    )
+
+
+def test_identity_schema_for_unknown_student_or_source_is_404(client: TestClient) -> None:
+    assert client.get("/keys/does-not-exist/summer_bridge/identity-schema").status_code == 404
+    assert (
+        client.post("/keys/does-not-exist/summer_bridge/identity-schema", data={}).status_code
+        == 404
+    )
+
+
+def test_manual_mapping_screen_shows_one_field_per_current_schema_component(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/identity/manual-entry")
+
+    assert response.status_code == 200
+    assert 'name="component_section"' in response.text
+    assert 'name="component_day"' in response.text
+
+
+def test_manual_mapping_screen_for_a_source_with_no_schema_says_so_plainly(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Nothing to map against yet -- an honest message, not a blank or broken
+    form. Set up the schema first, at /identity-schema."""
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/identity/manual-entry")
+
+    assert response.status_code == 200
+    assert "no identity schema" in response.text.lower()
+    assert 'name="component_' not in response.text
+
+
+def test_submit_manual_mapping_persists_a_composite_marked_manual(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The backfill mechanism: entering a day-to-page mapping you've verified
+    against the physical book yourself, no re-scan, no photo -- recorded as
+    manual so the eval never mistakes it for a model success."""
+    _seed_marcus_with_source(conn)
+    v = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"page_number": "17", "component_section": "Section 1", "component_day": "Day 5"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 5", v)
+        == 17
+    )
+    row = conn.execute(
+        "SELECT source FROM page_identities WHERE composite_key = 'Section 1\x1fDay 5'"
+    ).fetchone()
+    assert row[0] == "manual"
+
+
+def test_submit_manual_mapping_with_a_blank_component_persists_nothing(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A half-filled composite can never match a future capture's fully-populated
+    one -- same rule as the confirm screen's per-row identity fields."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"page_number": "17", "component_section": "", "component_day": "Day 5"},
+    )
+
+    count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
+    assert count == 0
+
+
+def test_submit_manual_mapping_for_a_source_with_no_schema_is_a_400(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus_with_source(conn)
 
     response = client.post(
-        "/keys/s-marcus/summer_bridge/identity-kind",
-        data={"page_identity_kind": "made_up_kind"},
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"page_number": "17"},
     )
 
     assert response.status_code == 400
-    row = content.get_content_source(conn, "s-marcus", "summer_bridge")
-    assert row.page_identity_kind is None
 
 
-def test_submit_identity_kind_for_unknown_student_or_source_is_404(client: TestClient) -> None:
-    response = client.post(
-        "/keys/does-not-exist/summer_bridge/identity-kind",
-        data={"page_identity_kind": "day_or_unit_banner"},
+def test_manual_mapping_for_unknown_student_or_source_is_404(client: TestClient) -> None:
+    assert client.get("/keys/does-not-exist/summer_bridge/identity/manual-entry").status_code == 404
+    assert (
+        client.post("/keys/does-not-exist/summer_bridge/identity/manual-entry", data={}).status_code
+        == 404
     )
-    assert response.status_code == 404
 
 
 def test_enrollment_detail_with_no_resolutions_says_so_plainly(
@@ -326,10 +480,12 @@ def test_enrollment_detail_surfaces_page_identity_resolution_counts(
             "resolved",
             "resolved",
             "below_floor",
-            "not_found",
-            "not_found",
-            "not_found",
+            "no_mapping",
+            "no_mapping",
+            "no_mapping",
             "conflicting",
+            "partial",
+            "no_schema",
         ]
     ):
         page_identity_resolutions.insert_resolution(
@@ -349,8 +505,39 @@ def test_enrollment_detail_surfaces_page_identity_resolution_counts(
     assert response.status_code == 200
     assert "Resolved: 2" in response.text
     assert "Below confidence floor: 1" in response.text
-    assert "Identifier not found: 3" in response.text
+    assert "No mapping yet: 3" in response.text
     assert "Conflicting markers: 1" in response.text
+    assert "Partially identified: 1" in response.text
+    assert "No identity schema yet: 1" in response.text
+
+
+def test_enrollment_detail_surfaces_stale_mapping_count_after_a_schema_change(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    v1 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", None)]
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1",
+            schema_version=v1,
+            confirmed_at="2026-08-14T00:00:00+00:00",
+        ),
+    )
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "1 mapping" in response.text
+    assert "needs review" in response.text
 
 
 def test_upload_screen_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -496,15 +683,69 @@ def test_confirm_persists_exactly_the_submitted_values_not_the_original_transcri
     assert entries[0].answer_text == "8 meters"
 
 
-def test_confirm_persists_identifier_value_as_a_page_identity_mapping(
+def test_confirm_screen_shows_a_discovery_panel_when_the_scan_found_markers_and_no_schema_exists(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    _seed_marcus_with_source(conn)
+    transcriber.result = KeyPageResult(
+        entries=(
+            KeyPageEntry(
+                page_number=17,
+                identity_values={"day": "Day 5"},
+                problem_number="1",
+                answer_text="8 m",
+                ungradeable_reason=None,
+                confidence=0.95,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+
+    html = _final_html(response)
+    assert 'name="schema_name_0"' in html
+    assert 'value="day"' in html
+    assert 'name="identity_0_0"' in html
+    assert 'value="Day 5"' in html
+
+
+def test_confirm_screen_shows_a_discovery_panel_with_blank_rows_even_when_nothing_was_found(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    """No identity markers extracted, no schema yet -- the panel still offers
+    blank rows, so a parent can define a marker by hand (name it, then type its
+    value per row below) even when the model found nothing to suggest. This is
+    the manual-entry fallback generalized to "nothing at all," not just "the
+    model was unsure"."""
+    _seed_marcus_with_source(conn)
+    transcriber.result = _success_result()  # no identity_values on either entry
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+
+    html = _final_html(response)
+    assert 'name="schema_name_0"' in html
+    assert 'name="identity_0_0"' in html
+
+
+def test_confirm_from_a_discovery_panel_saves_the_schema_and_confirms_the_first_mapping(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """Scope B: confirming a key page is what populates the day/marker ->
-    page_number mapping a student capture later resolves against -- see
-    k12ta.store.page_identities. Nothing enters it before a parent confirms,
-    same rule as answer_key_entries."""
+    """Scope B rework, the whole point of "learned at first scan": one submit
+    both teaches the schema and confirms this scan's page under it -- no
+    separate schema-only step."""
     _seed_marcus_with_source(conn)
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 5") is None
+    assert page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge") == ()
 
     response = client.post(
         "/keys/s-marcus/summer_bridge/confirm",
@@ -513,45 +754,63 @@ def test_confirm_persists_identifier_value_as_a_page_identity_mapping(
             "page_number_0": "17",
             "problem_number_0": "1",
             "answer_text_0": "8 m",
-            "identifier_value_0": "Day 5",
+            "schema_count": "1",
+            "schema_include_0": "1",
+            "schema_name_0": "day",
+            "schema_label_0": "Day",
+            "schema_example_0": "Day 5",
+            "identity_0_0": "Day 5",
+            "identity_0_original_0": "Day 5",
         },
     )
 
     assert response.status_code == 200
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 5") == 17
-
-
-def test_confirm_records_unchanged_identifier_as_model_sourced(
-    client: TestClient, conn: sqlite3.Connection
-) -> None:
-    """The parent left the model's extraction as-is -- that's a model success for
-    eval purposes, not a manual entry."""
-    _seed_marcus_with_source(conn)
-
-    client.post(
-        "/keys/s-marcus/summer_bridge/confirm",
-        data={
-            "row_count": "1",
-            "page_number_0": "17",
-            "problem_number_0": "1",
-            "answer_text_0": "8 m",
-            "identifier_value_0": "Day 5",
-            "identifier_value_original_0": "Day 5",
-        },
-    )
-
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["day"]
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 5", 1) == 17
     row = conn.execute(
-        "SELECT source FROM page_identities WHERE identifier_value = 'Day 5'"
+        "SELECT source FROM page_identities WHERE composite_key = 'Day 5'"
     ).fetchone()
     assert row[0] == "model"
 
 
-def test_confirm_records_edited_identifier_as_manually_sourced(
+def test_confirm_from_a_discovery_panel_types_a_marker_by_hand_when_nothing_was_discovered(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """The model extracted "Day 3"; the parent corrected it to "Day 5" because the
-    model was confidently wrong. That correction must be counted as manual, never
-    as a model success -- confidence does not make the model right."""
+    """The model found nothing at all -- the parent names a marker from scratch
+    (a blank panel row) and types its value per row. Recorded as manual, the
+    same rule as the single-component fallback this generalizes."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "schema_count": "1",
+            "schema_include_0": "1",
+            "schema_name_0": "day",
+            "schema_label_0": "Day",
+            "identity_0_0": "Day 5",
+            "identity_0_original_0": "",
+        },
+    )
+
+    assert response.status_code == 200
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["day"]
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 5", 1) == 17
+    row = conn.execute(
+        "SELECT source FROM page_identities WHERE composite_key = 'Day 5'"
+    ).fetchone()
+    assert row[0] == "manual"
+
+
+def test_confirm_from_a_discovery_panel_with_an_unchecked_component_omits_it_from_the_schema(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
     _seed_marcus_with_source(conn)
 
     client.post(
@@ -561,23 +820,31 @@ def test_confirm_records_edited_identifier_as_manually_sourced(
             "page_number_0": "17",
             "problem_number_0": "1",
             "answer_text_0": "8 m",
-            "identifier_value_0": "Day 5",
-            "identifier_value_original_0": "Day 3",
+            "schema_count": "2",
+            "schema_include_0": "1",
+            "schema_name_0": "day",
+            "schema_label_0": "Day",
+            # schema_include_1 omitted -- this candidate was not kept
+            "schema_name_1": "worksheet_code",
+            "schema_label_1": "Worksheet code",
+            "identity_0_0": "Day 5",
+            "identity_0_original_0": "Day 5",
         },
     )
 
-    row = conn.execute(
-        "SELECT source FROM page_identities WHERE identifier_value = 'Day 5'"
-    ).fetchone()
-    assert row[0] == "manual"
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["day"]
 
 
-def test_confirm_records_identifier_typed_from_scratch_as_manually_sourced(
+def test_confirm_in_targeted_mode_records_model_source_when_every_component_is_unchanged(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """The model reported nothing at all (empty original); the parent supplied the
-    identifier the model couldn't read. Also manual."""
+    """The parent left every component as the model extracted it -- a model
+    success for eval purposes, not a manual entry."""
     _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
 
     client.post(
         "/keys/s-marcus/summer_bridge/confirm",
@@ -586,18 +853,85 @@ def test_confirm_records_identifier_typed_from_scratch_as_manually_sourced(
             "page_number_0": "17",
             "problem_number_0": "1",
             "answer_text_0": "8 m",
-            "identifier_value_0": "Day 5",
-            "identifier_value_original_0": "",
+            "identity_section_0": "Section 1",
+            "identity_section_original_0": "Section 1",
+            "identity_day_0": "Day 5",
+            "identity_day_original_0": "Day 5",
         },
     )
 
     row = conn.execute(
-        "SELECT source FROM page_identities WHERE identifier_value = 'Day 5'"
+        "SELECT source FROM page_identities WHERE composite_key = 'Section 1\x1fDay 5'"
     ).fetchone()
+    assert row is not None
+    assert row[0] == "model"
+
+
+def test_confirm_in_targeted_mode_records_manual_source_when_any_one_component_is_edited(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The model was confidently wrong about the section; the parent corrected
+    just that one field. The whole row counts as manual -- confidence does not
+    make the model right, and a partly-corrected row is not a model success."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "identity_section_0": "Section 2",  # corrected
+            "identity_section_original_0": "Section 1",
+            "identity_day_0": "Day 5",
+            "identity_day_original_0": "Day 5",
+        },
+    )
+
+    row = conn.execute(
+        "SELECT source FROM page_identities WHERE composite_key = 'Section 2\x1fDay 5'"
+    ).fetchone()
+    assert row is not None
     assert row[0] == "manual"
 
 
-def test_confirm_screen_marks_low_confidence_identifier_blocks_as_unconfirmed(
+def test_confirm_in_targeted_mode_with_a_missing_component_typed_in_is_manual(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The model found nothing for "section" on this block (empty original); the
+    parent filled it in by hand. Also manual -- same rule as the single-component
+    fallback this generalizes."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "identity_section_0": "Section 1",
+            "identity_section_original_0": "",
+            "identity_day_0": "Day 5",
+            "identity_day_original_0": "Day 5",
+        },
+    )
+
+    row = conn.execute(
+        "SELECT source FROM page_identities WHERE composite_key = 'Section 1\x1fDay 5'"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "manual"
+
+
+def test_confirm_screen_marks_low_confidence_rows_unconfirmed(
     client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
 ) -> None:
     """A block whose identifier_confidence is below the confidence floor must show
@@ -605,11 +939,12 @@ def test_confirm_screen_marks_low_confidence_identifier_blocks_as_unconfirmed(
     checking every answer should not have to guess which identifiers need a second
     look."""
     _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(conn, "s-marcus", "summer_bridge", [("day", "Day", None)])
     transcriber.result = KeyPageResult(
         entries=(
             KeyPageEntry(
                 page_number=17,
-                identifier_value="Day 5",
+                identity_values={"day": "Day 5"},
                 problem_number="1",
                 answer_text="8 m",
                 ungradeable_reason=None,
@@ -630,20 +965,21 @@ def test_confirm_screen_marks_low_confidence_identifier_blocks_as_unconfirmed(
     )
 
     html = _final_html(response)
-    assert 'name="identifier_value_0"' in html
+    assert 'name="identity_day_0"' in html
     assert 'value="Day 5"' in html
     assert "unconfirmed" in html.lower()
 
 
-def test_confirm_screen_does_not_flag_confidently_extracted_identifiers(
+def test_confirm_screen_does_not_flag_confidently_extracted_components(
     client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
 ) -> None:
     _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(conn, "s-marcus", "summer_bridge", [("day", "Day", None)])
     transcriber.result = KeyPageResult(
         entries=(
             KeyPageEntry(
                 page_number=17,
-                identifier_value="Day 5",
+                identity_values={"day": "Day 5"},
                 problem_number="1",
                 answer_text="8 m",
                 ungradeable_reason=None,
@@ -664,16 +1000,15 @@ def test_confirm_screen_does_not_flag_confidently_extracted_identifiers(
     )
 
     html = _final_html(response)
-    row_html = html.split('name="identifier_value_0"')[1].split("</td>")[0]
+    row_html = html.split('name="identity_day_0"')[1].split("</td>")[0]
     assert "unconfirmed" not in row_html.lower()
 
 
-def test_confirm_with_no_identifier_value_leaves_no_mapping(
+def test_confirm_with_no_identity_and_no_schema_leaves_no_mapping(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """A blank identifier_value (the model didn't report one) must not become a
-    stored mapping from an empty string -- that would silently "resolve" every
-    future capture with no legible marker to this one page."""
+    """No schema, no discovery panel submitted -- nothing enters page_identities
+    this round, and nothing crashes."""
     _seed_marcus_with_source(conn)
 
     response = client.post(
@@ -687,7 +1022,9 @@ def test_confirm_with_no_identifier_value_leaves_no_mapping(
     )
 
     assert response.status_code == 200
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "") is None
+    assert page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge") == ()
+    count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
+    assert count == 0
 
 
 def test_confirm_stores_an_ungradeable_row_with_no_answer_text(

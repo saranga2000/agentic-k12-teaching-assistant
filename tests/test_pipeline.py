@@ -5,6 +5,7 @@ No test here hits the network — every transcribe call goes through FakeTranscr
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date
 from decimal import Decimal
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from k12ta.config import Settings
 from k12ta.grading.needs_human import NeedsHumanCause
+from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm.base import DataRetention
 from k12ta.pipeline.process import PipelineStatus, process_capture
 from k12ta.store import (
@@ -22,6 +24,7 @@ from k12ta.store import (
     migrate,
     page_identities,
     page_identity_resolutions,
+    page_identity_schemas,
     quota,
     sessions,
     students,
@@ -100,44 +103,29 @@ def _seed_student_with_source(conn: sqlite3.Connection, student_id: str) -> str:
     return assignment_id
 
 
-def _seed_student_with_day_banner_source(conn: sqlite3.Connection, student_id: str) -> str:
-    """Same as `_seed_student_with_source`, but the content source has a configured
-    `page_identity_kind` -- the shape auto-resolution needs to have anything to
-    resolve against at all."""
-    students.insert_student(
-        conn,
-        students.StudentRow(
-            student_id=student_id,
-            display_name="Jahnvi",
-            grade_level=7,
-            state_code="CA",
-            coach_name="Coach",
-        ),
+def _seed_student_with_day_schema_source(conn: sqlite3.Connection, student_id: str) -> str:
+    """Same as `_seed_student_with_source`, but the content source has a
+    single-component identity schema ("day") -- the shape auto-resolution needs
+    to have anything to resolve against at all."""
+    assignment_id = _seed_student_with_source(conn, student_id)
+    page_identity_schemas.save_new_schema(
+        conn, student_id, "summer_bridge", [("day", "Day", "Day 5")]
     )
-    content.insert_content_source(
+    return assignment_id
+
+
+def _seed_student_with_section_and_day_schema_source(
+    conn: sqlite3.Connection, student_id: str
+) -> str:
+    """Same as above, but with the two-component composite schema -- Summer
+    Bridge's actual real shape (section + day), the whole reason a single-value
+    schema isn't safe to assume."""
+    assignment_id = _seed_student_with_source(conn, student_id)
+    page_identity_schemas.save_new_schema(
         conn,
-        content.ContentSourceRow(
-            student_id=student_id,
-            source_id="summer_bridge",
-            label="Summer bridge workbook",
-            kind="workbook",
-            subject="math",
-            has_answer_key=True,
-            graded_by_someone_else=False,
-            default_mode="full",
-            typical_session_minutes=30,
-            page_identity_kind="day_or_unit_banner",
-        ),
-    )
-    assignment_id = "summer_bridge:2026-08-12"
-    content.insert_assignment(
-        conn,
-        content.AssignmentRow(
-            student_id=student_id,
-            assignment_id=assignment_id,
-            source_id="summer_bridge",
-            created_at=TODAY.isoformat(),
-        ),
+        student_id,
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
     )
     return assignment_id
 
@@ -440,11 +428,12 @@ def test_capture_with_no_manual_page_number_resolves_via_page_identity(
     tmp_path: Path,
 ) -> None:
     """Scope B, the whole point: a student capture with no manual page_number now
-    resolves against a confirmed key-scan marker automatically, using whatever the
-    model read off this same photo -- closing the gap Scope A's proof left open."""
+    resolves against a confirmed key-scan composite automatically, using
+    whatever the model read off this same photo -- closing the gap Scope A's
+    proof left open."""
     conn = _migrated_connection()
     student_id = "s-jahnvi"
-    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    assignment_id = _seed_student_with_day_schema_source(conn, student_id)
     _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
     page_identities.upsert_identity(
         conn,
@@ -452,7 +441,61 @@ def test_capture_with_no_manual_page_number_resolves_via_page_identity(
             student_id=student_id,
             source_id="summer_bridge",
             page_number=5,
-            identifier_value="Day 3",
+            composite_key=build_composite_key(["Day 3"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T00:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 3",)}, confidence=0.97),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].expected_answer == "42"
+
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"resolved": 1}
+    # The pipeline loaded the source's real schema and passed it through, so the
+    # model was told exactly which component to look for -- not left guessing.
+    assert transcriber.identity_schemas_seen == [(("day", "Day 5"),)]
+
+
+def test_capture_resolves_a_composite_schema_where_a_single_component_would_be_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """The exact bug that started this redesign: "Day 1" alone is not globally
+    unique when day numbering resets per section. The composite disambiguates."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=89)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=89,
+            composite_key=build_composite_key(["Section 2", "Day 1"]),
+            schema_version=1,
             confirmed_at="2026-08-12T00:00:00+00:00",
         ),
     )
@@ -470,7 +513,7 @@ def test_capture_with_no_manual_page_number_resolves_via_page_identity(
             latency_ms=500,
             data_retention=DataRetention.PROVIDER_MAY_TRAIN,
             page_identity=PageIdentityExtraction(
-                candidates={"day_or_unit_banner": ("Day 3",)}, confidence=0.97
+                candidates={"section": ("Section 2",), "day": ("Day 1",)}, confidence=0.97
             ),
         )
     )
@@ -479,13 +522,8 @@ def test_capture_with_no_manual_page_number_resolves_via_page_identity(
         conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
     )
 
-    assert outcome.status is PipelineStatus.GRADED
     graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
     assert graded[0].outcome == "correct"
-    assert graded[0].expected_answer == "42"
-
-    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
-    assert counts == {"resolved": 1}
 
 
 def test_capture_with_conflicting_page_markers_refuses_every_item(
@@ -496,7 +534,7 @@ def test_capture_with_conflicting_page_markers_refuses_every_item(
     CONFLICTING_PAGE_MARKERS cause, not the generic UNKNOWN_PAGE."""
     conn = _migrated_connection()
     student_id = "s-jahnvi"
-    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    assignment_id = _seed_student_with_day_schema_source(conn, student_id)
     settings = _settings(tmp_path)
     transcriber = FakeTranscriber(
         result=TranscriptionResult(
@@ -514,7 +552,7 @@ def test_capture_with_conflicting_page_markers_refuses_every_item(
             latency_ms=500,
             data_retention=DataRetention.PROVIDER_MAY_TRAIN,
             page_identity=PageIdentityExtraction(
-                candidates={"day_or_unit_banner": ("Day 2", "Day 3")}, confidence=0.95
+                candidates={"day": ("Day 2", "Day 3")}, confidence=0.95
             ),
         )
     )
@@ -535,6 +573,49 @@ def test_capture_with_conflicting_page_markers_refuses_every_item(
     assert counts == {"conflicting": 1}
 
 
+def test_capture_with_one_of_two_components_missing_is_partial_page_markers(
+    tmp_path: Path,
+) -> None:
+    """Recoverable by re-photographing with the missing part in frame -- its own
+    cause, with the specific components seen/missing recorded so the message can
+    say so ("I can see the day but not the section"), not the generic
+    UNKNOWN_PAGE."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.PARTIAL_PAGE_MARKERS.value
+    assert graded[0].needs_human_detail is not None
+    detail = json.loads(graded[0].needs_human_detail)
+    assert detail == {"seen": ["Day"], "missing": ["Section"]}
+
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"partial": 1}
+
+
 def test_manual_page_number_override_skips_auto_resolution_entirely(
     tmp_path: Path,
 ) -> None:
@@ -544,7 +625,7 @@ def test_manual_page_number_override_skips_auto_resolution_entirely(
     page_identity_resolutions for it."""
     conn = _migrated_connection()
     student_id = "s-jahnvi"
-    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    assignment_id = _seed_student_with_day_schema_source(conn, student_id)
     _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
     settings = _settings(tmp_path)
     transcriber = FakeTranscriber(
@@ -562,7 +643,7 @@ def test_manual_page_number_override_skips_auto_resolution_entirely(
             # Conflicting candidates the auto-resolve path would refuse on --
             # irrelevant here because the manual override bypasses resolution.
             page_identity=PageIdentityExtraction(
-                candidates={"day_or_unit_banner": ("Day 2", "Day 3")}, confidence=0.95
+                candidates={"day": ("Day 2", "Day 3")}, confidence=0.95
             ),
         )
     )
@@ -583,3 +664,78 @@ def test_manual_page_number_override_skips_auto_resolution_entirely(
 
     counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
     assert counts == {}
+
+
+def test_capture_of_a_page_with_no_markers_at_all_refuses_honestly_as_unknown_page(
+    tmp_path: Path,
+) -> None:
+    """The source has a schema and confirmed mappings exist for other days -- but
+    this one photo (front matter, like the real "SECTION 1" pages that precede
+    "Day 1" in the actual workbook) shows no identity markers at all. That must
+    resolve as NO_MARKERS and fall through to the same honest UNKNOWN_PAGE cause
+    as "no page number supplied," never something else -- a schema being
+    configured must not change what an absent marker means."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_day_schema_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            composite_key=build_composite_key(["Day 3"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T00:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            # No day key at all -- the model saw nothing to report, not even an
+            # empty list for it. Front matter has no banner to read.
+            page_identity=PageIdentityExtraction(candidates={}, confidence=0.0),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value
+
+
+def test_capture_for_a_source_with_no_schema_at_all_refuses_as_unknown_page(
+    tmp_path: Path,
+) -> None:
+    """A source nobody has taught an identity schema to yet -- NO_SCHEMA, same
+    honest UNKNOWN_PAGE fallthrough. This source may legitimately never
+    auto-resolve, by design."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # no schema
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(result=_success_result(0.99))
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"no_schema": 1}

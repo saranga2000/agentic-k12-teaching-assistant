@@ -1,6 +1,6 @@
 ---
 id: transcribe_key_page
-version: 4
+version: 5
 covered_by: tests/test_key_page_transcriber.py
 ---
 
@@ -30,14 +30,28 @@ you see numbered answers before any "Day N/Page NN" heading on this page:
   one heading total, there is no step to infer from: leave those leading entries out
   of `entries` entirely rather than guessing one.
 
+A block's heading may carry more than one identity marker at once -- e.g. a
+prominent "Section 1" banner that stays the same for many pages, next to the "Day
+5/Page 17" heading that changes each block. Report every one you can see, not just
+the most prominent:
+
+{{SCHEMA_COMPONENTS}}
+If the list above is non-empty, report a value for exactly those markers, using
+exactly the names given, for every block -- ignore any other marker, even a
+legible one, if it is not in that list.
+
+If the list above is empty, no marker names are known yet: report every
+identifier-like marker you can see on each block's heading, each under your own
+short, descriptive name for it (e.g. `"day"`, `"section"`).
+
 For every answer on the page, emit one object with:
 - `page_number`: the workbook page number from that block's "Page NN" heading, as an
   integer
-- `identifier_value`: the "Day N" part of that same block's heading, as printed (e.g.
-  "Day 11") -- the prominent banner a student's own photo will show, which is a
-  different, more legible thing than the small printed page number. For an inferred
-  leading block (see above), use the inferred day ("Day 10" if you inferred page 31
-  for it), not the page number.
+- `identity`: an object mapping each identity marker (per the instructions above) to
+  its value for this block, as printed (e.g. `{"section": "Section 1", "day": "Day
+  11"}`). For an inferred leading block (see above), use the inferred day for the day
+  marker ("Day 10" if you inferred page 31 for it), and whatever other markers are
+  legible for that same block, not the page number.
 - `problem_number`: the number or label printed before the answer, as printed (e.g.
   "1", "4a")
 - `answer_text`: the answer exactly as printed, including units and fractions. `null`
@@ -49,9 +63,9 @@ For every answer on the page, emit one object with:
   - `"graph_or_table"` — the answer is a graph, drawing, or table, not text
 - `confidence`: 0.0 to 1.0, your probability that `answer_text` (or the ungradeable
   classification) is exactly correct
-- `identifier_confidence`: 0.0 to 1.0, your probability that `identifier_value` and
-  `page_number` are exactly correct. This is a separate judgment from `confidence` --
-  a block's heading can be smudged, cropped, or ambiguous even when the answer next
+- `identifier_confidence`: 0.0 to 1.0, your probability that every value in `identity`
+  and `page_number` is exactly correct. This is a separate judgment from `confidence`
+  -- a block's heading can be smudged, cropped, or ambiguous even when the answer next
   to it is perfectly legible, and the reverse also happens. Score them independently.
 
 Rules:
@@ -62,10 +76,18 @@ Rules:
 - Do not attempt to transcribe or summarize a graph or table's content. Mark it
   `graph_or_table` and stop there.
 
-Output shape:
+Output shape when specific markers are known to look for:
 
 ```
-{"entries": [{"page_number": 17, "identifier_value": "Day 5", "problem_number": "1",
+{"entries": [{"page_number": 17, "identity": {"section": "Section 1", "day": "Day 5"},
+              "problem_number": "1", "answer_text": "8 m", "ungradeable_reason": null,
+              "confidence": 0.95, "identifier_confidence": 0.9}]}
+```
+
+Output shape when no markers are known yet (report whatever you see, your own names):
+
+```
+{"entries": [{"page_number": 17, "identity": {"day": "Day 5"}, "problem_number": "1",
               "answer_text": "8 m", "ungradeable_reason": null, "confidence": 0.95,
               "identifier_confidence": 0.9}]}
 ```

@@ -97,14 +97,18 @@ class DelayedTranscriber:
     inner: FakeTranscriber | FakeKeyTranscriber
     delay_seconds: float = 0.4
 
-    def transcribe(self, arg: object, on_progress: object = None) -> object:
+    def transcribe(
+        self, arg: object, on_progress: object = None, identity_schema: object = ()
+    ) -> object:
         time.sleep(self.delay_seconds)
         # Only FakeKeyTranscriber's transcribe() accepts on_progress -- the student
         # capture flow isn't wired for progress reporting (out of scope; see
         # docs/ROADMAP.md's M2 note, this is the key-upload path's fix only).
         if isinstance(self.inner, FakeKeyTranscriber):
-            return self.inner.transcribe(arg, on_progress=on_progress)  # type: ignore[arg-type]
-        return self.inner.transcribe(arg)  # type: ignore[arg-type]
+            return self.inner.transcribe(  # type: ignore[arg-type]
+                arg, on_progress=on_progress, identity_schema=identity_schema
+            )
+        return self.inner.transcribe(arg, identity_schema=identity_schema)  # type: ignore[arg-type]
 
 
 def _free_port() -> int:

@@ -11,14 +11,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-_IDENTITY_KINDS = frozenset(
-    {"day_or_unit_banner", "printed_worksheet_code", "printed_page_number", "unique_problem_ids"}
-)
-"""Same four kinds docs/ROADMAP.md's page-identity discussion names, and
-`k12ta.transcribe.vision_llm`'s own `_IDENTITY_KINDS` -- kept as a separate literal
-here rather than imported, since `k12ta.evals` labels ground truth and must not
-depend on the extraction code it will eventually be used to score."""
-
 
 class CaptureMethod(Enum):
     """How a labelled page's image reached evals/fixtures/pages/."""
@@ -142,6 +134,11 @@ def _parse_layout(page: dict[str, object], label_path: Path) -> tuple[Layout, Sp
 
 
 def _parse_page_identity(page: dict[str, object], label_path: Path) -> dict[str, tuple[str, ...]]:
+    """Component names are open-ended, not drawn from a fixed enum -- a
+    composite identity schema is parent-defined per source (Summer Bridge's
+    "section"/"day", RSM's "chapter"/"problem_range"), so ground truth must
+    accept whatever a real source's schema actually calls its markers. Only the
+    shape (a list of non-empty strings per name) is validated."""
     if "page_identity" not in page:
         return {}
     raw = page["page_identity"]
@@ -149,11 +146,6 @@ def _parse_page_identity(page: dict[str, object], label_path: Path) -> dict[str,
         raise FixtureValidationError(f"{label_path}: 'page_identity' must be an object")
     result: dict[str, tuple[str, ...]] = {}
     for kind, values in raw.items():
-        if kind not in _IDENTITY_KINDS:
-            allowed = ", ".join(sorted(_IDENTITY_KINDS))
-            raise FixtureValidationError(
-                f"{label_path}: page_identity kind {kind!r} must be one of {allowed}"
-            )
         if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
             raise FixtureValidationError(
                 f"{label_path}: page_identity[{kind!r}] must be a list of non-empty strings"

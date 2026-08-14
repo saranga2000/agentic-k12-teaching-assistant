@@ -20,12 +20,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
 from k12ta.grading.key_grader import CONFIDENCE_FLOOR
+from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm import build_vision_model
 from k12ta.pipeline.key_ingestion import (
     KeyIngestionOutcome,
@@ -40,6 +41,7 @@ from k12ta.store import (
     migrate,
     page_identities,
     page_identity_resolutions,
+    page_identity_schemas,
     students,
 )
 from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber, VisionLLMKeyTranscriber
@@ -47,20 +49,6 @@ from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber, VisionLLMKey
 QUOTA_EXHAUSTED_MESSAGE = (
     "Today's reading budget is used up. Try again tomorrow, or raise K12TA_DAILY_REQUEST_LIMIT."
 )
-# Plain-language options for the enrollment screen's page-identity picker, not the
-# internal enum names a parent has no reason to know -- ordered for the select,
-# generic "printed page number" last since the other three are more legible/reliable
-# per-source options where they apply (docs/ROADMAP.md's page-identity discussion).
-# The empty string is "not sure yet": a real, re-selectable choice that leaves
-# page_identity_kind NULL and produces k12ta.grading.page_identity's honest
-# NOT_FOUND refusal, never a guessed kind.
-PAGE_IDENTITY_KIND_LABELS: dict[str, str] = {
-    "": "Not sure yet",
-    "day_or_unit_banner": "Day or unit number shown on the page",
-    "printed_worksheet_code": "Worksheet code in the corner",
-    "unique_problem_ids": "Chapter and problem numbers",
-    "printed_page_number": "Printed page number",
-}
 NO_STUDENTS_MESSAGE = (
     "No students yet. Run `python scripts/seed_dev_data.py` against this server's K12TA_DATA_DIR."
 )
@@ -184,9 +172,17 @@ def enrollment_detail(
     identity_counts = {
         "resolved": counts.get("resolved", 0),
         "below_floor": counts.get("below_floor", 0),
-        "not_found": counts.get("not_found", 0),
+        "no_mapping": counts.get("no_mapping", 0),
         "conflicting": counts.get("conflicting", 0),
+        "partial": counts.get("partial", 0),
+        "no_markers": counts.get("no_markers", 0),
+        "no_schema": counts.get("no_schema", 0),
     }
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    current_version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+    stale_mapping_count = page_identities.count_stale_for_source(
+        conn, student_id, source_id, current_version
+    )
     return templates.TemplateResponse(
         request,
         "enrollment.html",
@@ -194,26 +190,130 @@ def enrollment_detail(
             "student": student,
             "source": source,
             "identity_counts": identity_counts,
-            "page_identity_kind_labels": PAGE_IDENTITY_KIND_LABELS,
+            "schema": schema,
+            "stale_mapping_count": stale_mapping_count,
         },
     )
 
 
-@app.post("/keys/{student_id}/{source_id}/identity-kind")
-def submit_identity_kind(
+_BLANK_SCHEMA_ROWS = 3
+"""How many empty rows the standalone schema editor offers for adding new
+components, beyond whatever the source's current schema already has."""
+
+
+def _normalize_component_name(raw: str) -> str:
+    """A stable internal key derived from whatever a parent types (the standalone
+    editor) or whatever the model reported (the confirm screen's discovery panel,
+    already close to this shape) -- lowercase, non-alphanumeric runs collapsed to
+    a single underscore, so it's always safe to use in a composite key and an
+    HTML field name."""
+    return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+
+
+@app.get("/keys/{student_id}/{source_id}/identity-schema", response_class=HTMLResponse)
+def identity_schema_screen(
+    request: Request,
     student_id: str,
     source_id: str,
-    page_identity_kind: str = Form(""),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """Revisable any time, not a one-shot commitment -- pre-filled with whatever
+    the current schema already has, plus blank rows to add more."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    rows = [(c.component_name, c.label, c.example) for c in schema]
+    rows += [("", "", "")] * _BLANK_SCHEMA_ROWS
+    return templates.TemplateResponse(
+        request, "identity_schema.html", {"student": student, "source": source, "rows": rows}
+    )
+
+
+def _parse_standalone_schema_form(data: dict[str, list[str]]) -> list[tuple[str, str, str | None]]:
+    count = int(_get(data, "component_count", "0"))
+    components = []
+    for j in range(count):
+        raw_name = _get(data, f"component_name_{j}").strip()
+        if not raw_name:
+            continue
+        name = _normalize_component_name(raw_name)
+        if not name:
+            continue
+        label = _get(data, f"component_label_{j}").strip() or raw_name
+        example = _get(data, f"component_example_{j}").strip() or None
+        components.append((name, label, example))
+    return components
+
+
+@app.post("/keys/{student_id}/{source_id}/identity-schema")
+async def submit_identity_schema(
+    request: Request,
+    student_id: str,
+    source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> RedirectResponse:
-    """The only intended way `content_sources.page_identity_kind` is ever set after
-    a source is first configured -- never by hand-editing the database. Rejects an
-    unrecognised value outright rather than silently storing junk `k12ta.grading
-    .page_identity.resolve` would then be handed as a source's configured kind."""
+    """The only intended way a source's identity schema is set after a first
+    scan -- never by hand-editing the database. A submission with no non-blank
+    rows leaves the schema exactly as it was; it does not clear it."""
     _require_student_and_source(conn, student_id, source_id)
-    if page_identity_kind not in PAGE_IDENTITY_KIND_LABELS:
-        raise HTTPException(400, "unrecognised page_identity_kind")
-    content.set_page_identity_kind(conn, student_id, source_id, page_identity_kind or None)
+    data = parse_qs((await request.body()).decode())
+    components = _parse_standalone_schema_form(data)
+    if components:
+        page_identity_schemas.save_new_schema(conn, student_id, source_id, components)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+
+
+@app.get("/keys/{student_id}/{source_id}/identity/manual-entry", response_class=HTMLResponse)
+def manual_mapping_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """A bare page_number + one field per current schema component, no photo --
+    the backfill mechanism for a mapping you've verified against the physical
+    book yourself (e.g. a day-to-page table checked against the workbook),
+    without spending quota re-scanning a key page already on file just to
+    re-derive what you already know."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    return templates.TemplateResponse(
+        request,
+        "manual_entry.html",
+        {"student": student, "source": source, "schema": schema},
+    )
+
+
+@app.post("/keys/{student_id}/{source_id}/identity/manual-entry")
+async def submit_manual_mapping(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Always recorded `source="manual"` -- this route exists precisely for
+    values a parent supplies from their own knowledge, never the model's, so the
+    eval must never count one of these as a model success."""
+    _require_student_and_source(conn, student_id, source_id)
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    if not schema:
+        raise HTTPException(400, "no identity schema configured for this source yet")
+    data = parse_qs((await request.body()).decode())
+    page_number_raw = _get(data, "page_number").strip()
+    values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
+    if page_number_raw.isdigit() and all(values):
+        version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+        page_identities.upsert_identity(
+            conn,
+            page_identities.PageIdentityRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=int(page_number_raw),
+                composite_key=build_composite_key(values),
+                schema_version=version,
+                confirmed_at=datetime.now(UTC).isoformat(),
+                source="manual",
+            ),
+        )
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
@@ -230,11 +330,47 @@ def upload_screen(
     )
 
 
+def _discover_identity_components(entries: tuple[KeyPageEntry, ...]) -> list[tuple[str, str]]:
+    """Union of every identity component name seen across this scan's entries, in
+    order of first appearance, each paired with the first non-empty example value
+    found for it -- what the "set up this workbook's page identity" panel offers a
+    parent to choose from, when no schema exists yet for this source."""
+    seen: dict[str, str] = {}
+    for entry in entries:
+        for name, value in entry.identity_values.items():
+            if name not in seen and value:
+                seen[name] = value
+    return list(seen.items())
+
+
+_BLANK_PANEL_ROWS = 2
+"""How many empty rows the confirm screen's discovery panel offers beyond
+whatever this scan discovered, so a parent can name a marker by hand even when
+the model found nothing at all -- the manual-entry fallback generalized to
+"nothing on the page," not just "the model was unsure"."""
+
+
+def _discovery_panel_rows(
+    discovered: list[tuple[str, str]],
+) -> list[tuple[int, str, str, str]]:
+    """(panel_row_index, name, label, example) for the confirm screen's
+    discovery panel and its matching per-row identity fields -- discovered
+    candidates first (name/label pre-filled, editable), then blank rows. Row
+    index, not name, is what per-row identity fields key off of here (unlike
+    the targeted-schema case): a name a parent is about to define for the first
+    time has no history of a matching field name to align with yet."""
+    rows = [(j, name, name.capitalize(), example) for j, (name, example) in enumerate(discovered)]
+    start = len(discovered)
+    rows += [(start + k, "", "", "") for k in range(_BLANK_PANEL_ROWS)]
+    return rows
+
+
 def _render_upload_result(
     request: Request,
     student: students.StudentRow,
     source: content.ContentSourceRow,
     outcome: KeyIngestionOutcome,
+    conn: sqlite3.Connection,
 ) -> str:
     """The same three outcomes submit_upload has always rendered, as a raw HTML
     string rather than a Response -- called from inside the streaming generator
@@ -260,6 +396,17 @@ def _render_upload_result(
     photo_data_uri = "data:image/jpeg;base64," + base64.b64encode(
         outcome.normalized_image_bytes
     ).decode("ascii")
+    schema = page_identity_schemas.get_current_schema(conn, student.student_id, source.source_id)
+    # A schema's own components when one exists, read by stable component_name.
+    # Otherwise (first scan for this source) a discovery panel offering whatever
+    # this scan found, plus blank rows to name a marker by hand -- one submit
+    # both teaches the schema and confirms this scan's mapping, no separate
+    # schema-only step. The panel's rows are keyed by position, not name: a
+    # marker a parent is about to define for the first time has no history of a
+    # matching per-row field name to align with yet.
+    panel_rows = (
+        [] if schema else _discovery_panel_rows(_discover_identity_components(outcome.entries))
+    )
     return templates.get_template("confirm.html").render(
         request=request,
         student=student,
@@ -268,6 +415,8 @@ def _render_upload_result(
         photo_data_uri=photo_data_uri,
         ungradeable_reasons=UNGRADEABLE_REASONS,
         identifier_confidence_floor=CONFIDENCE_FLOOR,
+        schema=schema,
+        panel_rows=panel_rows,
     )
 
 
@@ -292,13 +441,20 @@ def _stream_upload_response(
     plain sync code, not async def, for the same reason submit_upload already was.
     """
     updates: queue.Queue[tuple[str, object]] = queue.Queue()
+    schema = page_identity_schemas.get_current_schema(conn, student.student_id, source.source_id)
+    identity_schema = [(c.component_name, c.example) for c in schema]
 
     def on_progress(chars: int) -> None:
         updates.put(("progress", chars))
 
     def worker() -> None:
         outcome = transcribe_key_page(
-            conn, settings, lambda: get_transcriber(settings), image_bytes, on_progress=on_progress
+            conn,
+            settings,
+            lambda: get_transcriber(settings),
+            image_bytes,
+            on_progress=on_progress,
+            identity_schema=identity_schema,
         )
         updates.put(("outcome", outcome))
 
@@ -312,7 +468,7 @@ def _stream_upload_response(
             continue
         outcome = payload
         assert isinstance(outcome, KeyIngestionOutcome)
-        html = _render_upload_result(request, student, source, outcome)
+        html = _render_upload_result(request, student, source, outcome, conn)
         yield json.dumps({"type": "final", "html": html}) + "\n"
         break
     thread.join()
@@ -344,40 +500,85 @@ def submit_upload(
     )
 
 
-def _identifier_source(data: dict[str, list[str]], i: int, identifier_value: str) -> str:
-    """ "model" when the parent left the transcriber's own extraction unchanged,
-    "manual" when they typed or corrected it -- see `page_identities.PageIdentityRow
-    .source`'s docstring for why this distinction is kept. `identifier_value_original_i`
-    is a hidden field carrying whatever the model originally extracted (empty string
-    if it extracted nothing), round-tripped through `confirm.html` unedited."""
-    original = _get(data, f"identifier_value_original_{i}").strip()
-    return "model" if identifier_value == original else "manual"
+def _parse_discovery_panel_submission(
+    data: dict[str, list[str]],
+) -> list[tuple[int, str, str, str | None]]:
+    """The confirm screen's discovery panel, shown only when no schema exists yet
+    (see `_discovery_panel_rows`) -- which rows the parent kept (checked, with a
+    non-blank name -- covers both a kept discovered candidate and a blank row
+    named by hand), in DOM order, becoming the new schema's component order.
+    `panel_row_index` is kept alongside each component because that index, not
+    the (just-defined) component name, is what this same submission's per-row
+    identity fields are keyed by -- see `_confirm_identity_composite`. [] if
+    nothing was kept, in which case nothing about identity is saved this round."""
+    count = int(_get(data, "schema_count", "0"))
+    components = []
+    for j in range(count):
+        if _get(data, f"schema_include_{j}") != "1":
+            continue
+        raw_name = _get(data, f"schema_name_{j}").strip()
+        if not raw_name:
+            continue
+        name = _normalize_component_name(raw_name)
+        if not name:
+            continue
+        label = _get(data, f"schema_label_{j}").strip() or raw_name
+        example = _get(data, f"schema_example_{j}").strip() or None
+        components.append((j, name, label, example))
+    return components
 
 
-def _confirm_row(
+def _confirm_answer_row(
     data: dict[str, list[str]], i: int
-) -> tuple[str, int | None, str | None, str | None, str, str]:
-    """Row i's (problem_number, page_number, answer_text, ungradeable_reason,
-    identifier_value, identifier_source) from `confirm.html`'s submitted form, or
-    ("", None, None, None, "", "model") when the row is an unused slot or has
-    nothing valid to store (neither an answer nor "ungradeable" -- storing it
-    would violate answer_key_entries' CHECK constraint anyway)."""
+) -> tuple[str, int | None, str | None, str | None]:
+    """Row i's (problem_number, page_number, answer_text, ungradeable_reason)
+    from `confirm.html`'s submitted form, or ("", None, None, None) when the row
+    is an unused slot or has nothing valid to store (neither an answer nor
+    "ungradeable" -- storing it would violate answer_key_entries' CHECK
+    constraint anyway)."""
     problem_number = _get(data, f"problem_number_{i}").strip()
     if not problem_number:
-        return "", None, None, None, "", "model"
+        return "", None, None, None
     page_number_raw = _get(data, f"page_number_{i}").strip()
     if not page_number_raw.isdigit():
-        return "", None, None, None, "", "model"
+        return "", None, None, None
     page_number = int(page_number_raw)
-    identifier_value = _get(data, f"identifier_value_{i}").strip()
-    identifier_source = _identifier_source(data, i, identifier_value)
     if _get(data, f"ungradeable_{i}") == "1":
         reason = _get(data, f"ungradeable_reason_{i}").strip() or UNGRADEABLE_REASONS[0]
-        return problem_number, page_number, None, reason, identifier_value, identifier_source
+        return problem_number, page_number, None, reason
     answer_text = _get(data, f"answer_text_{i}").strip()
     if answer_text:
-        return problem_number, page_number, answer_text, None, identifier_value, identifier_source
-    return "", None, None, None, "", "model"
+        return problem_number, page_number, answer_text, None
+    return "", None, None, None
+
+
+def _confirm_identity_composite(
+    data: dict[str, list[str]], i: int, field_keys: list[str]
+) -> tuple[str | None, str]:
+    """Row i's composite identity key, built in schema order, and its source
+    ("model"/"manual") -- or (None, "model") if any component is missing a
+    value for this row, since a partial composite can never match a future
+    capture's fully-populated one anyway. `field_keys` is the schema's
+    component_names (targeted mode -- stable, existed before this submit) or
+    the discovery panel's row indices as strings (this submit only defined
+    them, so they have no other identity yet) -- either way, the field to read
+    is `identity_{key}_{i}` / `identity_{key}_original_{i}`. "manual" if any
+    single component's submitted value differs from what was originally
+    extracted for it (or was typed from scratch, i.e. the original was empty)
+    -- one hand-corrected component is enough to make the whole row a manual
+    entry, not a model success, same reasoning as
+    `page_identities.PageIdentityRow.source`'s docstring."""
+    values = []
+    any_edited = False
+    for key in field_keys:
+        value = _get(data, f"identity_{key}_{i}").strip()
+        original = _get(data, f"identity_{key}_original_{i}").strip()
+        if value != original:
+            any_edited = True
+        values.append(value)
+    if not all(values):
+        return None, "model"
+    return build_composite_key(values), ("manual" if any_edited else "model")
 
 
 @app.post("/keys/{student_id}/{source_id}/confirm", response_class=HTMLResponse)
@@ -397,37 +598,59 @@ async def submit_confirm(
     row_count = int(_get(data, "row_count", "0"))
     now = datetime.now(UTC).isoformat()
 
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    # Targeted mode reads by the schema's own stable component_name; discovery
+    # mode (first scan, no schema until this very submit) reads by the panel's
+    # row index instead, since a name just defined here has no other identity
+    # yet for a per-row field to have been rendered under -- see
+    # `_discovery_panel_rows` and `_confirm_identity_composite`.
+    field_keys: list[str] = []
+    if not schema:
+        # First scan for this source: the confirm screen's discovery panel, if
+        # the parent kept anything from it, teaches the schema and confirms this
+        # same scan's mapping in one submit -- no separate schema-only step.
+        new_components = _parse_discovery_panel_submission(data)
+        if new_components:
+            page_identity_schemas.save_new_schema(
+                conn,
+                student_id,
+                source_id,
+                [(name, label, example) for _, name, label, example in new_components],
+            )
+            schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+            field_keys = [str(j) for j, *_ in new_components]
+    else:
+        field_keys = [c.component_name for c in schema]
+    schema_version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+
     saved = 0
     conflicts = []
     for i in range(row_count):
-        (
-            problem_number,
-            page_number,
-            answer_text,
-            ungradeable_reason,
-            identifier_value,
-            identifier_source,
-        ) = _confirm_row(data, i)
+        problem_number, page_number, answer_text, ungradeable_reason = _confirm_answer_row(data, i)
         if not problem_number or page_number is None:
             continue
 
-        if identifier_value:
-            # The day/marker -> page_number mapping a student capture later
-            # resolves against. Populated here, not at upload time: this is the
-            # parent's *confirmed* page_number, which may differ from whatever
-            # the model originally guessed (same reasoning as answer_key_entries
-            # itself -- the confirmed value is what gets stored).
-            page_identities.upsert_identity(
-                conn,
-                page_identities.PageIdentityRow(
-                    student_id=student_id,
-                    source_id=source_id,
-                    page_number=page_number,
-                    identifier_value=identifier_value,
-                    confirmed_at=now,
-                    source=identifier_source,
-                ),
-            )
+        if schema:
+            composite_key, identity_source = _confirm_identity_composite(data, i, field_keys)
+            if composite_key:
+                # The composite -> page_number mapping a student capture later
+                # resolves against. Populated here, not at upload time: this is
+                # the parent's *confirmed* page_number, which may differ from
+                # whatever the model originally guessed (same reasoning as
+                # answer_key_entries itself -- the confirmed value is what gets
+                # stored).
+                page_identities.upsert_identity(
+                    conn,
+                    page_identities.PageIdentityRow(
+                        student_id=student_id,
+                        source_id=source_id,
+                        page_number=page_number,
+                        composite_key=composite_key,
+                        schema_version=schema_version,
+                        confirmed_at=now,
+                        source=identity_source,
+                    ),
+                )
 
         existing = answer_keys.get_entry(conn, student_id, source_id, page_number, problem_number)
         if existing is None:

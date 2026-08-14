@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from k12ta.llm.base import (
@@ -20,7 +21,7 @@ from k12ta.llm.base import (
     VisionModel,
 )
 from k12ta.prompts import load_prompt
-from k12ta.transcribe._shared import strip_code_fence
+from k12ta.transcribe._shared import build_identity_prompt, strip_code_fence
 from k12ta.transcribe.base import (
     FailureKind,
     PageIdentityExtraction,
@@ -29,13 +30,6 @@ from k12ta.transcribe.base import (
 )
 
 _MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
-
-_IDENTITY_KINDS = frozenset(
-    {"day_or_unit_banner", "printed_worksheet_code", "printed_page_number", "unique_problem_ids"}
-)
-"""Every identity kind docs/ROADMAP.md's page-identity discussion names. A kind
-the model invents outside this set is dropped, not carried through as noise --
-same reasoning as dropping a non-dict item in `_parse_items`."""
 
 # Adapter exceptions that mean "the run should stop" or "this page failed for a
 # reason unrelated to its content" — everything else falls to UNREADABLE, the
@@ -70,10 +64,20 @@ class VisionLLMTranscriber:
     def request_count(self) -> int:
         return self._vision_model.request_count
 
-    def transcribe(self, image_path: str) -> TranscriptionResult:
+    def transcribe(
+        self, image_path: str, identity_schema: Sequence[tuple[str, str | None]] = ()
+    ) -> TranscriptionResult:
+        """`identity_schema` is this capture's source's current identity
+        components, as `(component_name, example)` pairs in schema position
+        order -- empty when the source has no schema yet (discovery mode: the
+        model reports whatever it can see, under its own names). Built into the
+        prompt fresh per call (see `_shared.build_identity_prompt`), never baked
+        in at construction, since which components to look for is a fact about
+        the source being read, not this transcriber instance."""
         try:
             image_bytes, mime_type = _read_image(Path(image_path))
-            response = self._vision_model.generate(self._prompt, image_bytes, mime_type)
+            prompt = build_identity_prompt(self._prompt, identity_schema)
+            response = self._vision_model.generate(prompt, image_bytes, mime_type)
             payload = _load_payload(response.text)
             items = _parse_items(payload)
             page_identity = _parse_page_identity(payload.get("page_identity"))
@@ -133,13 +137,17 @@ def _parse_page_identity(raw: object) -> PageIdentityExtraction:
     """Missing or malformed `page_identity` is not an error -- a page with no
     legible marker at all is a real, expected shape, not a parse failure -- it
     just means no candidates, exactly the same "absent means nothing extracted"
-    default `PageIdentityExtraction()` already carries."""
+    default `PageIdentityExtraction()` already carries.
+
+    Candidate names are open-ended, not one of a fixed set -- discovery mode has
+    the model invent its own names, targeted mode uses a source's schema names,
+    and this layer carries whatever string key came back either way; only
+    `confidence` (a sibling field, never a candidate) is excluded."""
     if not isinstance(raw, dict):
         return PageIdentityExtraction()
     candidates: dict[str, tuple[str, ...]] = {}
-    for kind in _IDENTITY_KINDS:
-        raw_values = raw.get(kind)
-        if not isinstance(raw_values, list):
+    for kind, raw_values in raw.items():
+        if kind == "confidence" or not isinstance(kind, str) or not isinstance(raw_values, list):
             continue
         values = tuple(v for v in raw_values if isinstance(v, str) and v)
         if values:

@@ -8,6 +8,7 @@ the daily quota gate, checked before anything is saved.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -26,6 +27,7 @@ from k12ta.store import (
     captures,
     content,
     page_identity_resolutions,
+    page_identity_schemas,
     quota,
     sessions,
 )
@@ -81,21 +83,25 @@ def process_capture(
     `page_number` is the only thing that lets an item be looked up against a
     confirmed answer key at all. It is optional and, when omitted (the normal
     capture path -- callers with a manual override are tests and the Scope A demo
-    path only), this function calls `k12ta.grading.page_identity.resolve` itself
-    using whatever identity markers `result.page_identity` extracted from this same
-    photo, and records the outcome via `k12ta.store.page_identity_resolutions` --
-    see docs/ROADMAP.md's page-identity discussion. A resolution that isn't
-    RESOLVED still falls through to the same honest `NeedsHumanCause.UNKNOWN_PAGE`
-    as before, never a guess; CONFLICTING is the one exception, refused explicitly
-    as `NeedsHumanCause.CONFLICTING_PAGE_MARKERS` before `decide` ever runs, because
-    `decide` itself never produces that cause. Grading itself goes through
-    `k12ta.grading.needs_human.decide`, which is the only place that decides an
-    outcome and, when it's NEEDS_HUMAN, why. Do not add a fallback here that solves
-    a problem independently when no key entry covers it. Keyless grading is M6,
-    explicitly gated on a measured precision number before it ships behind a flag --
-    it does not exist yet, and "no key for this page" must never quietly become
-    "the model's best guess instead." That guess is exactly the failure this system
-    is built to avoid: a confident wrong grade.
+    path only), this function loads the source's current identity schema
+    (`k12ta.store.page_identity_schemas`), passes it to the transcriber so
+    extraction knows which named markers to look for, then calls
+    `k12ta.grading.page_identity.resolve` using whatever identity candidates
+    `result.page_identity` extracted from this same photo, and records the
+    outcome via `k12ta.store.page_identity_resolutions` -- see docs/ROADMAP.md's
+    page-identity discussion. A resolution that isn't RESOLVED still falls
+    through to the same honest `NeedsHumanCause.UNKNOWN_PAGE` as before, never a
+    guess; CONFLICTING and PARTIAL are the two exceptions, refused explicitly as
+    `NeedsHumanCause.CONFLICTING_PAGE_MARKERS`/`PARTIAL_PAGE_MARKERS` before
+    `decide` ever runs, because `decide` itself never produces either cause.
+    Grading itself goes through `k12ta.grading.needs_human.decide`, which is the
+    only place that decides an outcome and, when it's NEEDS_HUMAN, why. Do not
+    add a fallback here that solves a problem independently when no key entry
+    covers it. Keyless grading is M6, explicitly gated on a measured precision
+    number before it ships behind a flag -- it does not exist yet, and "no key
+    for this page" must never quietly become "the model's best guess instead."
+    That guess is exactly the failure this system is built to avoid: a confident
+    wrong grade.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -107,9 +113,14 @@ def process_capture(
     )
     quota.record_request(conn, today)
 
+    assignment = content.get_assignment(conn, student_id, assignment_id)
+    assert assignment is not None, f"assignment {assignment_id} vanished after ingest"
+    schema = page_identity_schemas.get_current_schema(conn, student_id, assignment.source_id)
+    identity_schema = tuple((c.component_name, c.example) for c in schema)
+
     try:
         transcriber = get_transcriber()
-        result = transcriber.transcribe(capture_row.image_path)
+        result = transcriber.transcribe(capture_row.image_path, identity_schema=identity_schema)
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
         logger.info(
@@ -145,22 +156,18 @@ def process_capture(
             ),
         )
 
-    assignment = content.get_assignment(conn, student_id, assignment_id)
-    assert assignment is not None, f"assignment {assignment_id} vanished after ingest"
-
     now = datetime.now(UTC).isoformat()
     resolved_page_number = page_number
     conflicting_markers = False
+    partial_detail: str | None = None
     if page_number is None:
         # Only auto-resolve when the caller didn't already supply a page number --
         # a manual override (tests, the Scope A demo path) always wins and is never
         # second-guessed by this photo's own identity extraction.
-        source = content.get_content_source(conn, student_id, assignment.source_id)
         resolution = page_identity.resolve(
             conn,
             student_id,
             assignment.source_id,
-            source.page_identity_kind if source is not None else None,
             result.page_identity.candidates,
             result.page_identity.confidence,
         )
@@ -182,6 +189,14 @@ def process_capture(
             # NeedsHumanCause.CONFLICTING_PAGE_MARKERS's docstring), so every item on
             # this photo is marked needs-human here, before decide() ever runs.
             conflicting_markers = True
+        elif resolution.outcome is page_identity.PageIdentityOutcome.PARTIAL:
+            # Same carve-out as CONFLICTING, for the same reason -- decide() never
+            # produces PARTIAL_PAGE_MARKERS either. Which components were seen and
+            # missing is decided here, once, and stored as a fact for the renderer
+            # to interpolate, never re-derived from the schema at render time.
+            partial_detail = json.dumps(
+                {"seen": list(resolution.seen_labels), "missing": list(resolution.missing_labels)}
+            )
 
     session_id = str(uuid4())
     sessions.insert_session(
@@ -195,11 +210,18 @@ def process_capture(
         ),
     )
     for item in result.items:
+        detail = None
         if conflicting_markers:
             decision = GradeDecision(
                 outcome=GradeOutcome.NEEDS_HUMAN,
                 needs_human_cause=NeedsHumanCause.CONFLICTING_PAGE_MARKERS,
             )
+        elif partial_detail is not None:
+            decision = GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN,
+                needs_human_cause=NeedsHumanCause.PARTIAL_PAGE_MARKERS,
+            )
+            detail = partial_detail
         else:
             key_entry = (
                 answer_keys.get_entry(
@@ -226,6 +248,7 @@ def process_capture(
                     if decision.needs_human_cause is not None
                     else None
                 ),
+                needs_human_detail=detail,
             ),
         )
 

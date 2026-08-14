@@ -1,4 +1,5 @@
-"""k12ta.store.page_identities (the day/code -> page_number mapping) and
+"""k12ta.store.page_identity_schemas (the per-source, versioned, ordered component
+list), k12ta.store.page_identities (the composite-key -> page_number mapping), and
 k12ta.store.page_identity_resolutions (the resolution-outcome log). No test hits
 the network.
 """
@@ -7,7 +8,15 @@ from __future__ import annotations
 
 import sqlite3
 
-from k12ta.store import content, db, migrate, page_identities, page_identity_resolutions, students
+from k12ta.store import (
+    content,
+    db,
+    migrate,
+    page_identities,
+    page_identity_resolutions,
+    page_identity_schemas,
+    students,
+)
 
 
 def _migrated_connection() -> sqlite3.Connection:
@@ -39,19 +48,116 @@ def _seed_marcus_with_summer_bridge(conn: sqlite3.Connection) -> None:
             graded_by_someone_else=False,
             default_mode="full",
             typical_session_minutes=30,
-            page_identity_kind="day_or_unit_banner",
         ),
     )
 
 
-# --- page_identities -----------------------------------------------------------
+# --- page_identity_schemas -------------------------------------------------------
 
 
-def test_get_page_number_for_unknown_marker_is_none() -> None:
+def test_a_source_with_no_schema_has_version_zero_and_no_components() -> None:
     conn = _migrated_connection()
     _seed_marcus_with_summer_bridge(conn)
 
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11") is None
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 0
+    assert page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge") == ()
+
+
+def test_saving_the_first_schema_is_version_one_in_position_order() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    version = page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+
+    assert version == 1
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 1
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in schema] == ["section", "day"]
+    assert [c.label for c in schema] == ["Section", "Day"]
+    assert [c.example for c in schema] == ["Section 1", "Day 5"]
+    assert [c.position for c in schema] == [0, 1]
+
+
+def test_editing_a_schema_adds_a_new_version_without_touching_the_old_one() -> None:
+    """A schema is revisable, not a one-shot commitment -- editing it must not
+    mutate or delete the version that was already in use."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    second_version = page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+
+    assert second_version == 2
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 2
+    current = page_identity_schemas.get_current_schema(conn, "s-marcus", "summer_bridge")
+    assert [c.component_name for c in current] == ["section", "day"]
+    # Version 1 still exists, untouched, in the table -- just no longer "current".
+    old_rows = conn.execute(
+        "SELECT component_name FROM page_identity_schemas "
+        "WHERE student_id = ? AND source_id = ? AND schema_version = 1",
+        ("s-marcus", "summer_bridge"),
+    ).fetchall()
+    assert [row[0] for row in old_rows] == ["day"]
+
+
+def test_schemas_are_scoped_to_student_and_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-priya",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    assert page_identity_schemas.get_current_version(conn, "s-priya", "summer_bridge") == 0
+    assert page_identity_schemas.get_current_schema(conn, "s-priya", "summer_bridge") == ()
+
+
+# --- page_identities (composite key) ---------------------------------------------
+
+
+def test_get_page_number_for_unknown_composite_is_none() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 11", 1)
+        is None
+    )
 
 
 def test_upsert_then_get_round_trips() -> None:
@@ -64,25 +170,83 @@ def test_upsert_then_get_round_trips() -> None:
             student_id="s-marcus",
             source_id="summer_bridge",
             page_number=33,
-            identifier_value="Day 11",
+            composite_key="Section 1\x1fDay 11",
+            schema_version=1,
             confirmed_at="2026-08-14T08:00:00+00:00",
         ),
     )
 
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11") == 33
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 11", 1)
+        == 33
+    )
 
 
-def test_reconfirming_the_same_marker_updates_rather_than_duplicates() -> None:
-    """A parent re-scanning an overlapping key page shouldn't produce two
-    conflicting mappings for the same marker -- the later confirm wins, matching
-    answer_keys.upsert_entry's own reasoning."""
+def test_a_mapping_confirmed_under_an_older_schema_version_is_invisible_but_not_deleted() -> None:
+    """The explicit requirement: a schema change must flag an existing mapping for
+    review, never drop it or silently reinterpret it under the new shape."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=33,
+            composite_key="Day 11",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    # The schema was edited (e.g. "section" added), bumping the current version to 2.
+    # A lookup at the new version must not find the old-version mapping...
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11", 2) is None
+    # ...but the row itself is still there, untouched, at its original version.
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11", 1) == 33
+    count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
+    assert count == 1
+
+
+def test_count_stale_counts_only_rows_below_the_current_version() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key="Section 1\x1fDay 2",
+            schema_version=2,
+            confirmed_at="2026-08-14T08:05:00+00:00",
+        ),
+    )
+
+    assert page_identities.count_stale_for_source(conn, "s-marcus", "summer_bridge", 2) == 1
+    assert page_identities.count_stale_for_source(conn, "s-marcus", "summer_bridge", 1) == 0
+
+
+def test_reconfirming_the_same_composite_updates_rather_than_duplicates() -> None:
     conn = _migrated_connection()
     _seed_marcus_with_summer_bridge(conn)
     row = page_identities.PageIdentityRow(
         student_id="s-marcus",
         source_id="summer_bridge",
         page_number=33,
-        identifier_value="Day 11",
+        composite_key="Day 11",
+        schema_version=1,
         confirmed_at="2026-08-14T08:00:00+00:00",
     )
     page_identities.upsert_identity(conn, row)
@@ -91,12 +255,13 @@ def test_reconfirming_the_same_marker_updates_rather_than_duplicates() -> None:
         student_id="s-marcus",
         source_id="summer_bridge",
         page_number=35,  # a correction, not a new day
-        identifier_value="Day 11",
+        composite_key="Day 11",
+        schema_version=1,
         confirmed_at="2026-08-14T08:05:00+00:00",
     )
     page_identities.upsert_identity(conn, corrected)
 
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11") == 35
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11", 1) == 35
     count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
     assert count == 1
 
@@ -111,22 +276,20 @@ def test_upsert_defaults_source_to_model() -> None:
             student_id="s-marcus",
             source_id="summer_bridge",
             page_number=33,
-            identifier_value="Day 11",
+            composite_key="Day 11",
+            schema_version=1,
             confirmed_at="2026-08-14T08:00:00+00:00",
         ),
     )
 
     row = conn.execute(
-        "SELECT source FROM page_identities WHERE student_id = ? AND identifier_value = ?",
+        "SELECT source FROM page_identities WHERE student_id = ? AND composite_key = ?",
         ("s-marcus", "Day 11"),
     ).fetchone()
     assert row[0] == "model"
 
 
 def test_upsert_persists_manual_source_and_a_correction_can_overwrite_it() -> None:
-    """A parent correcting a confidently-extracted-but-wrong identifier must be
-    recorded as manual -- the model being confident does not make it right, and
-    the eval must not count the correction as a model success."""
     conn = _migrated_connection()
     _seed_marcus_with_summer_bridge(conn)
     page_identities.upsert_identity(
@@ -135,7 +298,8 @@ def test_upsert_persists_manual_source_and_a_correction_can_overwrite_it() -> No
             student_id="s-marcus",
             source_id="summer_bridge",
             page_number=33,
-            identifier_value="Day 11",
+            composite_key="Day 11",
+            schema_version=1,
             confirmed_at="2026-08-14T08:00:00+00:00",
             source="model",
         ),
@@ -147,7 +311,8 @@ def test_upsert_persists_manual_source_and_a_correction_can_overwrite_it() -> No
             student_id="s-marcus",
             source_id="summer_bridge",
             page_number=35,
-            identifier_value="Day 11",
+            composite_key="Day 11",
+            schema_version=1,
             confirmed_at="2026-08-14T08:05:00+00:00",
             source="manual",
         ),
@@ -155,7 +320,7 @@ def test_upsert_persists_manual_source_and_a_correction_can_overwrite_it() -> No
 
     row = conn.execute(
         "SELECT page_number, source FROM page_identities "
-        "WHERE student_id = ? AND identifier_value = ?",
+        "WHERE student_id = ? AND composite_key = ?",
         ("s-marcus", "Day 11"),
     ).fetchone()
     assert row[0] == 35
@@ -195,13 +360,14 @@ def test_lookup_is_scoped_to_student_and_source() -> None:
             student_id="s-marcus",
             source_id="summer_bridge",
             page_number=33,
-            identifier_value="Day 11",
+            composite_key="Day 11",
+            schema_version=1,
             confirmed_at="2026-08-14T08:00:00+00:00",
         ),
     )
 
-    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11") == 33
-    assert page_identities.get_page_number(conn, "s-priya", "summer_bridge", "Day 11") is None
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 11", 1) == 33
+    assert page_identities.get_page_number(conn, "s-priya", "summer_bridge", "Day 11", 1) is None
 
 
 # --- page_identity_resolutions ---------------------------------------------------
@@ -223,9 +389,12 @@ def test_count_outcomes_groups_by_outcome() -> None:
         ("resolved", 33),
         ("resolved", 35),
         ("below_floor", None),
-        ("not_found", None),
-        ("not_found", None),
+        ("no_mapping", None),
+        ("no_mapping", None),
         ("conflicting", None),
+        ("partial", None),
+        ("no_markers", None),
+        ("no_schema", None),
     ]
     for i, (outcome, page_number) in enumerate(rows):
         page_identity_resolutions.insert_resolution(
@@ -242,7 +411,15 @@ def test_count_outcomes_groups_by_outcome() -> None:
 
     counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
 
-    assert counts == {"resolved": 2, "below_floor": 1, "not_found": 2, "conflicting": 1}
+    assert counts == {
+        "resolved": 2,
+        "below_floor": 1,
+        "no_mapping": 2,
+        "conflicting": 1,
+        "partial": 1,
+        "no_markers": 1,
+        "no_schema": 1,
+    }
 
 
 def test_counts_are_scoped_to_student_and_source() -> None:

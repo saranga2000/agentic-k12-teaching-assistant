@@ -17,7 +17,6 @@ from k12ta.llm.base import (
     TransientError,
     VisionResponse,
 )
-from k12ta.prompts import load_prompt
 from k12ta.transcribe.base import FailureKind
 from k12ta.transcribe.key_page import VisionLLMKeyTranscriber
 
@@ -66,27 +65,45 @@ def _transcriber(
     )
 
 
-def test_sends_loaded_prompt_and_bytes_as_jpeg() -> None:
+def test_sends_bytes_as_jpeg_and_the_base_prompt_with_no_placeholder_left() -> None:
     model = FakeVisionModel()
 
     _transcriber(model).transcribe(b"already-normalized-jpeg-bytes")
 
     assert model.last_call is not None
     prompt, image_bytes, mime_type = model.last_call
-    assert prompt == load_prompt("transcribe_key_page")
+    assert "{{SCHEMA_COMPONENTS}}" not in prompt
+    assert "Return JSON only" in prompt  # stable base-prompt text, unaffected
     assert image_bytes == b"already-normalized-jpeg-bytes"
     assert mime_type == "image/jpeg"
 
 
-def test_parses_identifier_value_alongside_page_number() -> None:
-    """Scope B: the "Day N" banner text, discarded until now, is what lets a
-    student capture later resolve back to this page_number -- see
-    k12ta.store.page_identities and k12ta.grading.page_identity."""
+def test_sends_targeted_schema_components_in_the_prompt_when_given() -> None:
+    model = FakeVisionModel()
+
+    _transcriber(model).transcribe(
+        b"x", identity_schema=[("day", "Day 5"), ("section", "Section 1")]
+    )
+
+    assert model.last_call is not None
+    prompt, _, _ = model.last_call
+    assert '"day"' in prompt
+    assert "Day 5" in prompt
+    assert '"section"' in prompt
+    assert "Section 1" in prompt
+
+
+def test_parses_identity_values_alongside_page_number() -> None:
+    """Scope B rework: a block's identity is a composite, not a single "Day N"
+    string -- Summer Bridge needs section AND day together. `identity` is a dict,
+    keyed by whatever component names were asked for (targeted mode) or whatever
+    the model chose (discovery mode) -- see k12ta.store.page_identities and
+    k12ta.grading.page_identity."""
     payload = {
         "entries": [
             {
                 "page_number": 17,
-                "identifier_value": "Day 5",
+                "identity": {"section": "Section 1", "day": "Day 5"},
                 "problem_number": "1",
                 "answer_text": "8 m",
                 "ungradeable_reason": None,
@@ -98,10 +115,10 @@ def test_parses_identifier_value_alongside_page_number() -> None:
 
     result = _transcriber(model).transcribe(b"x")
 
-    assert result.entries[0].identifier_value == "Day 5"
+    assert result.entries[0].identity_values == {"section": "Section 1", "day": "Day 5"}
 
 
-def test_missing_identifier_value_defaults_to_empty_string_not_an_error() -> None:
+def test_missing_identity_defaults_to_empty_dict_not_an_error() -> None:
     payload = {
         "entries": [
             {
@@ -117,7 +134,34 @@ def test_missing_identifier_value_defaults_to_empty_string_not_an_error() -> Non
 
     result = _transcriber(model).transcribe(b"x")
 
-    assert result.entries[0].identifier_value == ""
+    assert result.entries[0].identity_values == {}
+
+
+def test_identity_drops_non_string_values_and_non_dict_identity() -> None:
+    payload = {
+        "entries": [
+            {
+                "page_number": 17,
+                "identity": {"day": "Day 5", "junk": 42, "also_junk": None},
+                "problem_number": "1",
+                "answer_text": "8 m",
+                "confidence": 0.95,
+            },
+            {
+                "page_number": 18,
+                "identity": "not a dict",
+                "problem_number": "2",
+                "answer_text": "9 m",
+                "confidence": 0.95,
+            },
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(b"x")
+
+    assert result.entries[0].identity_values == {"day": "Day 5"}
+    assert result.entries[1].identity_values == {}
 
 
 def test_parses_identifier_confidence_separately_from_answer_confidence() -> None:
@@ -128,7 +172,7 @@ def test_parses_identifier_confidence_separately_from_answer_confidence() -> Non
         "entries": [
             {
                 "page_number": 17,
-                "identifier_value": "Day 5",
+                "identity": {"day": "Day 5"},
                 "problem_number": "1",
                 "answer_text": "8 m",
                 "ungradeable_reason": None,
@@ -150,7 +194,7 @@ def test_missing_identifier_confidence_defaults_to_zero_not_an_error() -> None:
         "entries": [
             {
                 "page_number": 17,
-                "identifier_value": "Day 5",
+                "identity": {"day": "Day 5"},
                 "problem_number": "1",
                 "answer_text": "8 m",
                 "ungradeable_reason": None,

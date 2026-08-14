@@ -6,27 +6,63 @@
 
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/confirm">
   <input type="hidden" name="row_count" value="{{ entries|length }}">
+
+  {% if not schema %}
+  <div class="identity-schema-editor">
+    <p>This workbook's page-identity markers haven't been set up yet. Pick which of
+       these, together, tell pages apart -- or name one by hand below if nothing
+       here looks right:</p>
+    <input type="hidden" name="schema_count" value="{{ panel_rows|length }}">
+    {% for j, name, label, example in panel_rows %}
+    <label class="schema-component-row">
+      <input type="checkbox" name="schema_include_{{ j }}" value="1" checked>
+      <input type="text" name="schema_name_{{ j }}" value="{{ name }}" placeholder="internal name, e.g. day">
+      <input type="text" name="schema_label_{{ j }}" value="{{ label }}" placeholder="label, e.g. Day">
+      <input type="hidden" name="schema_example_{{ j }}" value="{{ example }}">
+      {% if example %}<span class="schema-example">e.g. "{{ example }}"</span>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   <table>
     <tr>
       <th>page</th><th>problem</th><th>answer</th><th>ungradeable</th><th>reason</th>
     </tr>
     {% for entry in entries %}
+    {% set row = loop.index0 %}
     {% set unconfirmed = entry.identifier_confidence < identifier_confidence_floor %}
     <tr>
       <td>
         <input
           type="text"
-          name="page_number_{{ loop.index0 }}"
+          name="page_number_{{ row }}"
           value="{{ entry.page_number }}"
           class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
         >
+        {% if schema %}
+        {% for component in schema %}
         <input
           type="text"
-          name="identifier_value_{{ loop.index0 }}"
-          value="{{ entry.identifier_value }}"
+          name="identity_{{ component.component_name }}_{{ row }}"
+          value="{{ entry.identity_values.get(component.component_name, '') }}"
+          placeholder="{{ component.label }}"
           class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
         >
-        <input type="hidden" name="identifier_value_original_{{ loop.index0 }}" value="{{ entry.identifier_value }}">
+        <input type="hidden" name="identity_{{ component.component_name }}_original_{{ row }}" value="{{ entry.identity_values.get(component.component_name, '') }}">
+        {% endfor %}
+        {% else %}
+        {% for j, name, label, example in panel_rows %}
+        <input
+          type="text"
+          name="identity_{{ j }}_{{ row }}"
+          value="{{ entry.identity_values.get(name, '') if name else '' }}"
+          placeholder="{{ label or 'marker ' ~ (j + 1) }}"
+          class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
+        >
+        <input type="hidden" name="identity_{{ j }}_original_{{ row }}" value="{{ entry.identity_values.get(name, '') if name else '' }}">
+        {% endfor %}
+        {% endif %}
         {% if unconfirmed %}
         <span class="unconfirmed-flag">unconfirmed — check page &amp; identifier</span>
         {% endif %}

@@ -84,7 +84,12 @@ class _SlowProgressTranscriber:
     updates: tuple[int, ...]
     delay_seconds: float = 0.5
 
-    def transcribe(self, image_bytes: bytes, on_progress: Callable[[int], None]) -> object:
+    def transcribe(
+        self,
+        image_bytes: bytes,
+        on_progress: Callable[[int], None],
+        identity_schema: object = (),
+    ) -> object:
         for chars in self.updates:
             time.sleep(self.delay_seconds)
             on_progress(chars)
@@ -171,9 +176,9 @@ def test_upload_through_working_state_confirm_to_a_real_answer_key_row(
 
 def _result_with_unresolved_identifier() -> KeyPageResult:
     """The model read the answer fine but couldn't read the page heading at all --
-    a real, not contrived, shape: a thumb over the corner, a faded banner. Zero
-    identifier_confidence, empty identifier_value, exactly what a parent must be
-    able to fill in by hand rather than the system silently refusing forever."""
+    a real, not contrived, shape: a thumb over the corner, a faded banner. No
+    identity markers at all, exactly what a parent must be able to name and fill
+    in by hand rather than the system silently refusing forever."""
     return KeyPageResult(
         entries=(
             KeyPageEntry(
@@ -182,7 +187,7 @@ def _result_with_unresolved_identifier() -> KeyPageResult:
                 answer_text="8 m",
                 ungradeable_reason=None,
                 confidence=0.95,
-                identifier_value="",
+                identity_values={},
                 identifier_confidence=0.0,
             ),
         ),
@@ -199,10 +204,11 @@ def test_manually_entered_identifier_lands_in_page_identities_as_manual(
     keys_server: LiveServer,
     stub_key_transcriber: FakeKeyTranscriber,
 ) -> None:
-    """The manual-identifier fallback end to end: a block the model couldn't
-    identify shows an editable, unconfirmed field on the confirm screen; a
-    parent typing a value into it and saving must produce a real page_identities
-    row recorded as "manual", not "model" -- see
+    """The manual-identifier fallback end to end, generalized to "nothing at
+    all": no schema exists and the model found no markers, so the confirm
+    screen's discovery panel offers only blank rows; a parent naming one by hand
+    and filling in its value must produce a real page_identities row recorded
+    as "manual", not "model" -- see
     k12ta.store.page_identities.PageIdentityRow.source's docstring."""
     _seed_student_with_source(keys_server.connection())
     stub_key_transcriber.result = _result_with_unresolved_identifier()
@@ -211,19 +217,19 @@ def test_manually_entered_identifier_lands_in_page_identities_as_manual(
     page.locator("#photo-input").set_input_files(str(KEY_PAGE_DENSE_IMAGE))
     page.click("#upload-button")
 
-    identifier_field = page.locator('input[name="identifier_value_0"]')
-    expect(identifier_field).to_be_visible(timeout=5000)
-    # The unresolved block is flagged, and the parent can see why they're being
-    # asked to fill this field in rather than trusting a silent guess.
-    expect(page.locator(".unconfirmed-flag").first).to_be_visible()
+    name_field = page.locator('input[name="schema_name_0"]')
+    expect(name_field).to_be_visible(timeout=5000)
+    name_field.fill("day")
+    page.locator('input[name="schema_label_0"]').fill("Day")
 
-    identifier_field.fill("Day 5")
+    identity_field = page.locator('input[name="identity_0_0"]')
+    identity_field.fill("Day 5")
     page.click('button:has-text("Save")')
     expect(page.locator(".message")).to_contain_text("Saved 1 entry")
 
     conn = keys_server.connection()
-    assert page_identities.get_page_number(conn, _STUDENT_ID, _SOURCE_ID, "Day 5") == 27
+    assert page_identities.get_page_number(conn, _STUDENT_ID, _SOURCE_ID, "Day 5", 1) == 27
     row = conn.execute(
-        "SELECT source FROM page_identities WHERE identifier_value = 'Day 5'"
+        "SELECT source FROM page_identities WHERE composite_key = 'Day 5'"
     ).fetchone()
     assert row[0] == "manual"

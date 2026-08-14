@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Page identity — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>Page identity — {{ source.label }}</h1>
+
+<p class="message">
+  Which printed markers, together, tell one page of this source apart from another?
+  {% if schema %}Editing this creates a new version — mappings confirmed under the
+  old one stay as they were, but stop resolving automatically until re-confirmed.
+  {% else %}A student capture can't tell pages apart until at least one marker is set up here.
+  {% endif %}
+</p>
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">
+  <input type="hidden" name="component_count" value="{{ rows|length }}">
+  <table>
+    <tr><th>internal name</th><th>label (what you'll see)</th><th>example</th></tr>
+    {% for name, label, example in rows %}
+    <tr>
+      <td><input type="text" name="component_name_{{ loop.index0 }}" value="{{ name }}"></td>
+      <td><input type="text" name="component_label_{{ loop.index0 }}" value="{{ label }}"></td>
+      <td><input type="text" name="component_example_{{ loop.index0 }}" value="{{ example or '' }}"></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="actions">
+    <button type="submit">Save</button>
+  </div>
+</form>
+{% endblock %}
