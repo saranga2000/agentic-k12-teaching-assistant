@@ -48,24 +48,25 @@ real schoolwork through the same adapter.
 
 ## M2. Vertical slice: photo in, graded page out
 
-A capture page rendered as a blank screen when the database had no students, because
-no screen had an empty state and the existing test only asserted a 200 status code —
-it passed against a page with nothing a person could act on. The framing-guide overlay
-meant to show one-page-vs-two-page examples before the shutter turned out to be
-impossible on iOS: a `capture="environment"` file input hands the whole screen to the
-native camera, which has no room for an overlay. Guidance moved before capture (a
-static guide, shown before the camera opens) and validation moved after (a reject
-gate on the uploaded photo), rather than attempting a live overlay iOS cannot host.
+A capture page rendered as a blank black screen when the database had no students:
+no screen had an empty state, and the only test asserted a 200 status code, not
+whether a person could act on anything.
 
-Before the answer-key store existed, every graded problem was told "I don't have an
-answer key for this one yet" unconditionally — correct by construction, since no key
-existed anywhere yet, but nothing in the pipeline actually checked; the same code
-would have kept saying it after a key was added, silently wrong. Fixed once
-`answer_key_entries` existed, by making cause determination an explicit decision
-(`k12ta.grading.needs_human`) that looks up a real key entry instead of asserting its
-absence.
+The framing-guide overlay specified in M2.2 was impossible on iOS: a
+`capture="environment"` file input hands the whole screen to the native camera, with
+no room for an overlay. Guidance moved before capture; validation after.
 
-A file-editing tool silently truncated a template file; a stale cached read of that
-same file, taken instead of a fresh terminal read, showed the file as intact and let
-the truncation stand uncaught through a further edit. Fixed by treating an edit
-tool's own success message as unverified until a terminal command re-reads the file.
+Every graded problem was told "I don't have an answer key for this one" for items no
+key had ever been looked up for — an assertion never checked, in exactly the place
+the design forbids it. Fixed by making cause determination explicit.
+
+Seven of nine fixture photographs were two-page spreads despite careful photography.
+Spreads are the common case, not an edge case; the eval harness and grading pipeline
+were both rebuilt around that fact.
+
+The page-identity design broke on the first real curriculum: Summer Bridge has three
+sections, each with Days 1-20, so the day banner alone is not unique. About 70% of
+that work was reworked a day after shipping — cheap only because it was a day old.
+
+Discovery mode did not spontaneously report the section banner on a real photo. The
+manual parent fallback is load-bearing, not a backstop.
