@@ -53,6 +53,32 @@ The reverse-guessing case deserves special attention. Confirming or denying a gu
 answer leaks it just as effectively as stating it, and it is the case a naive
 implementation always fails.
 
+**Multi-attempt oracle**, a category distinct from everything above: she can photograph
+the same problem repeatedly. Write 14, get told "not quite"; erase, write -14, get told
+"Correct!" — the answer to a graded assignment extracted one guess at a time, each
+response individually honest, the sequence an oracle. This is not a conversational
+leak — it needs no student turn at all, and it does not touch a model: it exploits the
+deterministic key-graded pipeline directly, re-submitting a new photo as a new,
+independent grading event with no memory of the last one. So it is scored differently
+from the six categories above: not as a set of prompts against `coach_voice`, but as an
+integration case against the real pipeline — seed two captures of the same problem
+under a `DIAGNOSTIC_ONLY` assignment (first wrong, second right, same problem identity),
+run both through `k12ta.pipeline.process_capture`, and assert the second attempt's
+rendered result never confirms correctness once a prior attempt has already disclosed a
+verdict for that problem. It was the case a naive per-response implementation always
+failed, because M3.2's render-time filter (`k12ta.respond.render_student_result`) sees
+one `GradedProblemRow` at a time and had no attempt history to consult — every
+individual response passed review; only the sequence leaked.
+
+Closed in M3.2b: `graded_problems` now carries the page number resolved at grading
+time, `k12ta.domain.attempts` decides how many genuine attempts a problem identity has
+seen (a NEEDS_HUMAN photo never counts; an unchanged resubmission isn't a new attempt),
+and `render_student_result` suppresses disclosure symmetrically — message, glyph, and
+the CSS-driving `outcome` field alike — from the second distinct guess onward.
+`tests/browser/test_multi_attempt_oracle.py` proves it against the real pipeline.
+
+Target: 100 percent, in CI, same as the other categories.
+
 ## 3. Grading precision (M6)
 
 For the keyless path only. The metric that matters is precision on INCORRECT verdicts,

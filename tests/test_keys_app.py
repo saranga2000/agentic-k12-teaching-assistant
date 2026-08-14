@@ -29,6 +29,7 @@ from k12ta.llm.base import DataRetention
 from k12ta.store import (
     answer_key_audit,
     answer_keys,
+    captures,
     content,
     db,
     migrate,
@@ -36,6 +37,7 @@ from k12ta.store import (
     page_identity_resolutions,
     page_identity_schemas,
     quota,
+    sessions,
     students,
 )
 from k12ta.transcribe.base import FailureKind
@@ -483,6 +485,148 @@ def test_enrollment_detail_links_to_the_identity_schema_editor(
 
     assert response.status_code == 200
     assert 'href="/keys/s-marcus/summer_bridge/identity-schema"' in response.text
+
+
+def _seed_diagnostic_only_source_with_attempts(
+    conn: sqlite3.Connection, *, second_answer: str
+) -> None:
+    """A restricted-mode source with one problem attempted twice (a genuinely
+    new second guess) -- the scenario the "Repeated attempts" panel exists for."""
+    _seed_marcus(conn)
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="rsm",
+            label="RSM",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=True,
+            default_mode="full",
+            typical_session_minutes=45,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-rsm",
+            source_id="rsm",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    for capture_id, session_id, captured_at, answer in (
+        ("c-1", "sess-1", "2026-08-12T08:00:00+00:00", "18"),
+        ("c-2", "sess-2", "2026-08-12T08:10:00+00:00", second_answer),
+    ):
+        captures.insert_page_capture(
+            conn,
+            captures.PageCaptureRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                assignment_id="a-rsm",
+                captured_at=captured_at,
+                image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+        captures.insert_problem(
+            conn,
+            captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                problem_id="1",
+                prompt_text="2x + 5 = 43",
+                student_answer_raw=answer,
+                transcription_confidence=0.98,
+            ),
+        )
+        sessions.insert_session(
+            conn,
+            sessions.SessionRow(
+                student_id="s-marcus",
+                session_id=session_id,
+                assignment_id="a-rsm",
+                started_at=captured_at,
+                ended_at=captured_at,
+            ),
+        )
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id=session_id,
+                capture_id=capture_id,
+                problem_id="1",
+                outcome="correct" if answer == "19" else "incorrect",
+                grader_confidence=0.98,
+                expected_answer="19",
+                page_number=5,
+            ),
+        )
+
+
+def test_enrollment_detail_shows_repeated_attempts_for_a_restricted_mode_source(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_diagnostic_only_source_with_attempts(conn, second_answer="19")
+
+    response = client.get("/keys/s-marcus/rsm")
+
+    assert response.status_code == 200
+    assert "Repeated attempts" in response.text
+    assert "Page 5, problem 1: 2 attempts" in response.text
+
+
+def test_enrollment_detail_says_no_repeated_attempts_yet_with_only_one_attempt(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="rsm",
+            label="RSM",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=True,
+            default_mode="full",
+            typical_session_minutes=45,
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/rsm")
+
+    assert response.status_code == 200
+    assert "Repeated attempts" in response.text
+    assert "No repeated attempts yet" in response.text
+
+
+def test_enrollment_detail_omits_repeated_attempts_for_a_full_mode_source(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """FULL mode discloses the answer on attempt one -- a repeat count there
+    isn't the signal it is under a restricted mode, so the section is absent
+    entirely rather than shown empty."""
+    _seed_marcus_with_source(conn)  # default_mode="full", graded_by_someone_else=False
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "Repeated attempts" not in response.text
+
+
+def test_enrollment_detail_never_shows_an_unchanged_resubmission_as_repeated(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_diagnostic_only_source_with_attempts(conn, second_answer="18")  # unchanged
+
+    response = client.get("/keys/s-marcus/rsm")
+
+    assert response.status_code == 200
+    assert "No repeated attempts yet" in response.text
 
 
 def test_identity_schema_screen_for_a_source_with_no_schema_shows_blank_rows(

@@ -233,6 +233,26 @@ restructure, which does exactly this for the two sections above that don't exist
 Done when: the leakage eval passes at 100 percent and is in CI. This is the milestone
 that makes the project defensible to another parent, another school, or an interviewer.
 
+**Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
+the schema linked two captures as attempts at the same underlying homework problem --
+`process_capture` mints a fresh `session_id` and `capture_id` on every photo, and
+`graded_problems`' primary key (`student_id, session_id, capture_id, problem_id`)
+carried no cross-session identity, so a student could photograph a wrong answer, get
+told "not quite," then re-photograph a different, correct guess and get told
+"Correct!" -- each response honest alone, the sequence an oracle for a graded
+assignment's real answer (see `docs/EVALS.md`'s "multi-attempt oracle"). M3.2b persists
+the page number `process_capture` already resolves onto `graded_problems`
+(`0010_graded_problem_page_number.sql`), making `(source_id, page_number, problem_id)`
+a real cross-capture identity, and `k12ta.domain.attempts` decides how many genuine
+attempts that identity has seen -- NEEDS_HUMAN never counts, and a resubmission with an
+unchanged answer (photographing a whole page again after revising only one problem on
+it) is not a new attempt. `k12ta.respond.render_student_result` suppresses disclosure
+symmetrically from the second genuinely distinct guess onward, in message, glyph, *and*
+CSS-driving `outcome` alike, since a response that varies with correctness by any
+channel is itself the oracle. `k12ta.keys`'s enrollment screen surfaces a plain
+per-problem attempt count to the parent (never the student) wherever the mode
+withholds the answer.
+
 ## M4. Mastery model in the loop
 **4 evenings. This is the headline chapter of the repo.**
 

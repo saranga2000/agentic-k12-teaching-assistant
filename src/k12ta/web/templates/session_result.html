@@ -8,13 +8,7 @@
     <li class="problem outcome-{{ item.outcome | replace('_', '-') }}">
       <div class="prompt">{{ item.prompt_text }}</div>
       <div class="answer">You wrote: {{ item.student_answer_raw }}</div>
-      {% if item.outcome == "correct" %}
-      <div class="outcome-label"><span class="outcome-glyph">✓</span> Correct!</div>
-      {% elif item.outcome == "incorrect" %}
-      <div class="outcome-label"><span class="outcome-glyph">✎</span> Not quite — let's look at this one together.</div>
-      {% else %}
-      <div class="outcome-label"><span class="outcome-glyph">{{ item.needs_human_glyph }}</span> {{ item.needs_human_reason }}</div>
-      {% endif %}
+      <div class="outcome-label"><span class="outcome-glyph">{{ item.glyph }}</span> {{ item.message }}</div>
     </li>
     {% endfor %}
   </ul>
@@ -39,5 +33,10 @@
   .outcome-incorrect .outcome-glyph { color: var(--attention); }
   .outcome-needs-human { background: var(--neutral-bg); border: 2px dashed var(--neutral); }
   .outcome-needs-human .outcome-glyph { color: var(--neutral); }
+  /* Neutral like needs-human on purpose: a repeated attempt's true correctness
+     must not leak through the border colour any more than through the message
+     text. */
+  .outcome-repeat { background: var(--neutral-bg); border: 2px dashed var(--neutral); }
+  .outcome-repeat .outcome-glyph { color: var(--neutral); }
 </style>
 {% endblock %}

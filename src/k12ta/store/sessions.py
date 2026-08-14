@@ -45,6 +45,11 @@ class GradedProblemRow:
     outcome: str
     grader_confidence: float
     expected_answer: str | None = None
+    page_number: int | None = None
+    """The page identity resolved at grading time, for k12ta.domain.attempts to
+    recognise a later capture as another attempt at this same problem. NULL for
+    most NEEDS_HUMAN causes; always set for CORRECT/INCORRECT, since
+    k12ta.grading.answer_keys.get_entry cannot produce a verdict without one."""
     needs_human_cause: str | None = None
     needs_human_detail: str | None = None
     """Small JSON object, e.g. {"seen": ["Day"], "missing": ["Section"]}, using a
@@ -63,12 +68,12 @@ def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> No
         """
         INSERT INTO graded_problems
             (student_id, session_id, capture_id, problem_id, outcome, expected_answer,
-             needs_human_cause, needs_human_detail, grader_confidence,
+             page_number, needs_human_cause, needs_human_detail, grader_confidence,
              diagnosis_misconception_id, diagnosis_explanation, diagnosis_error_location,
              diagnosis_skill_ids)
         VALUES
             (:student_id, :session_id, :capture_id, :problem_id, :outcome, :expected_answer,
-             :needs_human_cause, :needs_human_detail, :grader_confidence,
+             :page_number, :needs_human_cause, :needs_human_detail, :grader_confidence,
              :diagnosis_misconception_id, :diagnosis_explanation, :diagnosis_error_location,
              :diagnosis_skill_ids)
         """,
@@ -92,3 +97,49 @@ def _row_to_graded(row: sqlite3.Row) -> GradedProblemRow:
     data = dict(row)
     data["diagnosis_skill_ids"] = tuple(json.loads(data["diagnosis_skill_ids"]))
     return GradedProblemRow(**data)
+
+
+@dataclass(frozen=True)
+class GradedAttemptRow:
+    """One graded_problems row, widened with the identity and timing fields
+    needed to recognise it as another attempt at the same problem as a row from
+    a different capture. k12ta.domain.attempts is where that recognition
+    happens -- this is only the fetch, no interpretation."""
+
+    page_number: int
+    problem_id: str
+    outcome: str
+    student_answer_raw: str
+    captured_at: str
+    capture_id: str
+
+
+def list_graded_attempts_for_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> list[GradedAttemptRow]:
+    """Every graded_problems row for this student and source whose page number
+    resolved, across every session and capture, in chronological order. Rows
+    that never resolved a page are excluded rather than grouped under a shared
+    NULL key, which would incorrectly merge unrelated unresolved-page problems.
+    Both k12ta.respond (per problem, at render time) and k12ta.keys (per source,
+    for the parent-visible repeat count) group this by (page_number, problem_id)
+    themselves -- grouping is plain data plumbing, not a repository concern, so
+    it doesn't live here (see tests/test_store_scoping.py: every function in
+    this module is conn-first and student_id-scoped, which a pure grouping
+    helper with neither would fail)."""
+    cur = conn.execute(
+        """
+        SELECT gp.page_number AS page_number, gp.problem_id AS problem_id,
+               gp.outcome AS outcome, p.student_answer_raw AS student_answer_raw,
+               pc.captured_at AS captured_at, gp.capture_id AS capture_id
+        FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        JOIN problems p ON p.student_id = gp.student_id AND p.capture_id = gp.capture_id
+            AND p.problem_id = gp.problem_id
+        WHERE gp.student_id = ? AND a.source_id = ? AND gp.page_number IS NOT NULL
+        ORDER BY gp.page_number, gp.problem_id, pc.captured_at, gp.capture_id
+        """,
+        (student_id, source_id),
+    )
+    return [GradedAttemptRow(**dict(row)) for row in cur.fetchall()]

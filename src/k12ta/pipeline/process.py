@@ -243,6 +243,7 @@ def process_capture(
                 outcome=decision.outcome.value,
                 grader_confidence=item.confidence,
                 expected_answer=decision.expected_answer,
+                page_number=resolved_page_number,
                 needs_human_cause=(
                     decision.needs_human_cause.value
                     if decision.needs_human_cause is not None

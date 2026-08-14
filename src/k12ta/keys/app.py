@@ -26,6 +26,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
+from k12ta.domain.attempts import PastAttempt, attempt_number
+from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.grading.key_grader import CONFIDENCE_FLOOR
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm import build_vision_model
@@ -43,6 +45,7 @@ from k12ta.store import (
     page_identities,
     page_identity_resolutions,
     page_identity_schemas,
+    sessions,
     students,
 )
 from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber, VisionLLMKeyTranscriber
@@ -310,6 +313,19 @@ async def submit_enrollment_setup(
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
+def _group_by_problem(
+    rows: list[sessions.GradedAttemptRow],
+) -> dict[tuple[int, str], list[sessions.GradedAttemptRow]]:
+    """Groups without reordering -- rows must already be chronological per
+    identity, as list_graded_attempts_for_source returns them. Plain data
+    plumbing, not a repository concern, so it lives at the call site rather
+    than in k12ta.store (see tests/test_store_scoping.py)."""
+    grouped: dict[tuple[int, str], list[sessions.GradedAttemptRow]] = {}
+    for row in rows:
+        grouped.setdefault((row.page_number, row.problem_id), []).append(row)
+    return grouped
+
+
 @app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
 def enrollment_detail(
     request: Request,
@@ -337,6 +353,33 @@ def enrollment_detail(
     stale_mapping_count = page_identities.count_stale_for_source(
         conn, student_id, source_id, current_version
     )
+
+    # Repeated attempts on the same problem are a signal worth a parent seeing
+    # only where the coach is withholding the answer -- in FULL mode the answer
+    # is disclosed on attempt one, so a repeat count there means nothing. See
+    # k12ta.domain.attempts: a plain count, not the guesses themselves, and
+    # never shown to the student (k12ta.web never touches this data).
+    mode = resolve_mode(
+        source_default_mode=FeedbackMode(source.default_mode),
+        work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+    )
+    rules = rules_for(mode)
+    repeated_problems: list[dict[str, int | str]] = []
+    if not rules.reveal_final_answer:
+        history = _group_by_problem(
+            sessions.list_graded_attempts_for_source(conn, student_id, source_id)
+        )
+        for (page_number, problem_id), attempts in sorted(history.items()):
+            past = [
+                PastAttempt(outcome=a.outcome, student_answer_raw=a.student_answer_raw)
+                for a in attempts[:-1]
+            ]
+            count = attempt_number(past, attempts[-1].student_answer_raw)
+            if count > 1:
+                repeated_problems.append(
+                    {"page_number": page_number, "problem_id": problem_id, "attempt_count": count}
+                )
+
     return templates.TemplateResponse(
         request,
         "enrollment.html",
@@ -346,6 +389,8 @@ def enrollment_detail(
             "identity_counts": identity_counts,
             "schema": schema,
             "stale_mapping_count": stale_mapping_count,
+            "show_repeated_attempts": not rules.reveal_final_answer,
+            "repeated_problems": repeated_problems,
         },
     )
 

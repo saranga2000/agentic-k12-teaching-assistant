@@ -269,6 +269,69 @@ def test_round_trip_of_a_session_with_graded_problems() -> None:
     assert trace.review_count == 1
 
 
+def test_list_graded_attempts_for_source_joins_across_sessions_and_excludes_unresolved_pages() -> (
+    None
+):
+    conn = _migrated_connection()
+    _seed_marcus(conn)  # session sess-1 / capture c-1 / problem "1", no page_number set
+
+    # A second capture, same source, same problem identity (page_number=3), a
+    # genuine second attempt.
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-2",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:10:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-2",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="20",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-2",
+            assignment_id="a-1",
+            started_at="2026-08-12T08:10:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-2",
+            capture_id="c-2",
+            problem_id="1",
+            outcome="incorrect",
+            grader_confidence=0.97,
+            expected_answer="19",
+            page_number=3,
+        ),
+    )
+
+    rows = sessions.list_graded_attempts_for_source(conn, "s-marcus", "summer_bridge")
+
+    # _seed_marcus's own row has no page_number (None) -- excluded, not grouped
+    # under a shared NULL key with the one real row above.
+    assert len(rows) == 1
+    assert rows[0].page_number == 3
+    assert rows[0].problem_id == "1"
+    assert rows[0].student_answer_raw == "20"
+    assert rows[0].capture_id == "c-2"
+
+
 def test_a_second_students_rows_never_surface_in_the_first_students_reads() -> None:
     conn = _migrated_connection()
     _seed_marcus(conn)

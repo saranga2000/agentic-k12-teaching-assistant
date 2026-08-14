@@ -17,6 +17,7 @@ import k12ta.web.app as web_app
 from k12ta.config import Settings
 from k12ta.ingest.schedule import get_or_create_todays_assignment
 from k12ta.llm.base import DataRetention
+from k12ta.respond import render as respond_render
 from k12ta.store import captures as store_captures
 from k12ta.store import content, db, migrate, quota, sessions, students
 from k12ta.store import schedule as store_schedule
@@ -393,17 +394,17 @@ def test_needs_human_copy_for_partial_page_markers_names_seen_and_missing() -> N
 
     detail = json.dumps({"seen": ["Day"], "missing": ["Section"]})
 
-    glyph, message = web_app._needs_human_copy("partial_page_markers", detail)
+    glyph, message = respond_render._needs_human_copy("partial_page_markers", detail)
 
     assert "Day" in message
     assert "Section" in message
-    assert message != web_app.UNKNOWN_PAGE_MESSAGE
+    assert message != respond_render.UNKNOWN_PAGE_MESSAGE
 
 
 def test_needs_human_copy_for_partial_page_markers_with_no_detail_falls_back_honestly() -> None:
     """A row with the cause but no detail (malformed, or predates this column)
     must still render something intelligible, never crash."""
-    glyph, message = web_app._needs_human_copy("partial_page_markers", None)
+    glyph, message = respond_render._needs_human_copy("partial_page_markers", None)
 
     assert message
     assert glyph
@@ -414,7 +415,7 @@ def test_needs_human_copy_joins_more_than_two_missing_labels_readably() -> None:
 
     detail = json.dumps({"seen": ["Day"], "missing": ["Section", "Chapter", "Unit"]})
 
-    _, message = web_app._needs_human_copy("partial_page_markers", detail)
+    _, message = respond_render._needs_human_copy("partial_page_markers", detail)
 
     assert "Section, Chapter, and Unit" in message
 
@@ -565,6 +566,245 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     assert "outcome-needs-human" in response.text
 
 
+def _seed_one_incorrect_session(
+    conn: sqlite3.Connection, *, source_id: str, graded_by_someone_else: bool, default_mode: str
+) -> None:
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id=source_id,
+            label=source_id,
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=graded_by_someone_else,
+            default_mode=default_mode,
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-synthetic",
+            source_id=source_id,
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-synthetic",
+            assignment_id="a-synthetic",
+            captured_at="2026-08-12T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-synthetic",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="18",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-synthetic",
+            assignment_id="a-synthetic",
+            started_at="2026-08-12T08:00:00+00:00",
+            ended_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-synthetic",
+            capture_id="c-synthetic",
+            problem_id="1",
+            outcome="incorrect",
+            grader_confidence=0.99,
+            expected_answer="19_SECRET",
+        ),
+    )
+
+
+def test_results_page_hides_the_answer_when_graded_by_someone_else(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """RSM/Kumon: graded_by_someone_else forces DIAGNOSTIC_ONLY regardless of the
+    source's own default_mode -- resolve_mode()'s precedence, exercised end to end."""
+    _seed_one_incorrect_session(
+        conn, source_id="rsm", graded_by_someone_else=True, default_mode="full"
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert "19_SECRET" not in response.text
+
+
+def test_results_page_shows_the_answer_in_full_mode(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert "19_SECRET" in response.text
+
+
+def _seed_whole_page_recapture(conn: sqlite3.Connection, *, second_guess: str) -> None:
+    """The point-3 scenario: two problems photographed together, only one
+    revised, the whole page re-photographed as a second capture. Both problems'
+    graded rows share page_number=5, matching a real page_identity resolution.
+    second_guess is problem 1's answer on the recapture -- "19" is correct
+    (expected="19"), anything else is incorrect."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="rsm",
+            label="RSM",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=True,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-rsm",
+            source_id="rsm",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+
+    for capture_id, session_id, captured_at, answers in (
+        ("c-first", "sess-first", "2026-08-12T08:00:00+00:00", {"1": "18", "2": "6"}),
+        ("c-second", "sess-second", "2026-08-12T08:10:00+00:00", {"1": second_guess, "2": "6"}),
+    ):
+        store_captures.insert_page_capture(
+            conn,
+            store_captures.PageCaptureRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                assignment_id="a-rsm",
+                captured_at=captured_at,
+                image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+        sessions.insert_session(
+            conn,
+            sessions.SessionRow(
+                student_id="s-marcus",
+                session_id=session_id,
+                assignment_id="a-rsm",
+                started_at=captured_at,
+                ended_at=captured_at,
+            ),
+        )
+        for problem_id, answer, expected, outcome in (
+            ("1", answers["1"], "19", "correct" if answers["1"] == "19" else "incorrect"),
+            ("2", answers["2"], "7", "incorrect"),
+        ):
+            store_captures.insert_problem(
+                conn,
+                store_captures.ProblemRow(
+                    student_id="s-marcus",
+                    capture_id=capture_id,
+                    problem_id=problem_id,
+                    prompt_text=f"problem {problem_id}",
+                    student_answer_raw=answer,
+                    transcription_confidence=0.99,
+                ),
+            )
+            sessions.insert_graded_problem(
+                conn,
+                sessions.GradedProblemRow(
+                    student_id="s-marcus",
+                    session_id=session_id,
+                    capture_id=capture_id,
+                    problem_id=problem_id,
+                    outcome=outcome,
+                    grader_confidence=0.99,
+                    expected_answer=expected,
+                    page_number=5,
+                ),
+            )
+
+
+def test_a_changed_answer_on_recapture_is_suppressed_but_an_unchanged_one_is_not(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The whole-page-recapture case, end to end: she revises only problem 1 and
+    re-photographs the whole page. Problem 1's new, genuinely different guess
+    (now correct) must be suppressed; problem 2's unchanged resubmission must
+    render exactly as a normal first attempt, not go silent."""
+    _seed_whole_page_recapture(conn, second_guess="19")
+
+    response = client.get("/session/s-marcus/sess-second")
+
+    assert response.status_code == 200
+    assert "Correct!" not in response.text
+    assert "already told you what I can" in response.text
+    assert "This one needs another look." in response.text
+
+
+def test_a_second_new_wrong_guess_is_also_suppressed(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The mirror of the case above: the revised guess happens to be wrong this
+    time, not right. Message-symmetry itself (identical regardless of
+    correctness) is proven directly at the render layer in
+    tests/test_respond_render.py; this only confirms the wrong-guess side is
+    also suppressed end to end, not accidentally exempted."""
+    _seed_whole_page_recapture(conn, second_guess="20")  # a new, still-wrong guess
+
+    response = client.get("/session/s-marcus/sess-second")
+
+    assert response.status_code == 200
+    assert "already told you what I can" in response.text
+    # Not the ordinary first-attempt incorrect message either -- suppression, not
+    # a second helping of the same generic wording.
+    assert response.text.count("This one needs another look.") == 1
+
+
 @pytest.mark.parametrize(
     ("image_bytes", "expected_phrase"),
     [
@@ -595,3 +835,38 @@ def test_post_capture_with_a_bad_photo_is_rejected_and_nothing_is_persisted(
 
     cur = conn.execute("SELECT COUNT(*) FROM page_captures WHERE student_id = ?", ("s-marcus",))
     assert cur.fetchone()[0] == 0
+
+
+def test_group_by_problem_preserves_order_within_each_group() -> None:
+    rows = [
+        sessions.GradedAttemptRow(
+            page_number=3,
+            problem_id="1",
+            outcome="incorrect",
+            student_answer_raw="18",
+            captured_at="2026-08-12T08:00:00+00:00",
+            capture_id="c-1",
+        ),
+        sessions.GradedAttemptRow(
+            page_number=3,
+            problem_id="2",
+            outcome="incorrect",
+            student_answer_raw="6",
+            captured_at="2026-08-12T08:00:00+00:00",
+            capture_id="c-1",
+        ),
+        sessions.GradedAttemptRow(
+            page_number=3,
+            problem_id="1",
+            outcome="correct",
+            student_answer_raw="19",
+            captured_at="2026-08-12T08:10:00+00:00",
+            capture_id="c-2",
+        ),
+    ]
+
+    grouped = web_app._group_by_problem(rows)
+
+    assert set(grouped.keys()) == {(3, "1"), (3, "2")}
+    assert [r.student_answer_raw for r in grouped[(3, "1")]] == ["18", "19"]
+    assert [r.student_answer_raw for r in grouped[(3, "2")]] == ["6"]

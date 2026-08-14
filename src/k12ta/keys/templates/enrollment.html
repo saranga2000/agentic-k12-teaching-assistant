@@ -13,6 +13,22 @@
 <h2>Pages waiting on a key</h2>
 <p class="message">Not tracked yet — see docs/ROADMAP.md for what this needs first.</p>
 
+{% if show_repeated_attempts %}
+<h2>Repeated attempts</h2>
+<p class="message">This mode withholds the answer, so a problem attempted more than
+  once is worth a look — it might be honest re-checking, or it might not. A count only;
+  not shown to {{ student.display_name }}.</p>
+{% if repeated_problems %}
+<ul class="repeated-attempts">
+  {% for entry in repeated_problems %}
+  <li>Page {{ entry.page_number }}, problem {{ entry.problem_id }}: {{ entry.attempt_count }} attempts</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">No repeated attempts yet.</p>
+{% endif %}
+{% endif %}
+
 <h2>Page identity</h2>
 <p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">
   {% if schema %}Edit page-identity setup{% else %}Set up page identity{% endif %}

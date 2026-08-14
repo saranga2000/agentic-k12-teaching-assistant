@@ -10,7 +10,6 @@ docs/ARCHITECTURE.md.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -22,11 +21,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
-from k12ta.grading.needs_human import NeedsHumanCause
+from k12ta.domain.attempts import PastAttempt
+from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.ingest import capture as ingest_capture
 from k12ta.ingest import schedule as ingest_schedule
 from k12ta.llm import build_vision_model
 from k12ta.pipeline.process import PipelineStatus, process_capture
+from k12ta.respond.render import render_student_result
 from k12ta.store import captures, content, db, migrate, sessions, students
 from k12ta.transcribe.base import Transcriber
 from k12ta.transcribe.vision_llm import VisionLLMTranscriber
@@ -45,90 +46,6 @@ NO_STUDENTS_MESSAGE = (
 )
 QUOTA_EXHAUSTED_MESSAGE = "I have done all my reading for today, ask a grown-up."
 NO_PROBLEMS_FOUND_MESSAGE = "I did not find any problems on this page."
-# One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
-# four read differently at a glance -- reinforcement alongside the message text,
-# never the only signal (rule 11's spirit extended to "meaning is never colour- or
-# glyph-alone"). UNKNOWN_PAGE is the one every student capture hits today: the
-# capture flow has no page-number field yet (see docs/ROADMAP.md's page-identity
-# discussion), so NO_KEY_FOR_PAGE and NEEDS_PERSON are not reachable from this route
-# at all until that's built -- still given real, distinct copy here rather than
-# left unhandled, since seeding a session directly (as the key-upload confirm flow
-# already can) reaches them today, and student capture will once page numbers land.
-COULD_NOT_READ_MESSAGE = "I could not read this one clearly."
-COULD_NOT_READ_GLYPH = "?"
-UNKNOWN_PAGE_MESSAGE = "I'm not sure which page this is — ask a grown-up to check it."
-UNKNOWN_PAGE_GLYPH = "…"
-NO_ANSWER_KEY_MESSAGE = "I don't have an answer key for this one yet — ask a grown-up to check it."
-NO_ANSWER_KEY_GLYPH = "—"
-NEEDS_PERSON_MESSAGE = "This one needs a grown-up to take a look."
-NEEDS_PERSON_GLYPH = "~"
-# Its own distinct message, not UNKNOWN_PAGE's copy with different words -- and an
-# instruction, not just a diagnosis: this is the de facto two-page-spread handler
-# (docs/ROADMAP.md's M2.2 note), so "I can see two page markers" alone leaves a
-# child stuck on a photo that will never resolve no matter how many times she
-# retries it. "Take a photo of just one page" tells her the one thing that fixes
-# it. See k12ta.grading.needs_human.NeedsHumanCause.CONFLICTING_PAGE_MARKERS's
-# docstring.
-CONFLICTING_PAGE_MARKERS_MESSAGE = "I can see two page markers. Take a photo of just one page."
-CONFLICTING_PAGE_MARKERS_GLYPH = "⇄"
-# Recoverable, unlike CONFLICTING_PAGE_MARKERS above -- re-photographing with the
-# missing part in frame fixes it. The real message is built dynamically from
-# graded_problems.needs_human_detail (which components were seen/missing, see
-# k12ta.pipeline.process); this static text is only the fallback for a row with
-# the cause but no usable detail (malformed, or predates this column).
-PARTIAL_PAGE_MARKERS_MESSAGE = "I can see part of the page marker, but not all of it."
-PARTIAL_PAGE_MARKERS_GLYPH = "◐"
-# A row graded before the needs_human_cause column existed (migration 0006) has no
-# claimed reason -- genuinely unknown, not a guess dressed up as one.
-UNKNOWN_CAUSE_MESSAGE = "I need a grown-up to look at this one."
-UNKNOWN_CAUSE_GLYPH = "?"
-
-_NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
-    NeedsHumanCause.LOW_CONFIDENCE: (COULD_NOT_READ_GLYPH, COULD_NOT_READ_MESSAGE),
-    NeedsHumanCause.UNKNOWN_PAGE: (UNKNOWN_PAGE_GLYPH, UNKNOWN_PAGE_MESSAGE),
-    NeedsHumanCause.NO_KEY_FOR_PAGE: (NO_ANSWER_KEY_GLYPH, NO_ANSWER_KEY_MESSAGE),
-    NeedsHumanCause.NEEDS_PERSON: (NEEDS_PERSON_GLYPH, NEEDS_PERSON_MESSAGE),
-    NeedsHumanCause.CONFLICTING_PAGE_MARKERS: (
-        CONFLICTING_PAGE_MARKERS_GLYPH,
-        CONFLICTING_PAGE_MARKERS_MESSAGE,
-    ),
-    NeedsHumanCause.PARTIAL_PAGE_MARKERS: (
-        PARTIAL_PAGE_MARKERS_GLYPH,
-        PARTIAL_PAGE_MARKERS_MESSAGE,
-    ),
-}
-
-
-def _join_labels(labels: list[str]) -> str:
-    if len(labels) <= 1:
-        return "".join(labels)
-    if len(labels) == 2:
-        return f"{labels[0]} and {labels[1]}"
-    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
-
-
-def _needs_human_copy(cause_value: str | None, detail_json: str | None = None) -> tuple[str, str]:
-    """Glyph and message for a graded_problems row's stored `needs_human_cause`
-    (and, for PARTIAL_PAGE_MARKERS, its `needs_human_detail`). The one place this
-    decision is rendered from -- never re-derived from confidence or any other
-    proxy, see docs/PROGRESS.md's M2 entry for why that was wrong before. The
-    facts (which components were seen/missing) come from `k12ta.pipeline.process`
-    -- this function only interpolates them into a sentence, it never infers a
-    source's schema itself."""
-    if cause_value is None:
-        return UNKNOWN_CAUSE_GLYPH, UNKNOWN_CAUSE_MESSAGE
-    cause = NeedsHumanCause(cause_value)
-    if cause is NeedsHumanCause.PARTIAL_PAGE_MARKERS and detail_json:
-        try:
-            detail = json.loads(detail_json)
-            seen = _join_labels(list(detail.get("seen", [])))
-            missing = _join_labels(list(detail.get("missing", [])))
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            seen, missing = "", ""
-        if seen and missing:
-            return PARTIAL_PAGE_MARKERS_GLYPH, f"I can see the {seen} but not the {missing}."
-    return _NEEDS_HUMAN_COPY[cause]
-
 
 load_dotenv()  # must run before any Settings.from_env() call in this module
 logging.basicConfig(
@@ -282,6 +199,19 @@ async def submit_capture(
     return RedirectResponse(f"/session/{student_id}/{outcome.session_id}", status_code=303)
 
 
+def _group_by_problem(
+    rows: list[sessions.GradedAttemptRow],
+) -> dict[tuple[int, str], list[sessions.GradedAttemptRow]]:
+    """Groups without reordering -- rows must already be chronological per
+    identity, as list_graded_attempts_for_source returns them. Plain data
+    plumbing, not a repository concern, so it lives at the call site rather
+    than in k12ta.store (see tests/test_store_scoping.py)."""
+    grouped: dict[tuple[int, str], list[sessions.GradedAttemptRow]] = {}
+    for row in rows:
+        grouped.setdefault((row.page_number, row.problem_id), []).append(row)
+    return grouped
+
+
 @app.get("/session/{student_id}/{session_id}", response_class=HTMLResponse)
 def session_results(
     request: Request,
@@ -297,6 +227,16 @@ def session_results(
     if session is None:
         raise HTTPException(404, "no such session")
 
+    assignment = content.get_assignment(conn, student_id, session.assignment_id)
+    assert assignment is not None  # a session's assignment can't vanish once created
+    source = content.get_content_source(conn, student_id, assignment.source_id)
+    assert source is not None  # an assignment's source can't vanish once created
+    mode = resolve_mode(
+        source_default_mode=FeedbackMode(source.default_mode),
+        work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+    )
+    rules = rules_for(mode)
+
     graded = sessions.list_graded_problems_for_session(conn, student_id, session_id)
     problems_by_id = {}
     if graded:
@@ -305,26 +245,33 @@ def session_results(
             for p in captures.list_problems_for_capture(conn, student_id, graded[0].capture_id)
         }
 
+    history = _group_by_problem(
+        sessions.list_graded_attempts_for_source(conn, student_id, source.source_id)
+    )
+
     items = []
     for g in graded:
-        needs_human_glyph, needs_human_reason = (
-            _needs_human_copy(g.needs_human_cause, g.needs_human_detail)
-            if g.outcome == "needs_human"
-            else (None, None)
+        answer = (
+            problems_by_id[g.problem_id].student_answer_raw
+            if g.problem_id in problems_by_id
+            else ""
+        )
+        identity_attempts = (
+            history.get((g.page_number, g.problem_id), []) if g.page_number is not None else []
+        )
+        prior_attempts = tuple(
+            PastAttempt(outcome=a.outcome, student_answer_raw=a.student_answer_raw)
+            for a in identity_attempts
+            if a.capture_id != g.capture_id
         )
         items.append(
-            {
-                "problem_id": g.problem_id,
-                "prompt_text": problems_by_id[g.problem_id].prompt_text
-                if g.problem_id in problems_by_id
-                else "",
-                "student_answer_raw": problems_by_id[g.problem_id].student_answer_raw
-                if g.problem_id in problems_by_id
-                else "",
-                "outcome": g.outcome,
-                "needs_human_reason": needs_human_reason,
-                "needs_human_glyph": needs_human_glyph,
-            }
+            render_student_result(
+                g,
+                problems_by_id[g.problem_id].prompt_text if g.problem_id in problems_by_id else "",
+                answer,
+                rules=rules,
+                prior_attempts=prior_attempts,
+            )
         )
 
     return templates.TemplateResponse(
