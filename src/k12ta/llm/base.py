@@ -1,13 +1,13 @@
-"""Provider-agnostic vision-model interface.
+"""Provider-agnostic vision-model and text-model interfaces.
 
-Every model call in this system goes through something satisfying `VisionModel`, per
-AGENTS.md rule 9. Swapping providers is a new file implementing this protocol, not a
-refactor of anything that calls it.
+Every model call in this system goes through something satisfying `VisionModel` or
+`TextModel`, per AGENTS.md rule 9. Swapping providers is a new file implementing the
+relevant protocol, not a refactor of anything that calls it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -90,4 +90,48 @@ class VisionModel(Protocol):
         """Make one cheap call confirming the configured model exists and the key
         works. Raises MisconfiguredError or RateLimitExhaustedError on failure; raises
         nothing on success. Intended to run once, before any page is sent."""
+        ...
+
+
+@dataclass(frozen=True)
+class ChatTurn:
+    """One turn of a text conversation, in the order it happened."""
+
+    role: str
+    """"user" or "model" -- Gemini's own role vocabulary, passed through rather than
+    invented, since a caller building a conversation history needs to know whose
+    turn is whose regardless of which provider ends up handling it."""
+    text: str
+
+
+@dataclass(frozen=True)
+class ChatResponse:
+    text: str
+    cost_usd: Decimal
+    latency_ms: int
+
+
+class TextModel(Protocol):
+    """Anything that turns a system prompt plus a conversation history into the next
+    turn's raw model text -- no image. Distinct from `VisionModel`: nothing in this
+    system's live product pipeline needs this yet (transcription and diagnosis are
+    both image-in calls), but `prompts/coach_voice.md` is a pure-text system prompt
+    and evaluating it (see `evals/integrity/`) needs a real conversational call, per
+    AGENTS.md rule 9, through an adapter like any other model call."""
+
+    data_retention: DataRetention
+    request_count: int
+    """Total HTTP requests made so far by this instance, including retries -- same
+    meaning as VisionModel.request_count."""
+
+    def generate_conversation(self, system_prompt: str, turns: Sequence[ChatTurn]) -> ChatResponse:
+        """Call the model once with the full conversation so far and return its next
+        turn. `turns` must end with a "user" turn -- there is nothing to respond to
+        otherwise. Raises on failure; the caller decides how to degrade."""
+        ...
+
+    def verify(self) -> None:
+        """Make one cheap call confirming the configured model exists and the key
+        works. Raises MisconfiguredError or RateLimitExhaustedError on failure; raises
+        nothing on success."""
         ...

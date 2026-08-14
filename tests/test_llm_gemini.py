@@ -8,6 +8,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from k12ta.llm._gemini_http import CONNECT_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS
 from k12ta.llm.base import (
     DataRetention,
     MisconfiguredError,
@@ -15,12 +16,7 @@ from k12ta.llm.base import (
     RequestCapExceededError,
     TransientError,
 )
-from k12ta.llm.gemini import (
-    CONNECT_TIMEOUT_SECONDS,
-    STREAM_INACTIVITY_TIMEOUT_SECONDS,
-    GeminiError,
-    GeminiVisionModel,
-)
+from k12ta.llm.gemini import GeminiError, GeminiVisionModel
 
 
 def _envelope(text: str) -> dict[str, object]:

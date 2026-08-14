@@ -1,5 +1,5 @@
-.PHONY: install install-browser test check check-browser fmt run seed eval label keys \
-        start stop restart status
+.PHONY: install install-browser test check check-browser fmt run seed eval eval-integrity \
+        eval-integrity-live label keys start stop restart status
 
 # Background process management for `run` (k12ta.web) and `keys` (k12ta.keys), so
 # a server left running from a previous session can be restarted after a code
@@ -38,6 +38,18 @@ check-browser:
 
 eval:
 	python evals/run_transcription_eval.py
+
+# Replays evals/integrity/recorded/ -- free, deterministic, same thing
+# tests/test_eval_integrity.py runs in CI. Prints a report; exits nonzero on any leak.
+eval-integrity:
+	python -m evals.integrity.run
+
+# Real model calls (~44 per run -- see docs/EVALS.md section 2 for the cost).
+# Overwrites evals/integrity/recorded/ and writes a dated report to evals/results/.
+# Needs K12TA_LLM_API_KEY set. Never run automatically; this is the one path that
+# spends real quota.
+eval-integrity-live:
+	python -m evals.integrity.run --live
 
 run:
 	python -m k12ta.web --host 0.0.0.0 --port 8080

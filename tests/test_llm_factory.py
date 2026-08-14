@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 
 from k12ta.config import Settings
-from k12ta.llm import build_vision_model
+from k12ta.llm import build_text_model, build_vision_model
 from k12ta.llm.gemini import GeminiVisionModel
+from k12ta.llm.gemini_chat import GeminiTextModel
 
 
 def _settings(provider: str) -> Settings:
@@ -34,3 +35,15 @@ def test_builds_gemini_model_for_google_provider() -> None:
 def test_raises_clearly_on_unsupported_provider() -> None:
     with pytest.raises(ValueError, match="unsupported"):
         build_vision_model(_settings("openai"))
+
+
+def test_builds_gemini_text_model_for_google_provider() -> None:
+    model = build_text_model(_settings("google"))
+
+    assert isinstance(model, GeminiTextModel)
+    assert model.model == "gemini-3.7-flash"
+
+
+def test_text_model_raises_clearly_on_unsupported_provider() -> None:
+    with pytest.raises(ValueError, match="unsupported"):
+        build_text_model(_settings("openai"))
