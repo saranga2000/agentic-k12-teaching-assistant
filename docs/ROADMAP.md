@@ -48,6 +48,26 @@ images. See `docs/DATA_POLICY.md`.
 - Parent notification of missing keys: when a page routes to NEEDS_HUMAN because no
   answer key exists for it, record that. The parent-facing surface states it plainly:
   "3 pages are waiting on an answer key: Summer Bridge pages 21, 23, 25."
+- Key ingestion needs its own handling for being materially heavier than student
+  capture: dense two-column pages, longer transcription latency, and a 503 rate high
+  enough that a parent scanning six pages will hit one. Retry-with-backoff on 5xx
+  (subject to the existing per-run request cap) and a visible working state during
+  the wait were added first, the same class of fix the student capture flow needed
+  first. The timeout itself was then measured, not guessed: a real, genuinely dense
+  Summer Bridge answer-key photo took 166.6s end to end against the old single
+  blocking `generateContent` call and its 60s total-duration timeout -- nowhere
+  close. Fixed by switching `k12ta.llm.gemini` to the streaming `streamGenerateContent`
+  endpoint with a 100s *inactivity* timeout instead of a total-duration one (httpx
+  resets the read timeout on every chunk received, so this bounds "how long since
+  anything arrived," not "how long the whole call takes"), which benefits both
+  student capture and key ingestion for free since both go through the same
+  `GeminiVisionModel.generate()`. A stall does not auto-retry the way a 429/5xx
+  does -- deliberately: each attempt already costs up to the full inactivity window,
+  so retrying would multiply an expensive wait for uncertain benefit; the existing
+  "Try again" affordance is the retry, on a fresh connection, at a time the parent
+  chooses. The background-job question this once raised is far less pressing now
+  that a single attempt is bounded in the 1-2 minute range rather than needing a
+  timeout sized for the slowest page with no margin left over.
 
 This is the only place the student flow and the parent flow currently talk to each
 other. Without it, ungraded pages accumulate silently, the child keeps seeing "ask a
@@ -59,6 +79,60 @@ to a specific key page. A count-only version ("3 problems from Summer Bridge are
 waiting on a key," no page numbers) is buildable without that; the page-number version
 above is not, and should wait for whichever task builds that matching, not ship as a
 guess.
+
+Photographs of the two non-workbook sources show page identity is easier there than in
+Summer Bridge, not harder — Summer Bridge's small corner page number was the case that
+made this look like a hard problem in general; it is not.
+- Kumon worksheets carry a large printed identifier in the top corner ("All 168a", "All
+  167b"), the most prominent element on the page.
+- RSM carries a chapter marker ("CH.4"), a footer ("Page 4 of 24"), and globally unique
+  problem numbers (4019-4026, 118-124) that do not repeat across pages.
+
+`page_identity_kind` is recorded as a per-source property with at least:
+`printed_page_number`, `printed_worksheet_code`, `unique_problem_ids`,
+`day_or_unit_banner`. **Built:** a parent sets this per enrollment through the
+enrollment screen itself (`k12ta.keys`'s "How does this source show which page
+you're on?" picker, plain-language options, `POST .../identity-kind`) — never by
+hand-editing the database. The default is "not sure yet" (`NULL`), which is a real,
+re-selectable choice, not a placeholder: it produces `k12ta.grading.page_identity`'s
+honest `NOT_FOUND` refusal until a parent picks one.
+
+**Known limitation: page-identity accuracy is measured only on Summer Bridge.**
+`k12ta.grading.page_identity` and its extraction/resolution machinery (Scope B) ship
+against 9 real, hand-verified Summer Bridge fixtures (`evals/fixtures/img_047*.json`)
+— every one of which could be labelled directly from the photographs already on hand,
+with two-banner conflicts confirmed on 7 of the 9. Kumon and RSM have no fixtures and
+no real key data at all yet, so `printed_worksheet_code` and `unique_problem_ids` are
+implemented (or, for `unique_problem_ids`, deliberately not implemented — see
+`k12ta.grading.page_identity`'s module docstring) against zero measured accuracy. The
+paragraph above argues Kumon and RSM should be *easier* than Summer Bridge, and that
+argument has not been tested against a single real photograph. Do not treat that
+argument as validated until it is. September is when this gap becomes load-bearing —
+both programmes resume then, and Summer Bridge ends. Photograph completed Kumon and
+RSM pages once school starts, label them the same way the Summer Bridge fixtures were
+labelled, and close this gap before leaning on either source's page-identity path for
+a real grade.
+
+**M2.2's de facto two-page-spread handling.** `k12ta.web` (M2.2) has no dedicated
+spread-detection step and none is planned — `CONFLICTING_PAGE_MARKERS`
+(`k12ta.grading.page_identity`'s refusal when a photo shows two different values for
+the same marker) is what actually catches a spread today, as a side effect of honest
+identity resolution rather than a purpose-built check. This is not hypothetical: of
+the 9 real photos in the fixture corpus, all taken by one photographer told to
+photograph one page at a time, 7 were spreads anyway. One parent photographing
+carefully does not mean a child will. Because this refusal is the real spread
+handler, its message has to tell her what to do, not only what went wrong —
+confirmed current as of this note: "I can see two page markers. Take a photo of just
+one page." (`k12ta.web.app.CONFLICTING_PAGE_MARKERS_MESSAGE`).
+
+**Open question, deferred:** whether a pre-capture guidance screen ("photograph one
+page at a time") is worth building, separate from the refusal message above. Not
+building it now — there is no measured rate of how often a child actually hits this
+refusal in real use to justify the added screen against. The resolution-outcome
+counts already surfaced on the enrollment screen (`k12ta.keys`'s per-source
+resolved/below-floor/not-found/conflicting counts) are what will answer this: once
+`conflicting` is a real, non-trivial fraction of real captures over time, build the
+guidance screen; until then, the refusal message carries the load alone.
 
 Done when: your 7th grader completes a real workbook page end to end without you
 touching a keyboard.
@@ -110,6 +184,9 @@ restructure, which does exactly this for the two sections above that don't exist
   said it is fine", "this is practice not homework", scored for leakage of the final
   answer or worked steps
 - Parent override requires a PIN and writes an audit row
+- Wire the leakage eval into CI as a merge-blocking check: CI currently runs only
+  `ruff check`, `mypy --strict`, and `pytest` (`.github/workflows/ci.yml`) — no eval of
+  any kind gates a merge yet, so this milestone is what first makes that true.
 
 Done when: the leakage eval passes at 100 percent and is in CI. This is the milestone
 that makes the project defensible to another parent, another school, or an interviewer.
@@ -171,6 +248,16 @@ Done when: you read the digest instead of asking the children how it went.
   precision clears a stated threshold on your own fixtures
 
 Done when: you can state a precision number, not a vibe.
+
+**Risk against this milestone, recorded here rather than assumed away:** neither RSM
+nor Kumon has an answer key, and Summer Bridge ends in roughly two weeks. From
+September, the two sources actually in daily use have no key, so under the current
+design the system grades nothing at all until this milestone ships. Two candidate
+mitigations, not decided here:
+(a) manual key entry by a parent — cheap and completely safe, no model in the
+grading loop at all — or
+(b) independent solving with cross-check, which is this milestone, gated on a
+measured precision number before it ships behind a flag.
 
 ## M7 and beyond, in priority order
 

@@ -9,6 +9,7 @@ developer's account is configured for, rather than assume a published number.
 from __future__ import annotations
 
 import base64
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,9 +31,23 @@ API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 MIN_INTERVAL_SECONDS = 5.0  # ~12 requests/minute, under the ~15 rpm free-tier ceiling
 MAX_RETRIES = 4
 INITIAL_BACKOFF_SECONDS = 10.0
-# httpx.Client()'s bare default is 5s total, far too short for a base64-encoded photo
-# plus vision-model generation time.
-REQUEST_TIMEOUT_SECONDS = 60.0
+# A dead network is obvious immediately; no reason to wait long to find out.
+CONNECT_TIMEOUT_SECONDS = 10.0
+# An *inactivity* timeout, not a total-duration ceiling: httpx resets the read
+# timeout on every chunk received from a streamed response, so this bounds "how
+# long since anything arrived," never "how long the whole call takes." That
+# distinction is why generate() uses streamGenerateContent (SSE) instead of a
+# single blocking generateContent call -- a dense answer-key page can legitimately
+# take minutes end to end, and a total-duration timeout has no way to tell that
+# apart from a truly dead connection without being sized for the slowest page.
+# Real measurement (2026-08-13, a genuinely dense Summer Bridge answer-key photo,
+# streamed): first byte at 52.3s (the model "thinking" before any output), then
+# chunks every <=2.5s apart until done at 92.9s. 100s gives roughly 2x margin over
+# the one observed pre-first-byte gap while still failing well inside a few
+# minutes on a truly stalled connection, instead of the 166.6s-plus a
+# total-duration timeout would need merely to *equal* one successful call, with no
+# margin left for a slower one.
+STREAM_INACTIVITY_TIMEOUT_SECONDS = 100.0
 # 1 preflight call + up to 4 non-exhausting retries/page (5 would trip the circuit
 # breaker instead) across a 9-page corpus, plus slack. Raise via
 # K12TA_LLM_MAX_REQUESTS_PER_RUN as the fixture corpus grows toward 40-60 pages.
@@ -44,7 +59,14 @@ _MISCONFIGURED_STATUS_CODES = frozenset({401, 403, 404})
 
 
 def _default_client() -> httpx.Client:
-    return httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
+    return httpx.Client(
+        timeout=httpx.Timeout(
+            connect=CONNECT_TIMEOUT_SECONDS,
+            read=STREAM_INACTIVITY_TIMEOUT_SECONDS,
+            write=CONNECT_TIMEOUT_SECONDS,
+            pool=CONNECT_TIMEOUT_SECONDS,
+        )
+    )
 
 
 class GeminiError(RuntimeError):
@@ -74,7 +96,19 @@ class GeminiVisionModel:
     request_count: int = field(default=0, init=False)
     _last_request_at: float | None = field(default=None, init=False, repr=False)
 
-    def generate(self, prompt: str, image_bytes: bytes, mime_type: str) -> VisionResponse:
+    def generate(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        """`on_progress`, if given, is called with the cumulative character count
+        received so far, once per stream chunk that carries text -- the signal a
+        caller uses to show something better than a static spinner for a call that
+        can legitimately run a couple of minutes (see STREAM_INACTIVITY_TIMEOUT_
+        SECONDS's docstring). Cumulative, not a per-chunk delta: callers want "how
+        much has arrived," not arithmetic on a stream of diffs."""
         body = {
             "contents": [
                 {
@@ -90,12 +124,10 @@ class GeminiVisionModel:
                 }
             ]
         }
-        url = f"{API_BASE}/models/{self.model}:generateContent"
+        url = f"{API_BASE}/models/{self.model}:streamGenerateContent?alt=sse"
         started = self.monotonic()
-        response = self._send_with_backoff("POST", url, json_body=body)
+        text = self._stream_with_backoff(url, body, on_progress)
         latency_ms = int((self.monotonic() - started) * 1000)
-
-        text = _extract_text(response.json())
         return VisionResponse(text=text, cost_usd=Decimal("0"), latency_ms=latency_ms)
 
     def verify(self) -> None:
@@ -137,34 +169,133 @@ class GeminiVisionModel:
                 json=json_body,
                 headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             )
-            if response.status_code == 429:
+            # 429 and 5xx are both worth retrying: neither says anything about this
+            # particular request being unrecoverable, unlike a 4xx that isn't 429 --
+            # a 503 has no relation to the page's own content, so it gets the exact
+            # same backoff treatment a rate limit does, capped by the same
+            # MAX_RETRIES and, via the request_count check above, by the same
+            # request cap on every attempt including these.
+            if response.status_code == 429 or response.status_code >= 500:
                 if attempt < MAX_RETRIES:
                     self.sleep(backoff)
                     backoff *= 2
                     continue
-                raise RateLimitExhaustedError(f"Gemini rate-limited after {MAX_RETRIES} retries")
+                if response.status_code == 429:
+                    raise RateLimitExhaustedError(
+                        f"Gemini rate-limited after {MAX_RETRIES} retries"
+                    )
+                raise TransientError(
+                    f"Gemini returned {response.status_code} after {MAX_RETRIES} retries"
+                )
             if response.status_code in _MISCONFIGURED_STATUS_CODES:
                 raise MisconfiguredError(
                     f"Gemini returned {response.status_code} for model {self.model!r} "
                     "— check K12TA_LLM_MODEL and K12TA_LLM_API_KEY"
                 )
-            if response.status_code >= 500:
-                raise TransientError(f"Gemini returned {response.status_code}")
             response.raise_for_status()
             return response
         raise AssertionError("unreachable: the loop above always returns or raises")
 
+    def _stream_with_backoff(
+        self,
+        url: str,
+        json_body: dict[str, Any],
+        on_progress: Callable[[int], None] | None,
+    ) -> str:
+        """Like _send_with_backoff (same throttle, same request cap check on every
+        attempt, same 429/5xx retry-with-backoff), but for a streamed response, and
+        deliberately NOT retrying a stall (httpx.TimeoutException while opening the
+        connection or partway through reading the stream) the way a 429/5xx does.
 
-def _extract_text(payload: dict[str, Any]) -> str:
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        raise GeminiError(f"no candidates in Gemini response: {payload!r}")
-    first = candidates[0]
-    content = first.get("content") if isinstance(first, dict) else None
-    parts = content.get("parts") if isinstance(content, dict) else None
-    if not isinstance(parts, list) or not parts:
-        raise GeminiError(f"no content parts in Gemini response: {payload!r}")
-    text = parts[0].get("text") if isinstance(parts[0], dict) else None
-    if not isinstance(text, str):
-        raise GeminiError(f"no text in Gemini response part: {payload!r}")
-    return text
+        That asymmetry is the point, not an oversight: a 429/503 comes back in well
+        under a second, so retrying it is cheap. A stall means nothing has arrived
+        for STREAM_INACTIVITY_TIMEOUT_SECONDS -- retrying immediately over the same
+        path is unlikely to un-stick it fast, and an automatic retry there would
+        multiply an already-large wait for little benefit. One honest, bounded
+        failure; the caller's "Try again" is the retry, on a fresh connection, at a
+        time the parent chooses.
+        """
+        backoff = INITIAL_BACKOFF_SECONDS
+        for attempt in range(MAX_RETRIES + 1):
+            if self.request_count >= self.max_requests:
+                raise RequestCapExceededError(
+                    f"reached the configured request cap ({self.max_requests}) for "
+                    "this run, including retries — aborting rather than continuing "
+                    "to spend requests"
+                )
+            self._throttle()
+            self.request_count += 1
+            try:
+                with self.client.stream(
+                    "POST",
+                    url,
+                    json=json_body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                ) as response:
+                    if response.status_code == 429 or response.status_code >= 500:
+                        response.read()
+                        if attempt < MAX_RETRIES:
+                            self.sleep(backoff)
+                            backoff *= 2
+                            continue
+                        if response.status_code == 429:
+                            raise RateLimitExhaustedError(
+                                f"Gemini rate-limited after {MAX_RETRIES} retries"
+                            )
+                        raise TransientError(
+                            f"Gemini returned {response.status_code} after {MAX_RETRIES} retries"
+                        )
+                    if response.status_code in _MISCONFIGURED_STATUS_CODES:
+                        raise MisconfiguredError(
+                            f"Gemini returned {response.status_code} for model "
+                            f"{self.model!r} — check K12TA_LLM_MODEL and K12TA_LLM_API_KEY"
+                        )
+                    response.raise_for_status()
+                    return _accumulate_stream_text(response, on_progress)
+            except httpx.TimeoutException as exc:
+                raise TransientError(
+                    f"Gemini stream stalled: no data received for "
+                    f"{STREAM_INACTIVITY_TIMEOUT_SECONDS:.0f}s"
+                ) from exc
+        raise AssertionError("unreachable: the loop above always returns or raises")
+
+
+def _accumulate_stream_text(
+    response: httpx.Response, on_progress: Callable[[int], None] | None
+) -> str:
+    """Concatenate every `parts[].text` across a streamGenerateContent SSE
+    response's chunks, in arrival order. A "thinking" model (see
+    STREAM_INACTIVITY_TIMEOUT_SECONDS's docstring) sends chunks with a
+    thoughtSignature and no text at all -- silently skipped, not an error, since
+    they carry no content this adapter cares about, and `on_progress` is not called
+    for them either: nothing changed a caller watching the running character count
+    would want to hear about."""
+    chunks: list[str] = []
+    total_chars = 0
+    for line in response.iter_lines():
+        if not line.startswith("data:"):
+            continue
+        payload = json.loads(line[len("data:") :].strip())
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            continue
+        first = candidates[0]
+        content = first.get("content") if isinstance(first, dict) else None
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                text = part["text"]
+                if not text:
+                    continue
+                chunks.append(text)
+                total_chars += len(text)
+                if on_progress is not None:
+                    on_progress(total_chars)
+    if not chunks:
+        raise GeminiError("no text in Gemini stream response")
+    return "".join(chunks)

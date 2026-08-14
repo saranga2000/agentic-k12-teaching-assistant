@@ -24,11 +24,15 @@
       var submitError = document.getElementById("submit-error");
       input.addEventListener("change", function () {
         if (!input.files || !input.files.length) return;
+        // Built before `input.disabled = true` below: a disabled control is
+        // excluded from FormData by spec, so disabling the file input first
+        // silently drops the file from its own submission. See capture.html's
+        // matching comment -- same bug, same fix, both scripts.
+        var formData = new FormData(form);
         button.hidden = true;
         input.disabled = true;
         submitError.hidden = true;
         working.hidden = false;
-        var formData = new FormData(form);
         fetch(form.action, { method: "POST", body: formData })
           .then(function (response) { return response.text(); })
           .then(function (html) {

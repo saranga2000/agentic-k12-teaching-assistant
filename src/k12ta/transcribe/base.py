@@ -7,7 +7,7 @@ harness can score any provider through one interface.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
 
@@ -47,6 +47,24 @@ class TranscribedItem:
 
 
 @dataclass(frozen=True)
+class PageIdentityExtraction:
+    """Whatever page-identity markers a student capture's own photo shows, in the
+    exact shape `k12ta.grading.page_identity.resolve()` already expects -- built
+    here, not there, because extraction (what the model saw) and resolution (what
+    to do about it) are different concerns, same split as `TranscribedItem`
+    confidence versus `k12ta.grading.needs_human.decide()`."""
+
+    candidates: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Identity kind -> every distinct value seen for it on this one photo. More
+    than one value for a kind is exactly what a two-page spread with two "Day N"
+    banners looks like -- preserved here, never collapsed to one, so `resolve()`
+    can refuse it as CONFLICTING instead of guessing."""
+    confidence: float = 0.0
+    """The model's confidence in this extraction as a whole, independent of any
+    single item's `TranscribedItem.confidence`."""
+
+
+@dataclass(frozen=True)
 class TranscriptionResult:
     items: tuple[TranscribedItem, ...]
     provider: str
@@ -63,6 +81,7 @@ class TranscriptionResult:
     failure_kind: FailureKind | None = None
     """None on success. Set alongside `failure` so a caller can decide whether to keep
     going (TRANSIENT, UNREADABLE) or abort the run (everything in RUN_ABORTING_KINDS)."""
+    page_identity: PageIdentityExtraction = field(default_factory=PageIdentityExtraction)
 
     def min_confidence(self) -> float:
         return min((i.confidence for i in self.items), default=0.0)

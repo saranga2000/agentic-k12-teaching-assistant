@@ -37,5 +37,9 @@
       "correct_answer": "9"
     }
   ],
-  "spread_side": "right"
+  "spread_side": "right",
+  "page_identity": {
+    "day_or_unit_banner": ["Day 5", "Day 6"],
+    "printed_page_number": ["22", "23"]
+  }
 }

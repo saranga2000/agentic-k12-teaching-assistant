@@ -72,5 +72,9 @@
       "correct_answer": "Adjective"
     }
   ],
-  "spread_side": "right"
+  "spread_side": "right",
+  "page_identity": {
+    "day_or_unit_banner": ["Day 2", "Day 3"],
+    "printed_page_number": ["16", "17"]
+  }
 }

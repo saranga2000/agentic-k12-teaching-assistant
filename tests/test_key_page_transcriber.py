@@ -5,6 +5,7 @@ different parsing (multi-page-per-photo entries, ungradeable reasons). No networ
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -30,10 +31,22 @@ class FakeVisionModel:
     error: Exception | None = None
     last_call: tuple[str, bytes, str] | None = None
     request_count: int = 0
+    progress_updates: tuple[int, ...] = ()
+    """Chars to report via on_progress, in order, before returning/raising -- stands
+    in for a real streamed call's chunks arriving."""
 
-    def generate(self, prompt: str, image_bytes: bytes, mime_type: str) -> VisionResponse:
+    def generate(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
         self.last_call = (prompt, image_bytes, mime_type)
         self.request_count += 1
+        if on_progress is not None:
+            for chars in self.progress_updates:
+                on_progress(chars)
         if self.error is not None:
             raise self.error
         return VisionResponse(text=self.response_text, cost_usd=Decimal("0"), latency_ms=42)
@@ -44,8 +57,13 @@ class FakeVisionModel:
             raise self.error
 
 
-def _transcriber(model: FakeVisionModel) -> VisionLLMKeyTranscriber:
-    return VisionLLMKeyTranscriber(vision_model=model, provider="fake", model="fake-model")
+def _transcriber(
+    model: FakeVisionModel, monotonic: Callable[[], float] | None = None
+) -> VisionLLMKeyTranscriber:
+    kwargs = {} if monotonic is None else {"monotonic": monotonic}
+    return VisionLLMKeyTranscriber(
+        vision_model=model, provider="fake", model="fake-model", **kwargs
+    )
 
 
 def test_sends_loaded_prompt_and_bytes_as_jpeg() -> None:
@@ -58,6 +76,93 @@ def test_sends_loaded_prompt_and_bytes_as_jpeg() -> None:
     assert prompt == load_prompt("transcribe_key_page")
     assert image_bytes == b"already-normalized-jpeg-bytes"
     assert mime_type == "image/jpeg"
+
+
+def test_parses_identifier_value_alongside_page_number() -> None:
+    """Scope B: the "Day N" banner text, discarded until now, is what lets a
+    student capture later resolve back to this page_number -- see
+    k12ta.store.page_identities and k12ta.grading.page_identity."""
+    payload = {
+        "entries": [
+            {
+                "page_number": 17,
+                "identifier_value": "Day 5",
+                "problem_number": "1",
+                "answer_text": "8 m",
+                "ungradeable_reason": None,
+                "confidence": 0.95,
+            }
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(b"x")
+
+    assert result.entries[0].identifier_value == "Day 5"
+
+
+def test_missing_identifier_value_defaults_to_empty_string_not_an_error() -> None:
+    payload = {
+        "entries": [
+            {
+                "page_number": 17,
+                "problem_number": "1",
+                "answer_text": "8 m",
+                "ungradeable_reason": None,
+                "confidence": 0.95,
+            }
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(b"x")
+
+    assert result.entries[0].identifier_value == ""
+
+
+def test_parses_identifier_confidence_separately_from_answer_confidence() -> None:
+    """The two confidences measure different things -- see KeyPageEntry's
+    docstring -- so a model that is sure of the answer but unsure of the page
+    heading (a smudged "Day 5" next to a crisp "8 m") must be able to say so."""
+    payload = {
+        "entries": [
+            {
+                "page_number": 17,
+                "identifier_value": "Day 5",
+                "problem_number": "1",
+                "answer_text": "8 m",
+                "ungradeable_reason": None,
+                "confidence": 0.95,
+                "identifier_confidence": 0.4,
+            }
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(b"x")
+
+    assert result.entries[0].confidence == 0.95
+    assert result.entries[0].identifier_confidence == 0.4
+
+
+def test_missing_identifier_confidence_defaults_to_zero_not_an_error() -> None:
+    payload = {
+        "entries": [
+            {
+                "page_number": 17,
+                "identifier_value": "Day 5",
+                "problem_number": "1",
+                "answer_text": "8 m",
+                "ungradeable_reason": None,
+                "confidence": 0.95,
+            }
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(b"x")
+
+    assert result.entries[0].identifier_confidence == 0.0
 
 
 def test_parses_entries_spanning_several_page_numbers_from_one_photo() -> None:
@@ -182,6 +287,20 @@ def test_vision_model_raising_never_propagates_and_sets_failure() -> None:
     assert result.failure_kind is FailureKind.UNREADABLE
 
 
+def test_a_failed_call_reports_real_elapsed_time_not_a_hardcoded_zero() -> None:
+    """A failure (a 503, a timeout) still cost real wall-clock time -- possibly
+    tens of seconds of retries -- and that number is the one piece of evidence that
+    would tell a parent's server log whether a stuck request was slow or stuck.
+    Hardcoding latency_ms=0 on the failure path threw that evidence away."""
+    model = FakeVisionModel(error=TransientError("Gemini returned 503"))
+    clock = iter([100.0, 104.5])  # 4.5s elapsed before generate() raised
+
+    result = _transcriber(model, monotonic=lambda: next(clock)).transcribe(b"x")
+
+    assert result.failure is not None
+    assert result.latency_ms == 4500
+
+
 def test_misconfigured_error_maps_to_misconfigured_failure_kind() -> None:
     model = FakeVisionModel(error=MisconfiguredError("bad model name"))
 
@@ -212,6 +331,15 @@ def test_request_cap_exceeded_maps_to_request_cap_exceeded_failure_kind() -> Non
     result = _transcriber(model).transcribe(b"x")
 
     assert result.failure_kind is FailureKind.REQUEST_CAP_EXCEEDED
+
+
+def test_transcribe_passes_on_progress_through_to_the_vision_model() -> None:
+    model = FakeVisionModel(progress_updates=(120, 340, 611))
+    seen: list[int] = []
+
+    _transcriber(model).transcribe(b"x", on_progress=seen.append)
+
+    assert seen == [120, 340, 611]
 
 
 def test_transcriber_exposes_request_count_from_the_vision_model() -> None:

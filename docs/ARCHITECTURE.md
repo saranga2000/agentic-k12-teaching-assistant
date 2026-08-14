@@ -73,6 +73,17 @@ are the parts worth reading, and they should be testable in milliseconds.
   request without it, and a `<input type=file>` capture upload has to be sent that
   way — there's no working around it. Not a product dependency in its own right, it's
   what makes the already-approved `fastapi` dependency's file-upload feature work.
+- **playwright + pytest-playwright** (dev-only, `tests/browser/`): the rest of the
+  suite tests server-rendered contracts — status codes, presence of markup — but
+  `TestClient` never executes JavaScript. Four real bugs (the empty student picker,
+  the capture flow's silent wait, the needs-human cause wording, the key-upload dead
+  end) shipped past a fully green suite and were found only on a real device, because
+  nothing exercised the client-side JS between a click and the rendered result.
+  Playwright drives a real headless Chromium against the real ASGI app to close that
+  gap. Not a runtime dependency — `k12ta.web` and `k12ta.keys` never import it; it
+  lives only in `tests/browser/` and the `dev` extra, and is excluded from the default
+  `pytest -q` run (see `tests/browser/conftest.py`) since it needs a Chromium binary
+  (`playwright install chromium`) most edits don't touch and shouldn't have to pay for.
 
 No LangChain, no agent framework, no vector database. The agentic behaviour here is a
 small number of explicit steps with typed handoffs, which is more legible to a reviewer

@@ -12,4 +12,28 @@
 
 <h2>Pages waiting on a key</h2>
 <p class="message">Not tracked yet — see docs/ROADMAP.md for what this needs first.</p>
+
+<h2>Page identity</h2>
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-kind">
+  <label for="page_identity_kind">How does this source show which page you're on?</label>
+  <select name="page_identity_kind" id="page_identity_kind">
+    {% for value, label in page_identity_kind_labels.items() %}
+    <option value="{{ value }}" {% if (source.page_identity_kind or "") == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Save</button>
+</form>
+
+{% set total_resolutions = identity_counts.resolved + identity_counts.below_floor
+   + identity_counts.not_found + identity_counts.conflicting %}
+{% if total_resolutions == 0 %}
+<p class="message">No captures have been checked against a page identity yet.</p>
+{% else %}
+<ul class="identity-counts">
+  <li>Resolved: {{ identity_counts.resolved }}</li>
+  <li>Below confidence floor: {{ identity_counts.below_floor }}</li>
+  <li>Identifier not found: {{ identity_counts.not_found }}</li>
+  <li>Conflicting markers: {{ identity_counts.conflicting }}</li>
+</ul>
+{% endif %}
 {% endblock %}

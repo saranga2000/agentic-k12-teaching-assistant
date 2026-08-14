@@ -67,13 +67,15 @@ def transcribe_key_page(
     settings: Settings,
     get_transcriber: Callable[[], KeyTranscriber],
     image_bytes: bytes,
+    on_progress: Callable[[int], None] | None = None,
 ) -> KeyIngestionOutcome:
     """Quota-gated, one call to `get_transcriber()().transcribe`, no retry loop.
 
     `get_transcriber` is a factory for the same reason `process_capture`'s is: a
     quota-exhausted key photo must never pay the cost of building a live vision-model
     adapter, and a broken provider config must never 500 a request that was never
-    going to reach the model.
+    going to reach the model. `on_progress`, if given, is passed straight through to
+    the transcriber -- see `k12ta.llm.base.VisionModel.generate`'s docstring.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -85,7 +87,7 @@ def transcribe_key_page(
 
     try:
         transcriber = get_transcriber()
-        result = transcriber.transcribe(normalized)
+        result = transcriber.transcribe(normalized, on_progress=on_progress)
     except Exception as exc:
         reason = f"{type(exc).__name__}: {exc}"
         logger.info("key page transcribe outcome=failed reason=%s", reason)

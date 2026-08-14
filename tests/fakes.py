@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from k12ta.transcribe.base import TranscriptionResult
@@ -38,11 +39,19 @@ class FakeKeyTranscriber:
 
     name: str = "fake_key"
     result: KeyPageResult | None = None
+    progress_updates: tuple[int, ...] = ()
+    """Chars to report via on_progress, in order, before returning -- stands in for
+    a real streamed call's chunks arriving."""
     request_count: int = field(default=0, init=False)
     calls: list[bytes] = field(default_factory=list, init=False)
 
-    def transcribe(self, image_bytes: bytes) -> KeyPageResult:
+    def transcribe(
+        self, image_bytes: bytes, on_progress: Callable[[int], None] | None = None
+    ) -> KeyPageResult:
         assert self.result is not None, "set FakeKeyTranscriber.result before calling transcribe"
         self.calls.append(image_bytes)
         self.request_count += 1
+        if on_progress is not None:
+            for chars in self.progress_updates:
+                on_progress(chars)
         return self.result

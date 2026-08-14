@@ -45,6 +45,7 @@ class GradedProblemRow:
     outcome: str
     grader_confidence: float
     expected_answer: str | None = None
+    needs_human_cause: str | None = None
     diagnosis_misconception_id: str | None = None
     diagnosis_explanation: str | None = None
     diagnosis_error_location: str | None = None
@@ -56,12 +57,12 @@ def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> No
         """
         INSERT INTO graded_problems
             (student_id, session_id, capture_id, problem_id, outcome, expected_answer,
-             grader_confidence, diagnosis_misconception_id, diagnosis_explanation,
-             diagnosis_error_location, diagnosis_skill_ids)
+             needs_human_cause, grader_confidence, diagnosis_misconception_id,
+             diagnosis_explanation, diagnosis_error_location, diagnosis_skill_ids)
         VALUES
             (:student_id, :session_id, :capture_id, :problem_id, :outcome, :expected_answer,
-             :grader_confidence, :diagnosis_misconception_id, :diagnosis_explanation,
-             :diagnosis_error_location, :diagnosis_skill_ids)
+             :needs_human_cause, :grader_confidence, :diagnosis_misconception_id,
+             :diagnosis_explanation, :diagnosis_error_location, :diagnosis_skill_ids)
         """,
         {**vars(row), "diagnosis_skill_ids": json.dumps(list(row.diagnosis_skill_ids))},
     )

@@ -3,6 +3,15 @@
 Three eval families. Each has a number, each number goes in the README, and each is run
 before merging a change to the thing it covers.
 
+`tests/browser/` is not a fourth family here on purpose: it has no accuracy number and
+never calls a real model. It's a browser-driven UI regression suite (Playwright against
+a real server) for the class of bug none of the three families below can see -- four
+real bugs shipped past a fully green, model-accuracy-and-status-code suite because
+nothing executed the client-side JavaScript between a click and the rendered page. Read
+`tests/browser/conftest.py`'s module docstring before trusting a green run there as more
+than that: it states plainly what it does and does not catch (real camera handoff, real
+network conditions, real model behaviour, and more are explicitly out of scope).
+
 ## 1. Transcription accuracy (M1)
 
 Fixtures: real pages from both children, hand-labelled once. Metrics:

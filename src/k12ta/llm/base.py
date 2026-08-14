@@ -7,6 +7,7 @@ refactor of anything that calls it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -72,8 +73,17 @@ class VisionModel(Protocol):
     """Total HTTP requests made so far by this instance, including retries. A run
     reuses one instance across every page, so this is a running total for the run."""
 
-    def generate(self, prompt: str, image_bytes: bytes, mime_type: str) -> VisionResponse:
-        """Call the model once. Raises on failure; the caller decides how to degrade."""
+    def generate(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        """Call the model once. Raises on failure; the caller decides how to degrade.
+        `on_progress`, if given, is called with the cumulative character count
+        received so far -- a caller with nothing better than a static spinner uses
+        this to show something honest about a call that can run minutes."""
         ...
 
     def verify(self) -> None:

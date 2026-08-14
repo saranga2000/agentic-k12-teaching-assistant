@@ -329,8 +329,12 @@ def test_post_capture_with_a_good_photo_redirects_to_the_results_page(
     results = client.get(response.headers["location"])
     assert results.status_code == 200
     assert "12 + 1" in results.text
-    # High confidence but no answer key exists yet -- distinct from "couldn't read it".
-    assert "answer key" in results.text.lower()
+    # High confidence, but student capture has no page-number field yet (see
+    # docs/ROADMAP.md's page-identity discussion), so the honest cause is "not sure
+    # which page this is" -- not "no answer key," which would claim a page was
+    # identified and specifically lacks a key, a more specific claim than this
+    # system can actually make today. Distinct from "couldn't read it" either way.
+    assert "not sure which page" in results.text.lower()
     assert "could not read this one clearly" not in results.text.lower()
 
 

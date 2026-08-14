@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
-from k12ta.grading.key_grader import CONFIDENCE_FLOOR
+from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.ingest import capture as ingest_capture
 from k12ta.ingest import schedule as ingest_schedule
 from k12ta.llm import build_vision_model
@@ -44,13 +44,58 @@ NO_STUDENTS_MESSAGE = (
 )
 QUOTA_EXHAUSTED_MESSAGE = "I have done all my reading for today, ask a grown-up."
 NO_PROBLEMS_FOUND_MESSAGE = "I did not find any problems on this page."
-NO_ANSWER_KEY_MESSAGE = "I don't have an answer key for this one yet — ask a grown-up to check it."
+# One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
+# four read differently at a glance -- reinforcement alongside the message text,
+# never the only signal (rule 11's spirit extended to "meaning is never colour- or
+# glyph-alone"). UNKNOWN_PAGE is the one every student capture hits today: the
+# capture flow has no page-number field yet (see docs/ROADMAP.md's page-identity
+# discussion), so NO_KEY_FOR_PAGE and NEEDS_PERSON are not reachable from this route
+# at all until that's built -- still given real, distinct copy here rather than
+# left unhandled, since seeding a session directly (as the key-upload confirm flow
+# already can) reaches them today, and student capture will once page numbers land.
 COULD_NOT_READ_MESSAGE = "I could not read this one clearly."
-# Distinct glyphs per needs_human cause, so the three read differently at a glance --
-# reinforcement alongside the message text, never the only signal (see rule 11 spirit
-# extended to "meaning is never colour- or glyph-alone").
 COULD_NOT_READ_GLYPH = "?"
+UNKNOWN_PAGE_MESSAGE = "I'm not sure which page this is — ask a grown-up to check it."
+UNKNOWN_PAGE_GLYPH = "…"
+NO_ANSWER_KEY_MESSAGE = "I don't have an answer key for this one yet — ask a grown-up to check it."
 NO_ANSWER_KEY_GLYPH = "—"
+NEEDS_PERSON_MESSAGE = "This one needs a grown-up to take a look."
+NEEDS_PERSON_GLYPH = "~"
+# Its own distinct message, not UNKNOWN_PAGE's copy with different words -- and an
+# instruction, not just a diagnosis: this is the de facto two-page-spread handler
+# (docs/ROADMAP.md's M2.2 note), so "I can see two page markers" alone leaves a
+# child stuck on a photo that will never resolve no matter how many times she
+# retries it. "Take a photo of just one page" tells her the one thing that fixes
+# it. See k12ta.grading.needs_human.NeedsHumanCause.CONFLICTING_PAGE_MARKERS's
+# docstring.
+CONFLICTING_PAGE_MARKERS_MESSAGE = "I can see two page markers. Take a photo of just one page."
+CONFLICTING_PAGE_MARKERS_GLYPH = "⇄"
+# A row graded before the needs_human_cause column existed (migration 0006) has no
+# claimed reason -- genuinely unknown, not a guess dressed up as one.
+UNKNOWN_CAUSE_MESSAGE = "I need a grown-up to look at this one."
+UNKNOWN_CAUSE_GLYPH = "?"
+
+_NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
+    NeedsHumanCause.LOW_CONFIDENCE: (COULD_NOT_READ_GLYPH, COULD_NOT_READ_MESSAGE),
+    NeedsHumanCause.UNKNOWN_PAGE: (UNKNOWN_PAGE_GLYPH, UNKNOWN_PAGE_MESSAGE),
+    NeedsHumanCause.NO_KEY_FOR_PAGE: (NO_ANSWER_KEY_GLYPH, NO_ANSWER_KEY_MESSAGE),
+    NeedsHumanCause.NEEDS_PERSON: (NEEDS_PERSON_GLYPH, NEEDS_PERSON_MESSAGE),
+    NeedsHumanCause.CONFLICTING_PAGE_MARKERS: (
+        CONFLICTING_PAGE_MARKERS_GLYPH,
+        CONFLICTING_PAGE_MARKERS_MESSAGE,
+    ),
+}
+
+
+def _needs_human_copy(cause_value: str | None) -> tuple[str, str]:
+    """Glyph and message for a graded_problems row's stored `needs_human_cause`.
+    The one place this decision is rendered from -- never re-derived from
+    confidence or any other proxy, see docs/PROGRESS.md's M2 entry for why that
+    was wrong before."""
+    if cause_value is None:
+        return UNKNOWN_CAUSE_GLYPH, UNKNOWN_CAUSE_MESSAGE
+    return _NEEDS_HUMAN_COPY[NeedsHumanCause(cause_value)]
+
 
 load_dotenv()  # must run before any Settings.from_env() call in this module
 logging.basicConfig(
@@ -93,18 +138,6 @@ def get_transcriber(settings: Settings) -> Transcriber:
             vision_model, provider=settings.llm_provider, model=settings.llm_model
         )
     return _transcriber
-
-
-def _needs_human_reason(transcription_confidence: float) -> str:
-    if transcription_confidence < CONFIDENCE_FLOOR:
-        return COULD_NOT_READ_MESSAGE
-    return NO_ANSWER_KEY_MESSAGE
-
-
-def _needs_human_glyph(transcription_confidence: float) -> str:
-    if transcription_confidence < CONFIDENCE_FLOOR:
-        return COULD_NOT_READ_GLYPH
-    return NO_ANSWER_KEY_GLYPH
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -239,29 +272,25 @@ def session_results(
             for p in captures.list_problems_for_capture(conn, student_id, graded[0].capture_id)
         }
 
-    items = [
-        {
-            "problem_id": g.problem_id,
-            "prompt_text": problems_by_id[g.problem_id].prompt_text
-            if g.problem_id in problems_by_id
-            else "",
-            "student_answer_raw": problems_by_id[g.problem_id].student_answer_raw
-            if g.problem_id in problems_by_id
-            else "",
-            "outcome": g.outcome,
-            "needs_human_reason": (
-                _needs_human_reason(problems_by_id[g.problem_id].transcription_confidence)
-                if g.outcome == "needs_human" and g.problem_id in problems_by_id
-                else None
-            ),
-            "needs_human_glyph": (
-                _needs_human_glyph(problems_by_id[g.problem_id].transcription_confidence)
-                if g.outcome == "needs_human" and g.problem_id in problems_by_id
-                else None
-            ),
-        }
-        for g in graded
-    ]
+    items = []
+    for g in graded:
+        needs_human_glyph, needs_human_reason = (
+            _needs_human_copy(g.needs_human_cause) if g.outcome == "needs_human" else (None, None)
+        )
+        items.append(
+            {
+                "problem_id": g.problem_id,
+                "prompt_text": problems_by_id[g.problem_id].prompt_text
+                if g.problem_id in problems_by_id
+                else "",
+                "student_answer_raw": problems_by_id[g.problem_id].student_answer_raw
+                if g.problem_id in problems_by_id
+                else "",
+                "outcome": g.outcome,
+                "needs_human_reason": needs_human_reason,
+                "needs_human_glyph": needs_human_glyph,
+            }
+        )
 
     return templates.TemplateResponse(
         request,

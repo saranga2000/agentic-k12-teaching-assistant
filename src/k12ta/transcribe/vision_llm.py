@@ -21,9 +21,21 @@ from k12ta.llm.base import (
 )
 from k12ta.prompts import load_prompt
 from k12ta.transcribe._shared import strip_code_fence
-from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
+from k12ta.transcribe.base import (
+    FailureKind,
+    PageIdentityExtraction,
+    TranscribedItem,
+    TranscriptionResult,
+)
 
 _MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+_IDENTITY_KINDS = frozenset(
+    {"day_or_unit_banner", "printed_worksheet_code", "printed_page_number", "unique_problem_ids"}
+)
+"""Every identity kind docs/ROADMAP.md's page-identity discussion names. A kind
+the model invents outside this set is dropped, not carried through as noise --
+same reasoning as dropping a non-dict item in `_parse_items`."""
 
 # Adapter exceptions that mean "the run should stop" or "this page failed for a
 # reason unrelated to its content" — everything else falls to UNREADABLE, the
@@ -62,7 +74,9 @@ class VisionLLMTranscriber:
         try:
             image_bytes, mime_type = _read_image(Path(image_path))
             response = self._vision_model.generate(self._prompt, image_bytes, mime_type)
-            items = _parse_items(response.text)
+            payload = _load_payload(response.text)
+            items = _parse_items(payload)
+            page_identity = _parse_page_identity(payload.get("page_identity"))
             return TranscriptionResult(
                 items=items,
                 provider=self._provider,
@@ -70,6 +84,7 @@ class VisionLLMTranscriber:
                 cost_usd=float(response.cost_usd),
                 latency_ms=response.latency_ms,
                 data_retention=self._vision_model.data_retention,
+                page_identity=page_identity,
             )
         except Exception as exc:
             return TranscriptionResult(
@@ -100,14 +115,41 @@ def _read_image(path: Path) -> tuple[bytes, str]:
     return path.read_bytes(), mime_type
 
 
-def _parse_items(text: str) -> tuple[TranscribedItem, ...]:
+def _load_payload(text: str) -> dict[str, object]:
     payload = json.loads(strip_code_fence(text))
     if not isinstance(payload, dict):
         raise ValueError(f"expected a JSON object, got {type(payload).__name__}")
+    return payload
+
+
+def _parse_items(payload: dict[str, object]) -> tuple[TranscribedItem, ...]:
     raw_items = payload.get("items")
     if not isinstance(raw_items, list):
         raise ValueError("response JSON has no 'items' list")
     return tuple(_parse_item(item) for item in raw_items if isinstance(item, dict))
+
+
+def _parse_page_identity(raw: object) -> PageIdentityExtraction:
+    """Missing or malformed `page_identity` is not an error -- a page with no
+    legible marker at all is a real, expected shape, not a parse failure -- it
+    just means no candidates, exactly the same "absent means nothing extracted"
+    default `PageIdentityExtraction()` already carries."""
+    if not isinstance(raw, dict):
+        return PageIdentityExtraction()
+    candidates: dict[str, tuple[str, ...]] = {}
+    for kind in _IDENTITY_KINDS:
+        raw_values = raw.get(kind)
+        if not isinstance(raw_values, list):
+            continue
+        values = tuple(v for v in raw_values if isinstance(v, str) and v)
+        if values:
+            candidates[kind] = values
+    confidence = raw.get("confidence")
+    valid_confidence = isinstance(confidence, int | float) and not isinstance(confidence, bool)
+    return PageIdentityExtraction(
+        candidates=candidates,
+        confidence=float(confidence) if valid_confidence else 0.0,  # type: ignore[arg-type]
+    )
 
 
 def _parse_item(raw: dict[str, object]) -> TranscribedItem:

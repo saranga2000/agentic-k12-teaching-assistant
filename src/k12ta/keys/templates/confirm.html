@@ -11,8 +11,26 @@
       <th>page</th><th>problem</th><th>answer</th><th>ungradeable</th><th>reason</th>
     </tr>
     {% for entry in entries %}
+    {% set unconfirmed = entry.identifier_confidence < identifier_confidence_floor %}
     <tr>
-      <td><input type="text" name="page_number_{{ loop.index0 }}" value="{{ entry.page_number }}"></td>
+      <td>
+        <input
+          type="text"
+          name="page_number_{{ loop.index0 }}"
+          value="{{ entry.page_number }}"
+          class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
+        >
+        <input
+          type="text"
+          name="identifier_value_{{ loop.index0 }}"
+          value="{{ entry.identifier_value }}"
+          class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
+        >
+        <input type="hidden" name="identifier_value_original_{{ loop.index0 }}" value="{{ entry.identifier_value }}">
+        {% if unconfirmed %}
+        <span class="unconfirmed-flag">unconfirmed — check page &amp; identifier</span>
+        {% endif %}
+      </td>
       <td><input type="text" name="problem_number_{{ loop.index0 }}" value="{{ entry.problem_number }}"></td>
       <td><input type="text" name="answer_text_{{ loop.index0 }}" value="{{ entry.answer_text or '' }}"></td>
       <td>

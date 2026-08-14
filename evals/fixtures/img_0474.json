@@ -23,5 +23,8 @@
       "correct_answer": ""
     }
   ],
-  "spread_side": "left"
+  "spread_side": "left",
+  "page_identity": {
+    "printed_page_number": ["10", "11"]
+  }
 }

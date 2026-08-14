@@ -7,9 +7,17 @@ inside a scoring run days later. Does not read image bytes or call a model.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+_IDENTITY_KINDS = frozenset(
+    {"day_or_unit_banner", "printed_worksheet_code", "printed_page_number", "unique_problem_ids"}
+)
+"""Same four kinds docs/ROADMAP.md's page-identity discussion names, and
+`k12ta.transcribe.vision_llm`'s own `_IDENTITY_KINDS` -- kept as a separate literal
+here rather than imported, since `k12ta.evals` labels ground truth and must not
+depend on the extraction code it will eventually be used to score."""
 
 
 class CaptureMethod(Enum):
@@ -58,6 +66,12 @@ class FixturePage:
     layout: Layout
     spread_side: SpreadSide | None
     items: tuple[FixtureItem, ...]
+    page_identity: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Ground truth for whatever page-identity markers are legible anywhere in
+    this photo (not just the labelled `spread_side`) -- kind -> every distinct
+    value actually printed. Empty for a fixture not yet labelled for this; two
+    values under one kind is the real, common two-page-spread-with-two-banners
+    shape (see docs/ROADMAP.md), never an error."""
 
 
 def load_fixture_pages(fixtures_dir: Path) -> list[FixturePage]:
@@ -95,6 +109,7 @@ def _parse_page(label_path: Path, fixtures_dir: Path) -> FixturePage:
         layout=layout,
         spread_side=spread_side,
         items=_parse_items(page, label_path),
+        page_identity=_parse_page_identity(page, label_path),
     )
 
 
@@ -124,6 +139,27 @@ def _parse_layout(page: dict[str, object], label_path: Path) -> tuple[Layout, Sp
             f"{label_path}: spread_side must be one of {allowed}, got {spread_side_raw!r}"
         ) from exc
     return layout, spread_side
+
+
+def _parse_page_identity(page: dict[str, object], label_path: Path) -> dict[str, tuple[str, ...]]:
+    if "page_identity" not in page:
+        return {}
+    raw = page["page_identity"]
+    if not isinstance(raw, dict):
+        raise FixtureValidationError(f"{label_path}: 'page_identity' must be an object")
+    result: dict[str, tuple[str, ...]] = {}
+    for kind, values in raw.items():
+        if kind not in _IDENTITY_KINDS:
+            allowed = ", ".join(sorted(_IDENTITY_KINDS))
+            raise FixtureValidationError(
+                f"{label_path}: page_identity kind {kind!r} must be one of {allowed}"
+            )
+        if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+            raise FixtureValidationError(
+                f"{label_path}: page_identity[{kind!r}] must be a list of non-empty strings"
+            )
+        result[kind] = tuple(values)
+    return result
 
 
 def _parse_items(page: dict[str, object], label_path: Path) -> tuple[FixtureItem, ...]:

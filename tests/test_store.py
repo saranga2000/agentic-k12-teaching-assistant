@@ -36,6 +36,8 @@ _EXPECTED_TABLES = {
     "daily_request_counts",
     "answer_key_entries",
     "answer_key_audit_log",
+    "page_identities",
+    "page_identity_resolutions",
 }
 
 
@@ -55,6 +57,100 @@ def test_schema_applies_cleanly_and_reapplying_is_a_no_op() -> None:
     }
     assert tables == _EXPECTED_TABLES
     assert migrate.apply_migrations(conn) == []
+
+
+def test_graded_problems_carries_nullable_needs_human_cause() -> None:
+    """Scope A: the cause column exists and is NULL for rows graded before the change.
+    NULL is honest -- a row that predates the column genuinely does not know why it was
+    flagged, and the renderer must not invent a reason for it."""
+    conn = _migrated_connection()
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(graded_problems)").fetchall()}
+    assert "needs_human_cause" in columns
+
+    # The full parent chain any graded_problems row needs, built through the store API.
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-legacy",
+            display_name="Legacy",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-legacy",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-legacy",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-legacy",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:05:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-legacy",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+            skill_ids=("integer-addition",),
+            page_region=(10, 20, 200, 60),
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-legacy",
+            session_id="sess-x",
+            assignment_id="a-1",
+            started_at="2026-08-12T08:05:00+00:00",
+        ),
+    )
+
+    # A legacy graded_problems row written the way 0001..0005 produced it (no
+    # cause column present at all).
+    conn.execute(
+        """
+        INSERT INTO graded_problems
+            (student_id, session_id, capture_id, problem_id, outcome, expected_answer,
+             grader_confidence, diagnosis_skill_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("s-legacy", "sess-x", "c-1", "1", "needs_human", None, 0.99, "[]"),
+    )
+    conn.commit()
+
+    graded = sessions.list_graded_problems_for_session(conn, "s-legacy", "sess-x")
+    assert len(graded) == 1
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause is None
 
 
 def _seed_marcus(conn: sqlite3.Connection) -> None:
@@ -610,3 +706,133 @@ def test_answer_key_audit_log_round_trips_and_is_scoped_to_one_student() -> None
     assert entries[0].action == "conflict_resolved"
     assert entries[0].resolution == "used_new"
     assert answer_key_audit.list_audit_log_for_source(conn, "s-priya", "summer_bridge") == []
+
+
+def test_content_source_page_identity_kind_is_nullable_and_round_trips() -> None:
+    """Scope B: page_identity_kind is per-source (docs/ROADMAP.md's page-identity
+    discussion), not a global assumption -- NULL by default (no source is assumed
+    to have one until a parent's setup flow records it), and round-trips when set."""
+    conn = _migrated_connection()
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(content_sources)").fetchall()}
+    assert "page_identity_kind" in columns
+
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    no_kind = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert no_kind is not None
+    assert no_kind.page_identity_kind is None
+
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="rsm",
+            label="RSM",
+            kind="tutoring",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+            page_identity_kind="unique_problem_ids",
+        ),
+    )
+    with_kind = content.get_content_source(conn, "s-marcus", "rsm")
+    assert with_kind is not None
+    assert with_kind.page_identity_kind == "unique_problem_ids"
+
+
+def test_set_page_identity_kind_updates_an_existing_source() -> None:
+    """The parent-facing enrollment screen's save action -- a source starts with
+    no kind configured (honest refusal until set) and a parent picks one through
+    the UI, never by hand-editing the database."""
+    conn = _migrated_connection()
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+
+    content.set_page_identity_kind(conn, "s-marcus", "summer_bridge", "day_or_unit_banner")
+
+    row = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert row is not None
+    assert row.page_identity_kind == "day_or_unit_banner"
+
+
+def test_set_page_identity_kind_to_none_clears_it() -> None:
+    """ "Not sure yet" must be re-selectable, not a one-way choice -- clearing it
+    back to NULL restores the honest refusal rather than leaving a stale kind."""
+    conn = _migrated_connection()
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+            page_identity_kind="day_or_unit_banner",
+        ),
+    )
+
+    content.set_page_identity_kind(conn, "s-marcus", "summer_bridge", None)
+
+    row = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert row is not None
+    assert row.page_identity_kind is None

@@ -22,6 +22,11 @@ class ContentSourceRow:
     default_mode: str
     typical_session_minutes: int
     standards_frame: str | None = None
+    page_identity_kind: str | None = None
+    """One of "day_or_unit_banner", "printed_worksheet_code", "unique_problem_ids",
+    "printed_page_number", or None if not yet configured for this source. Per-source,
+    never a global assumption -- see docs/ROADMAP.md's page-identity discussion and
+    k12ta.grading.page_identity, the only place this value is interpreted."""
 
 
 def insert_content_source(conn: sqlite3.Connection, row: ContentSourceRow) -> None:
@@ -29,12 +34,29 @@ def insert_content_source(conn: sqlite3.Connection, row: ContentSourceRow) -> No
         """
         INSERT INTO content_sources
             (student_id, source_id, label, kind, subject, has_answer_key,
-             graded_by_someone_else, default_mode, typical_session_minutes, standards_frame)
+             graded_by_someone_else, default_mode, typical_session_minutes,
+             standards_frame, page_identity_kind)
         VALUES
             (:student_id, :source_id, :label, :kind, :subject, :has_answer_key,
-             :graded_by_someone_else, :default_mode, :typical_session_minutes, :standards_frame)
+             :graded_by_someone_else, :default_mode, :typical_session_minutes,
+             :standards_frame, :page_identity_kind)
         """,
         vars(row),
+    )
+    conn.commit()
+
+
+def set_page_identity_kind(
+    conn: sqlite3.Connection, student_id: str, source_id: str, page_identity_kind: str | None
+) -> None:
+    """The parent-facing enrollment screen's save action, and the only intended
+    way this column is ever written after initial insert -- never by hand-editing
+    the database. `None` is a real, re-selectable choice ("not sure yet"), not an
+    error: it restores the honest NOT_FOUND refusal `k12ta.grading.page_identity
+    .resolve` already gives a source with no configured kind."""
+    conn.execute(
+        "UPDATE content_sources SET page_identity_kind = ? WHERE student_id = ? AND source_id = ?",
+        (page_identity_kind, student_id, source_id),
     )
     conn.commit()
 

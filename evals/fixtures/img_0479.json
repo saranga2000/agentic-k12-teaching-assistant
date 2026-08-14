@@ -65,5 +65,9 @@
       "correct_answer": ""
     }
   ],
-  "spread_side": "right"
+  "spread_side": "right",
+  "page_identity": {
+    "day_or_unit_banner": ["Day 3", "Day 4"],
+    "printed_page_number": ["18"]
+  }
 }

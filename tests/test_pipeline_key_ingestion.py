@@ -131,6 +131,19 @@ def test_normalized_bytes_are_returned_for_the_confirm_screens_photo_preview(
     assert Image.open(io.BytesIO(outcome.normalized_image_bytes)).size == (1200, 1600)
 
 
+def test_transcribe_passes_on_progress_through_to_the_transcriber(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeKeyTranscriber(result=_success_result(17), progress_updates=(50, 400))
+    seen: list[int] = []
+
+    transcribe_key_page(
+        conn, settings, lambda: transcriber, _sideways_portrait_jpeg(), on_progress=seen.append
+    )
+
+    assert seen == [50, 400]
+
+
 def test_quota_already_exhausted_never_calls_the_transcriber(tmp_path: Path) -> None:
     conn = _migrated_connection()
     settings = _settings(tmp_path, daily_request_limit=1)

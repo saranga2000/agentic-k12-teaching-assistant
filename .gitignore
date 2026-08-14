@@ -13,3 +13,4 @@ evals/fixtures/**/*.[Jj][Pp][Ee][Gg]
 evals/fixtures/**/*.[Pp][Nn][Gg]
 evals/fixtures/**/*.[Hh][Ee][Ii][Cc]
 .DS_Store
+.run/

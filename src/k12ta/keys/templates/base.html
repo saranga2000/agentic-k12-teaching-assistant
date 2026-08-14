@@ -52,6 +52,10 @@
     background: var(--surface); color: var(--text);
   }
   fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 0.75rem 1rem; }
+  input.unconfirmed-field { border-color: var(--attention); background: var(--attention-bg); }
+  .unconfirmed-flag {
+    display: block; font-size: 0.8rem; color: var(--attention); margin-top: 0.25rem;
+  }
   .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
   .message {
     background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
@@ -62,6 +66,18 @@
     background: var(--accent); color: #12141a; cursor: pointer;
     text-decoration: none; display: inline-block; font-weight: 600;
   }
+  /* Same token names as k12ta.web/templates/base.html's working-state block --
+     ported here for the same reason it was added there: a slow model call with no
+     on-screen acknowledgement is indistinguishable from a stalled connection. */
+  .working-state { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+  .working-state .message { margin: 0; }
+  .working-detail { font-size: 1rem; color: var(--text-dim); margin: 0; }
+  .working-spinner {
+    width: 48px; height: 48px; border-radius: 50%;
+    border: 5px solid var(--neutral-bg); border-top-color: var(--accent);
+    animation: working-spin 0.8s linear infinite;
+  }
+  @keyframes working-spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>

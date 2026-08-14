@@ -14,7 +14,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov", "mypy>=1.10", "ruff>=0.5"]
+dev = [
+  "pytest>=8",
+  "pytest-cov",
+  "mypy>=1.10",
+  "ruff>=0.5",
+  "playwright>=1.45",
+  "pytest-playwright>=0.5",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -41,4 +48,7 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not browser'"
+markers = [
+  "browser: end-to-end tests driving a real Chromium via Playwright against a real server; excluded by default (needs `playwright install chromium`), run via `make check-browser`",
+]

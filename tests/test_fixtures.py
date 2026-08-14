@@ -242,3 +242,67 @@ def test_rejects_spread_side_present_when_layout_is_single_page(tmp_path: Path) 
 
     with pytest.raises(FixtureValidationError, match="spread_side"):
         load_fixture_pages(tmp_path)
+
+
+def test_page_identity_defaults_to_empty_when_absent(tmp_path: Path) -> None:
+    """Scope B: most fixtures predate this field entirely -- absence means "not
+    labelled yet," not a validation error."""
+    page = _valid_page()
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].page_identity == {}
+
+
+def test_loads_page_identity_candidates_per_kind(tmp_path: Path) -> None:
+    page = _valid_page()
+    page["page_identity"] = {
+        "day_or_unit_banner": ["Day 1"],
+        "printed_page_number": ["13"],
+    }
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].page_identity == {
+        "day_or_unit_banner": ("Day 1",),
+        "printed_page_number": ("13",),
+    }
+
+
+def test_page_identity_preserves_two_conflicting_values_on_a_spread(tmp_path: Path) -> None:
+    """The real, common shape: a two-page spread showing two different "Day N"
+    banners at once (7 of the real 9 Summer Bridge fixtures are exactly this) --
+    ground truth for the CONFLICTING outcome, so both values must survive loading,
+    never collapsed to one."""
+    page = _valid_page()
+    page["page_identity"] = {"day_or_unit_banner": ["Day 2", "Day 3"]}
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].page_identity["day_or_unit_banner"] == ("Day 2", "Day 3")
+
+
+def test_rejects_unknown_page_identity_kind(tmp_path: Path) -> None:
+    page = _valid_page()
+    page["page_identity"] = {"chapter_stamp": ["Ch. 3"]}
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="chapter_stamp"):
+        load_fixture_pages(tmp_path)
+
+
+def test_rejects_page_identity_value_that_is_not_a_list_of_strings(tmp_path: Path) -> None:
+    page = _valid_page()
+    page["page_identity"] = {"day_or_unit_banner": "Day 1"}
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="day_or_unit_banner"):
+        load_fixture_pages(tmp_path)

@@ -5,7 +5,18 @@
       "Bash(diskutil info *)",
       "Bash(cd \"/Volumes/SriRamaJayam/Desktop/myApps\" && ls -la | grep -i \"venv\\\\|Adaptive\")",
       "Read(//Volumes/SriRamaJayam/Desktop/myApps/**)",
-      "Bash(git init *)"
+      "Bash(git init *)",
+      "Bash(.venv/bin/ruff format *)",
+      "Bash(lsof -nP -iTCP -sTCP:LISTEN)",
+      "Bash(ipconfig getifaddr *)",
+      "Bash(kill 78217)",
+      "Bash(nohup python -m k12ta.keys --host 192.168.0.96 --port 8082)",
+      "Bash(disown)",
+      "Bash(curl -s -o /dev/null -w \"parent app via LAN IP: %{http_code}\\\\n\" http://192.168.0.96:8082/ --max-time 3)",
+      "Bash(.venv/bin/python -c \"import fastapi_cli\")",
+      "Bash(.venv/bin/pip show *)",
+      "Bash(nohup .venv/bin/python -m k12ta.keys --host 192.168.0.96 --port 8082)",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

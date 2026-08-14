@@ -266,6 +266,80 @@ def test_request_cap_exceeded_maps_to_request_cap_exceeded_failure_kind(tmp_path
     assert result.failure_kind is FailureKind.REQUEST_CAP_EXCEEDED
 
 
+def test_parses_page_identity_candidates_and_confidence(tmp_path: Path) -> None:
+    """Scope B: a student capture's page-identity extraction feeds
+    k12ta.grading.page_identity.resolve() the same shape as the key-scan side
+    already does -- kind -> every distinct value seen, plus one confidence for
+    the whole extraction, separate from any item's answer confidence."""
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    payload = {
+        "items": [],
+        "page_identity": {
+            "day_or_unit_banner": ["Day 1"],
+            "printed_worksheet_code": [],
+            "printed_page_number": ["13"],
+            "unique_problem_ids": [],
+            "confidence": 0.9,
+        },
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.failure is None
+    assert result.page_identity.candidates == {
+        "day_or_unit_banner": ("Day 1",),
+        "printed_page_number": ("13",),
+    }
+    assert result.page_identity.confidence == 0.9
+
+
+def test_page_identity_conflicting_markers_on_a_spread_keep_every_distinct_value() -> None:
+    """A two-page-spread photo can show two different "Day N" banners at once --
+    the exact real-world shape the CONFLICTING outcome exists for (see
+    tests/test_page_identity_resolution.py). The transcriber must preserve both
+    values, not collapse or pick one -- the pick happens nowhere in this module."""
+    from k12ta.transcribe.vision_llm import _parse_page_identity
+
+    raw = {
+        "day_or_unit_banner": ["Day 2", "Day 3"],
+        "confidence": 0.85,
+    }
+
+    extraction = _parse_page_identity(raw)
+
+    assert extraction.candidates["day_or_unit_banner"] == ("Day 2", "Day 3")
+
+
+def test_missing_page_identity_defaults_to_no_candidates_and_zero_confidence(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    model = FakeVisionModel(response_text='{"items": []}')
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert result.failure is None
+    assert result.page_identity.candidates == {}
+    assert result.page_identity.confidence == 0.0
+
+
+def test_page_identity_ignores_unknown_kinds_and_non_string_values() -> None:
+    from k12ta.transcribe.vision_llm import _parse_page_identity
+
+    raw = {
+        "day_or_unit_banner": ["Day 1", 42, None],
+        "some_kind_the_model_invented": ["x"],
+        "confidence": 0.5,
+    }
+
+    extraction = _parse_page_identity(raw)
+
+    assert extraction.candidates == {"day_or_unit_banner": ("Day 1",)}
+
+
 def test_transcriber_exposes_request_count_from_the_vision_model(tmp_path: Path) -> None:
     image = tmp_path / "page.jpg"
     image.write_bytes(b"x")

@@ -63,6 +63,11 @@ introduced without being asked.
   (`src/k12ta/mastery/model.py` -> `tests/test_mastery.py`). Move to mirrored
   subdirectories only once a package has three or more test files. Do not create empty
   test directories in advance.
+- `tests/browser/` is a deliberate, named exception to the flat/mirrored rule above: it
+  is not a mirror of any `src/k12ta/<package>`, it is a different axis entirely
+  (end-to-end, Playwright-driven, excluded from the default `pytest -q` run — see
+  `tests/browser/conftest.py`). One subdirectory for that whole test category, not one
+  per package.
 - Hidden files and directories are part of this repo, search them
 - File-edit tooling, verified empirically (2026-08): relative to this workspace,
   `single_find_and_replace` with flat parameters is safe and preserves surrounding

@@ -79,5 +79,9 @@
       "correct_answer": "2/3"
     }
   ],
-  "spread_side": "right"
+  "spread_side": "right",
+  "page_identity": {
+    "day_or_unit_banner": ["Day 5"],
+    "printed_page_number": ["20", "21"]
+  }
 }

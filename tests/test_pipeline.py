@@ -11,10 +11,27 @@ from decimal import Decimal
 from pathlib import Path
 
 from k12ta.config import Settings
+from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.llm.base import DataRetention
 from k12ta.pipeline.process import PipelineStatus, process_capture
-from k12ta.store import captures, content, db, migrate, quota, sessions, students
-from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
+from k12ta.store import (
+    answer_keys,
+    captures,
+    content,
+    db,
+    migrate,
+    page_identities,
+    page_identity_resolutions,
+    quota,
+    sessions,
+    students,
+)
+from k12ta.transcribe.base import (
+    FailureKind,
+    PageIdentityExtraction,
+    TranscribedItem,
+    TranscriptionResult,
+)
 from tests.fakes import FakeTranscriber
 
 TODAY = date.today()
@@ -68,6 +85,48 @@ def _seed_student_with_source(conn: sqlite3.Connection, student_id: str) -> str:
             graded_by_someone_else=False,
             default_mode="full",
             typical_session_minutes=30,
+        ),
+    )
+    assignment_id = "summer_bridge:2026-08-12"
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id=student_id,
+            assignment_id=assignment_id,
+            source_id="summer_bridge",
+            created_at=TODAY.isoformat(),
+        ),
+    )
+    return assignment_id
+
+
+def _seed_student_with_day_banner_source(conn: sqlite3.Connection, student_id: str) -> str:
+    """Same as `_seed_student_with_source`, but the content source has a configured
+    `page_identity_kind` -- the shape auto-resolution needs to have anything to
+    resolve against at all."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id=student_id,
+            display_name="Jahnvi",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+            page_identity_kind="day_or_unit_banner",
         ),
     )
     assignment_id = "summer_bridge:2026-08-12"
@@ -141,6 +200,9 @@ def test_successful_transcribe_persists_problems_and_needs_human_graded_rows(
     assert len(graded) == 2
     assert all(g.outcome == "needs_human" for g in graded)
     assert all(g.expected_answer is None for g in graded)
+    # No page number was supplied, so the honest cause is "could not tell which page
+    # this is", never a guessed page or an invented key reason.
+    assert all(g.needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value for g in graded)
 
     quota_count = quota.get_count(conn, TODAY)
     assert quota_count == 1
@@ -244,3 +306,280 @@ def test_daily_counter_survives_a_simulated_server_restart(tmp_path: Path) -> No
 
     assert second_outcome.status is PipelineStatus.QUOTA_EXHAUSTED
     assert second_transcriber.calls == []
+
+
+def _seed_key_entries(
+    conn: sqlite3.Connection, student_id: str, source_id: str, page_number: int
+) -> None:
+    """Persist key entries through the same store the parent confirm gate writes
+    (k12ta.store.answer_keys.upsert_entry), not by raw INSERT -- the pipeline under
+    test here is the capture/grade path, and its key lookup must read the real store."""
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id=source_id,
+            page_number=page_number,
+            problem_number="1",
+            answer_text="42",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-12T00:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id=source_id,
+            page_number=page_number,
+            problem_number="2",
+            answer_text=None,
+            ungradeable_reason="answers_vary",
+            confirmed_at="2026-08-12T00:00:00+00:00",
+        ),
+    )
+
+
+def test_keyed_page_grades_correct_incorrect_and_honest_causes(
+    tmp_path: Path,
+) -> None:
+    """With a page number and a real key page persisted, the pipeline grades against
+    the key: a match is CORRECT, an ungradeable-key item is NEEDS_PERSON, and an item
+    whose number has no key entry on that page is NO_KEY_FOR_PAGE."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
+    settings = _settings(tmp_path)
+    # problem 1 -> "42" (matches key -> CORRECT)
+    # problem 2 -> ungradeable key entry ("answers_vary" -> NEEDS_PERSON)
+    # problem 3 -> no key entry on page 5 (-> NO_KEY_FOR_PAGE)
+    items = (
+        TranscribedItem(problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99),
+        TranscribedItem(problem_id="2", prompt_text="q2", student_answer_raw="x", confidence=0.99),
+        TranscribedItem(problem_id="3", prompt_text="q3", student_answer_raw="y", confidence=0.99),
+    )
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=items,
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        )
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    by_problem = {g.problem_id: g for g in graded}
+
+    assert by_problem["1"].outcome == "correct"
+    assert by_problem["1"].expected_answer == "42"
+    assert by_problem["1"].needs_human_cause is None
+
+    assert by_problem["2"].outcome == "needs_human"
+    assert by_problem["2"].needs_human_cause == NeedsHumanCause.NEEDS_PERSON.value
+
+    assert by_problem["3"].outcome == "needs_human"
+    assert by_problem["3"].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+
+
+def test_low_confidence_is_its_own_cause_even_when_a_key_exists(
+    tmp_path: Path,
+) -> None:
+    """A readable-but-low-confidence transcription must never become a confident
+    grade just because a key exists -- it is its own honest cause."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.4
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        )
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.LOW_CONFIDENCE.value
+
+
+def test_capture_with_no_manual_page_number_resolves_via_page_identity(
+    tmp_path: Path,
+) -> None:
+    """Scope B, the whole point: a student capture with no manual page_number now
+    resolves against a confirmed key-scan marker automatically, using whatever the
+    model read off this same photo -- closing the gap Scope A's proof left open."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            identifier_value="Day 3",
+            confirmed_at="2026-08-12T00:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(
+                candidates={"day_or_unit_banner": ("Day 3",)}, confidence=0.97
+            ),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].expected_answer == "42"
+
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"resolved": 1}
+
+
+def test_capture_with_conflicting_page_markers_refuses_every_item(
+    tmp_path: Path,
+) -> None:
+    """Two different day banners on one photo (a two-page spread) must refuse
+    outright -- never pick one -- and every item on that photo gets the distinct
+    CONFLICTING_PAGE_MARKERS cause, not the generic UNKNOWN_PAGE."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="2", prompt_text="q2", student_answer_raw="7", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(
+                candidates={"day_or_unit_banner": ("Day 2", "Day 3")}, confidence=0.95
+            ),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert len(graded) == 2
+    assert all(g.outcome == "needs_human" for g in graded)
+    assert all(
+        g.needs_human_cause == NeedsHumanCause.CONFLICTING_PAGE_MARKERS.value for g in graded
+    )
+
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"conflicting": 1}
+
+
+def test_manual_page_number_override_skips_auto_resolution_entirely(
+    tmp_path: Path,
+) -> None:
+    """A caller-supplied page_number (tests, the Scope A demo path) must win
+    outright and never be second-guessed by this photo's own identity
+    extraction -- and, since resolution never runs, nothing is logged to
+    page_identity_resolutions for it."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_day_banner_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=5)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            # Conflicting candidates the auto-resolve path would refuse on --
+            # irrelevant here because the manual override bypasses resolution.
+            page_identity=PageIdentityExtraction(
+                candidates={"day_or_unit_banner": ("Day 2", "Day 3")}, confidence=0.95
+            ),
+        )
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {}

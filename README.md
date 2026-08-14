@@ -21,7 +21,7 @@ There are two doors into this repository, depending on why you are here:
 |---|---|---|
 | M0 Skeleton + domain model | Repo hygiene, tests-before-code, CI | done |
 | M1 Fixture corpus + transcription eval | Measurement before capability | done |
-| M2 Vertical slice (photo to graded page) | End to end value | not started |
+| M2 Vertical slice (photo to graded page) | End to end value | in progress — capture, key-based grading, SQLite persistence, and the parent answer-key ingestion app are built; parent notification of pages waiting on a missing key is not |
 | M3 Assignment policy engine + integrity evals | Safety rail with its own tests | not started |
 | M4 Mastery model with decay and resurfacing | The headline chapter | scaffolded |
 | M5 Parent weekly digest | Payoff for the busy adult | not started |
@@ -76,9 +76,13 @@ pip install -e ".[dev]"
 pytest
 ```
 
-That runs the 31 tests M0 shipped. Implemented and tested right now: the domain model,
-the feedback policy engine, the mastery model, and the key-based grader. Not built yet:
-transcription, persistence, and the web interface.
+That runs the full suite: 251 tests. Implemented and tested right now: the domain
+model, the feedback policy engine, the mastery model, the key-based grader, a measured
+transcription pipeline (a Gemini vision adapter with retry-with-backoff and failure
+classification), SQLite persistence with student-scoped tables, a student-facing
+capture-grade-results web app, and a separate parent-facing answer-key ingestion app.
+Not built yet: the assignment policy engine and integrity evals (M3), mastery evidence
+wired into live sessions (M4), and the parent weekly digest (M5).
 
 ### What you will learn
 

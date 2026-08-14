@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(export K12TA_DATA_DIR=/private/tmp/claude-501/-Volumes-SriRamaJayam-Desktop-myApps-agentic-k12-teaching-assistant/ee486630-956e-4666-88d2-ad821f33eb77/scratchpad/k12ta-diag2)",
+      "Bash(python scripts/seed_dev_data.py)",
+      "Bash(K12TA_DATA_DIR=/private/tmp/claude-501/-Volumes-SriRamaJayam-Desktop-myApps-agentic-k12-teaching-assistant/ee486630-956e-4666-88d2-ad821f33eb77/scratchpad/k12ta-diag2 nohup python -m k12ta.web --host 127.0.0.1 --port 8092)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl -sv http://127.0.0.1:8092/)",
+      "Bash(curl -sv http://127.0.0.1:8080/)",
+      "Bash(sqlite3 data/k12ta.db \"SELECT student_id, display_name FROM students;\")",
+      "Bash(ps eww *)",
+      "Bash(sqlite3 data/k12ta.db \".tables\")",
+      "Bash(sqlite3 data/k12ta.db \"SELECT COUNT\\(*\\) FROM students;\")",
+      "Bash(kill 26170)",
+      "Bash(curl -s http://127.0.0.1:8080/)",
+      "Bash(kill 34501)",
+      "Bash(sqlite3 data/k12ta.db \"DELETE FROM weekly_default_sources WHERE student_id IN \\('dev-alex','dev-sam'\\); DELETE FROM content_sources WHERE student_id IN \\('dev-alex','dev-sam'\\); DELETE FROM students WHERE student_id IN \\('dev-alex','dev-sam'\\); SELECT student_id, display_name, grade_level FROM students;\")",
+      "Bash(sqlite3 data/k12ta.db \"SELECT student_id, display_name, grade_level FROM students;\")",
+      "Bash(kill 47231)",
+      "Bash(sqlite3 /private/tmp/claude-501/-Volumes-SriRamaJayam-Desktop-myApps-agentic-k12-teaching-assistant/ee486630-956e-4666-88d2-ad821f33eb77/scratchpad/k12ta-quota-test2/k12ta.db 'SELECT COUNT\\(*\\) FROM page_captures; SELECT * FROM daily_request_counts;')",
+      "Bash(kill 48140)",
+      "Bash(curl -s -X POST http://127.0.0.1:8095/capture/dev-jahnvi -F assignment_id=summer_bridge:2026-08-12 -F 'photo=@/private/tmp/claude-501/-Volumes-SriRamaJayam-Desktop-myApps-agentic-k12-teaching-assistant/ee486630-956e-4666-88d2-ad821f33eb77/scratchpad/ipad-portrait-sideways.jpg;type=image/jpeg')",
+      "Bash(sqlite3 /private/tmp/claude-501/-Volumes-SriRamaJayam-Desktop-myApps-agentic-k12-teaching-assistant/ee486630-956e-4666-88d2-ad821f33eb77/scratchpad/k12ta-exif-test/k12ta.db 'SELECT capture_id, image_path FROM page_captures;')",
+      "Bash(kill 51614)",
+      "Bash(curl -s http://127.0.0.1:8096/capture/dev-jahnvi)",
+      "Bash(kill 53563)",
+      "Bash(kill 53692)",
+      "Bash(curl -s -o /dev/null -w \"server up, GET / -> %{http_code}\\\\n\" http://127.0.0.1:8080/)",
+      "Bash(sqlite3 /Volumes/SriRamaJayam/Desktop/myApps/agentic-k12-teaching-assistant/data/k12ta.db \"SELECT capture_id FROM page_captures ORDER BY captured_at DESC LIMIT 5;\")",
+      "Bash(env)",
+      "Bash(ipconfig getifaddr *)",
+      "Bash(.venv/bin/pytest -q)"
+    ]
+  }
+}

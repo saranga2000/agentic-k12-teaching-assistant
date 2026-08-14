@@ -3,5 +3,9 @@
 {% block content %}
 <h1>{{ source.label }} — {{ student.display_name }}</h1>
 <p class="message">{{ message }}</p>
+{% if show_retry %}
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Try again</a></p>
+{% else %}
 <p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Back to upload</a></p>
+{% endif %}
 {% endblock %}

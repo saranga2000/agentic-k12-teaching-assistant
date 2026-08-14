@@ -5,10 +5,90 @@
 <h1>{{ source.label }} — {{ student.display_name }}</h1>
 <p>Photograph or choose a page of the answer key. One photo can cover several
 workbook pages, so a whole key is usually 6-8 photos.</p>
-<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/upload" enctype="multipart/form-data">
-  <input type="file" name="photo" accept="image/*" capture="environment" required>
+<form id="upload-form" method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/upload" enctype="multipart/form-data">
+  <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" required>
   <div class="actions">
-    <button type="submit">Upload page</button>
+    <button id="upload-button" type="submit">Upload page</button>
   </div>
 </form>
+<div id="working-state" class="working-state" hidden>
+  <div class="working-spinner"></div>
+  <p class="message">Reading the page&hellip;</p>
+  <p id="working-detail" class="working-detail">A dense key page can take a minute or two.</p>
+</div>
+<p id="submit-error" class="message" hidden>Could not reach the server — check the WiFi and try again.</p>
+<script>
+  (function () {
+    var form = document.getElementById("upload-form");
+    var input = document.getElementById("photo-input");
+    var button = document.getElementById("upload-button");
+    var working = document.getElementById("working-state");
+    var workingDetail = document.getElementById("working-detail");
+    var submitError = document.getElementById("submit-error");
+    var defaultDetailText = workingDetail.textContent;
+
+    // The response is newline-delimited JSON, not one HTML blob: zero or more
+    // {"type": "progress", "chars": N} lines while the model call is in flight,
+    // then one {"type": "final", "html": "..."} line. Reading it incrementally
+    // (response.body.getReader(), not response.text()) is what makes the
+    // character count update live instead of only appearing once at the end --
+    // a spinner with no signal of life is indistinguishable from a hang, which
+    // is exactly what made the original "connection interrupted" bug hard to
+    // tell apart from a real one.
+    function handleLine(line) {
+      if (!line) return;
+      var msg = JSON.parse(line);
+      if (msg.type === "progress") {
+        workingDetail.textContent = "Reading the page… " + msg.chars + " characters so far.";
+      } else if (msg.type === "final") {
+        document.open();
+        document.write(msg.html);
+        document.close();
+      }
+    }
+
+    function pump(reader, decoder, buffer) {
+      return reader.read().then(function (result) {
+        if (result.done) return;
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split("\n");
+        buffer = lines.pop(); // last line may be incomplete -- keep it for next read
+        lines.forEach(handleLine);
+        return pump(reader, decoder, buffer);
+      });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      // Built before `input.disabled = true` below: a disabled form control is
+      // excluded from FormData entirely (the HTML spec, not a browser quirk), so
+      // disabling the file input before reading FormData silently drops the
+      // photo from its own upload -- the request still fires, missing the one
+      // field it exists to send. Same bug, same fix, as capture.html/result.html.
+      var formData = new FormData(form);
+      // Disable before the network call starts, so a slow response can't be
+      // mistaken for "nothing happened" and invite a second tap that fires a
+      // second transcribe call for the same page.
+      button.disabled = true;
+      input.disabled = true;
+      submitError.hidden = true;
+      workingDetail.textContent = defaultDetailText;
+      working.hidden = false;
+      // fetch() keeps this page in control for the whole wait, unlike a plain form
+      // POST, which hands the tab to the browser's own navigation with nothing of
+      // ours on screen until it finishes -- exactly why a real wait read as a
+      // stalled connection.
+      fetch(form.action, { method: "POST", body: formData })
+        .then(function (response) {
+          return pump(response.body.getReader(), new TextDecoder(), "");
+        })
+        .catch(function () {
+          working.hidden = true;
+          button.disabled = false;
+          input.disabled = false;
+          submitError.hidden = false;
+        });
+    });
+  })();
+</script>
 {% endblock %}
