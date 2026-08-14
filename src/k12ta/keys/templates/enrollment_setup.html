@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Add an enrollment — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/">&larr; {{ student.display_name }}</a></p>
+<h1>Add an enrollment — {{ student.display_name }}</h1>
+
+{% if errors %}
+<div class="message">
+  <ul>
+    {% for error in errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" action="/keys/{{ student.student_id }}/enrollments/new">
+  <label for="label">What is it called?</label>
+  <input type="text" name="label" id="label" value="{{ values.label }}" placeholder="e.g. RSM, Kumon, Summer Bridge workbook">
+
+  <label for="kind">What kind of material is it?</label>
+  <select name="kind" id="kind">
+    <option value="" {% if not values.kind %}selected{% endif %}></option>
+    {% for value, label in kind_labels.items() %}
+    <option value="{{ value }}" {% if values.kind == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+
+  <label for="subject">Subject</label>
+  <input type="text" name="subject" id="subject" value="{{ values.subject }}" placeholder="e.g. math, reading">
+
+  <label>
+    <input type="checkbox" name="has_answer_key" value="1" {% if values.has_answer_key %}checked{% endif %}>
+    An answer key exists (scanned or scannable)
+  </label>
+
+  <label>
+    <input type="checkbox" name="graded_by_someone_else" value="1" {% if values.graded_by_someone_else %}checked{% endif %}>
+    Someone else grades this work (a tutor, a teacher, the programme itself)
+  </label>
+  <p class="message">Feedback stays diagnostic-only when this is checked, regardless of the
+    mode picked below — the coach names the error and the concept, but never the answer or
+    the worked steps, because someone else's grade has to reflect the student's own work.</p>
+
+  <label for="default_mode">Feedback mode</label>
+  <select name="default_mode" id="default_mode">
+    <option value="" {% if not values.default_mode %}selected{% endif %}></option>
+    {% for value, label in mode_labels.items() %}
+    <option value="{{ value }}" {% if values.default_mode == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+
+  <label for="typical_session_minutes">Typical session length (minutes)</label>
+  <input type="text" name="typical_session_minutes" id="typical_session_minutes" value="{{ values.minutes_raw }}">
+
+  <div class="actions">
+    <button type="submit">Add enrollment</button>
+  </div>
+</form>
+{% endblock %}

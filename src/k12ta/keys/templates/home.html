@@ -13,6 +13,7 @@
   {% else %}
   <p class="message">No enrollments configured for {{ row.student.display_name }} yet.</p>
   {% endif %}
+  <p><a class="button-link" href="/keys/{{ row.student.student_id }}/enrollments/new">+ Add an enrollment</a></p>
   {% endfor %}
 {% else %}
   <p class="message">{{ no_students_message }}</p>

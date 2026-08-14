@@ -105,7 +105,7 @@ def _final_html(response: httpx.Response) -> str:
     return html
 
 
-def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
+def _seed_marcus(conn: sqlite3.Connection) -> None:
     students.insert_student(
         conn,
         students.StudentRow(
@@ -116,6 +116,10 @@ def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
             coach_name="Coach",
         ),
     )
+
+
+def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
+    _seed_marcus(conn)
     content.insert_content_source(
         conn,
         content.ContentSourceRow(
@@ -192,6 +196,261 @@ def test_picker_with_no_students_shows_an_intelligible_message(client: TestClien
 
     assert response.status_code == 200
     assert "No students" in response.text
+
+
+def test_picker_shows_an_add_enrollment_link_per_student(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/keys/s-marcus/enrollments/new"' in response.text
+
+
+# --- M3.1: content source ("enrollment") setup flow ------------------------------
+
+
+def test_enrollment_setup_screen_shows_a_blank_form(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.get("/keys/s-marcus/enrollments/new")
+
+    assert response.status_code == 200
+    assert 'name="label"' in response.text
+    assert 'name="subject"' in response.text
+    assert 'name="has_answer_key"' in response.text
+    assert 'name="graded_by_someone_else"' in response.text
+    assert 'name="typical_session_minutes"' in response.text
+    # Plain-language options, not the internal enum values.
+    assert "Workbook" in response.text
+    assert "Worksheet packet" in response.text
+    # "generated" is the coach's own mechanism, never a parent's setup choice.
+    assert "generated" not in response.text.lower()
+    # graded_by_someone_else's real consequence, stated plainly, not left implicit.
+    assert "diagnostic-only" in response.text.lower()
+
+
+def test_enrollment_setup_screen_for_unknown_student_is_404(client: TestClient) -> None:
+    assert client.get("/keys/does-not-exist/enrollments/new").status_code == 404
+
+
+def test_submit_enrollment_setup_creates_the_source_and_redirects_to_its_detail_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "has_answer_key": "1",
+            "graded_by_someone_else": "1",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "45",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/rsm"
+    row = content.get_content_source(conn, "s-marcus", "rsm")
+    assert row is not None
+    assert row.label == "RSM"
+    assert row.kind == "worksheet_packet"
+    assert row.subject == "math"
+    assert row.has_answer_key is True
+    assert row.graded_by_someone_else is True
+    assert row.default_mode == "diagnostic_only"
+    assert row.typical_session_minutes == 45
+
+
+def test_submit_enrollment_setup_without_the_two_checkboxes_stores_them_false(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """An unchecked HTML checkbox sends nothing at all -- absence must mean
+    False, not a missing-field error."""
+    _seed_marcus(conn)
+
+    client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "Kumon",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "20",
+        },
+    )
+
+    row = content.get_content_source(conn, "s-marcus", "kumon")
+    assert row is not None
+    assert row.has_answer_key is False
+    assert row.graded_by_someone_else is False
+
+
+def test_submit_enrollment_setup_derives_source_id_from_the_label(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "Outside Math Program, Level 3!",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "20",
+        },
+    )
+
+    assert content.get_content_source(conn, "s-marcus", "outside_math_program_level_3") is not None
+
+
+def test_submit_enrollment_setup_dedupes_a_colliding_source_id(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)  # already has source_id "summer_bridge"
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "Summer Bridge",
+            "kind": "workbook",
+            "subject": "reading",
+            "default_mode": "full",
+            "typical_session_minutes": "30",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge_2"
+    row = content.get_content_source(conn, "s-marcus", "summer_bridge_2")
+    assert row is not None
+    assert row.subject == "reading"
+
+
+def test_submit_enrollment_setup_with_a_blank_label_rerenders_with_an_error(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "",
+            "kind": "workbook",
+            "subject": "math",
+            "default_mode": "full",
+            "typical_session_minutes": "30",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "label" in response.text.lower()
+    assert content.list_content_sources(conn, "s-marcus") == []
+
+
+def test_submit_enrollment_setup_with_non_numeric_minutes_rerenders_with_an_error_and_keeps_input(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "not a number",
+        },
+    )
+
+    assert response.status_code == 200
+    assert 'value="RSM"' in response.text
+    assert content.list_content_sources(conn, "s-marcus") == []
+
+
+def test_submit_enrollment_setup_with_zero_minutes_rerenders_with_an_error(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "0",
+        },
+    )
+
+    assert response.status_code == 200
+    assert content.list_content_sources(conn, "s-marcus") == []
+
+
+def test_submit_enrollment_setup_with_an_unrecognised_kind_rerenders_with_an_error(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "made_up_kind",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "30",
+        },
+    )
+
+    assert response.status_code == 200
+    assert content.list_content_sources(conn, "s-marcus") == []
+
+
+def test_submit_enrollment_setup_with_an_unrecognised_default_mode_rerenders_with_an_error(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "made_up_mode",
+            "typical_session_minutes": "30",
+        },
+    )
+
+    assert response.status_code == 200
+    assert content.list_content_sources(conn, "s-marcus") == []
+
+
+def test_submit_enrollment_setup_for_unknown_student_is_404(client: TestClient) -> None:
+    response = client.post(
+        "/keys/does-not-exist/enrollments/new",
+        data={
+            "label": "RSM",
+            "kind": "worksheet_packet",
+            "subject": "math",
+            "default_mode": "diagnostic_only",
+            "typical_session_minutes": "30",
+        },
+    )
+    assert response.status_code == 404
 
 
 def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_yet(

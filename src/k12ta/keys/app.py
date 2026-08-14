@@ -16,6 +16,7 @@ import re
 import sqlite3
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -53,6 +54,23 @@ NO_STUDENTS_MESSAGE = (
     "No students yet. Run `python scripts/seed_dev_data.py` against this server's K12TA_DATA_DIR."
 )
 UNGRADEABLE_REASONS = ("answers_vary", "graph_or_table")
+
+# Plain-language options for the enrollment setup screen (M3.1), not the internal
+# enum values (k12ta.content.source.SourceKind) a parent has no reason to know.
+# "generated" is deliberately absent: per its own docstring it's "produced by the
+# coach itself," never something a parent sets up by hand.
+SOURCE_KIND_LABELS: dict[str, str] = {
+    "workbook": "Workbook",
+    "worksheet_packet": "Worksheet packet",
+    "textbook": "Textbook",
+    "fluency_drill": "Fluency drill",
+}
+# Same reasoning, for k12ta.domain.policy.FeedbackMode.
+FEEDBACK_MODE_LABELS: dict[str, str] = {
+    "full": "Full teaching (self-directed practice, worked solutions allowed)",
+    "diagnostic_only": "Diagnostic only (someone else grades this)",
+    "fluency": "Timed fluency drill",
+}
 
 load_dotenv()  # must run before any Settings.from_env() call in this module
 logging.basicConfig(
@@ -144,16 +162,152 @@ def home(
     )
 
 
-def _require_student_and_source(
-    conn: sqlite3.Connection, student_id: str, source_id: str
-) -> tuple[students.StudentRow, content.ContentSourceRow]:
+def _require_student(conn: sqlite3.Connection, student_id: str) -> students.StudentRow:
     student = students.get_student(conn, student_id)
     if student is None:
         raise HTTPException(404, "no such student")
+    return student
+
+
+def _require_student_and_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> tuple[students.StudentRow, content.ContentSourceRow]:
+    student = _require_student(conn, student_id)
     source = content.get_content_source(conn, student_id, source_id)
     if source is None:
         raise HTTPException(404, "no such content source")
     return student, source
+
+
+@dataclass
+class _EnrollmentFormInput:
+    """One round trip through the enrollment setup form -- both the blank
+    starting state and, on a validation error, exactly what the parent typed,
+    handed back so nothing has to be retyped."""
+
+    label: str = ""
+    kind: str = ""
+    subject: str = ""
+    default_mode: str = ""
+    minutes_raw: str = ""
+    minutes: int | None = None
+    has_answer_key: bool = False
+    graded_by_someone_else: bool = False
+
+
+def _parse_enrollment_setup_form(
+    data: dict[str, list[str]],
+) -> tuple[_EnrollmentFormInput, list[str]]:
+    """Ordinary "a parent might mistype this" validation -- every failure here
+    re-renders the form with what was typed preserved, never a bare 400 (that
+    stays reserved for a request only a bug or a tampered client could send,
+    e.g. against a student that doesn't exist)."""
+    minutes_raw = _get(data, "typical_session_minutes").strip()
+    minutes = int(minutes_raw) if minutes_raw.isdigit() else None
+    values = _EnrollmentFormInput(
+        label=_get(data, "label").strip(),
+        kind=_get(data, "kind").strip(),
+        subject=_get(data, "subject").strip(),
+        default_mode=_get(data, "default_mode").strip(),
+        minutes_raw=minutes_raw,
+        minutes=minutes,
+        has_answer_key=_get(data, "has_answer_key") == "1",
+        graded_by_someone_else=_get(data, "graded_by_someone_else") == "1",
+    )
+    errors = []
+    if not values.label:
+        errors.append("Label is required.")
+    if values.kind not in SOURCE_KIND_LABELS:
+        errors.append("Choose what kind of material this is.")
+    if not values.subject:
+        errors.append("Subject is required.")
+    if values.default_mode not in FEEDBACK_MODE_LABELS:
+        errors.append("Choose a feedback mode.")
+    if minutes is None or minutes <= 0:
+        errors.append("Typical session length must be a positive number of minutes.")
+    return values, errors
+
+
+def _normalize_source_id(raw: str) -> str:
+    """Same shape as `_normalize_component_name` below -- a parent never types or
+    sees a source_id at all; it's derived from the label they did type."""
+    return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+
+
+def _unique_source_id(conn: sqlite3.Connection, student_id: str, base: str) -> str:
+    """`base` with a numeric suffix appended only if it collides with a source
+    this student already has -- a parent picking the same label twice (a
+    correction, a duplicate attempt) must never surface a database error."""
+    candidate = base or "source"
+    suffix = 1
+    while content.get_content_source(conn, student_id, candidate) is not None:
+        suffix += 1
+        candidate = f"{base or 'source'}_{suffix}"
+    return candidate
+
+
+@app.get("/keys/{student_id}/enrollments/new", response_class=HTMLResponse)
+def enrollment_setup_screen(
+    request: Request,
+    student_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """M3.1: the only intended way a content source is created -- never by
+    hand-editing the database (see `scripts/seed_dev_data.py`'s own docstring,
+    which names this exact screen as its replacement)."""
+    student = _require_student(conn, student_id)
+    return templates.TemplateResponse(
+        request,
+        "enrollment_setup.html",
+        {
+            "student": student,
+            "kind_labels": SOURCE_KIND_LABELS,
+            "mode_labels": FEEDBACK_MODE_LABELS,
+            "values": _EnrollmentFormInput(),
+            "errors": [],
+        },
+    )
+
+
+@app.post("/keys/{student_id}/enrollments/new", response_model=None)
+async def submit_enrollment_setup(
+    request: Request,
+    student_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse | RedirectResponse:
+    student = _require_student(conn, student_id)
+    data = parse_qs((await request.body()).decode())
+    values, errors = _parse_enrollment_setup_form(data)
+    if errors:
+        return templates.TemplateResponse(
+            request,
+            "enrollment_setup.html",
+            {
+                "student": student,
+                "kind_labels": SOURCE_KIND_LABELS,
+                "mode_labels": FEEDBACK_MODE_LABELS,
+                "values": values,
+                "errors": errors,
+            },
+        )
+    assert values.minutes is not None  # guaranteed by the empty-errors check above
+
+    source_id = _unique_source_id(conn, student_id, _normalize_source_id(values.label))
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id=student_id,
+            source_id=source_id,
+            label=values.label,
+            kind=values.kind,
+            subject=values.subject,
+            has_answer_key=values.has_answer_key,
+            graded_by_someone_else=values.graded_by_someone_else,
+            default_mode=values.default_mode,
+            typical_session_minutes=values.minutes,
+        ),
+    )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
 @app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
