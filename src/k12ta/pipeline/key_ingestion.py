@@ -89,7 +89,19 @@ def transcribe_key_page(
         logger.info("key page blocked: daily quota exhausted")
         return KeyIngestionOutcome.quota_exhausted()
 
-    normalized = normalize_orientation(image_bytes)
+    try:
+        normalized = normalize_orientation(image_bytes)
+    except Exception as exc:
+        # Must not raise: this runs inside k12ta.keys.app's background worker
+        # thread, which has no exception handling of its own -- an escaped
+        # exception here doesn't crash cleanly, it hangs the request forever
+        # (the worker thread dies silently, the main thread's queue.get() never
+        # returns). Caught before quota.record_request on purpose: a file the
+        # model was never even sent must not spend the day's quota.
+        reason = f"{type(exc).__name__}: {exc}"
+        logger.info("key page normalize outcome=failed reason=%s", reason)
+        return KeyIngestionOutcome.transcribe_failed(reason)
+
     quota.record_request(conn, today)
 
     try:

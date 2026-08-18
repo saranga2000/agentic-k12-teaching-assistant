@@ -186,6 +186,30 @@ def test_transcribe_failure_degrades_gracefully(tmp_path: Path) -> None:
     assert quota.get_count(conn, TODAY) == 1  # the attempt still counted
 
 
+def test_an_unreadable_file_fails_gracefully_and_never_calls_the_transcriber(
+    tmp_path: Path,
+) -> None:
+    """The bug this exists for: normalize_orientation used to sit outside this
+    function's only try/except (which wrapped just the transcriber call), so a
+    corrupt or unsupported upload raised straight out of transcribe_key_page.
+    The real caller, k12ta.keys.app._stream_upload_response, runs this inside a
+    background thread with no exception handling of its own -- the raise never
+    reached the parent's browser as an error, it hung the request forever: the
+    worker thread died silently and the main thread's queue.get() never
+    returned. transcribe_key_page must never raise, the same contract
+    VisionLLMTranscriber.transcribe already holds for the model call."""
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeKeyTranscriber(result=_success_result(17))
+
+    outcome = transcribe_key_page(conn, settings, lambda: transcriber, b"not an image")
+
+    assert outcome.status is KeyIngestionStatus.TRANSCRIBE_FAILED
+    assert outcome.entries == ()
+    assert transcriber.calls == []
+    assert quota.get_count(conn, TODAY) == 0  # never consumed: the model was never called
+
+
 def test_shares_the_capture_pipelines_daily_quota_table(tmp_path: Path) -> None:
     """The actual proof of "reuse the same quota counter as the capture pipeline":
     exhaust it via a plain quota.record_request call (standing in for a student

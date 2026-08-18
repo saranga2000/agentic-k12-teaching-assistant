@@ -49,6 +49,7 @@ TOO_SMALL = _jpeg_bytes((10, 10), (255, 255, 255))
 TOO_DARK = _jpeg_bytes((1200, 1600), (5, 5, 5))
 LOOKS_LIKE_TWO_PAGES = _jpeg_bytes((1600, 1200), (200, 200, 200))
 ACCEPTED = _jpeg_bytes((1200, 1600), (200, 200, 200))
+NOT_AN_IMAGE = b"whatever this is, it is not a photo"
 # What an iPad camera actually produces for a single page held in portrait: raw
 # buffer 1600x1200 (landscape), EXIF orientation 6 says "rotate 90 CW to display
 # upright." This is the exact photo that was rejected as a two-page spread every
@@ -811,6 +812,7 @@ def test_a_second_new_wrong_guess_is_also_suppressed(
         (TOO_SMALL, "small"),
         (TOO_DARK, "dark"),
         (LOOKS_LIKE_TWO_PAGES, "two pages"),
+        (NOT_AN_IMAGE, "open that photo"),
     ],
 )
 def test_post_capture_with_a_bad_photo_is_rejected_and_nothing_is_persisted(

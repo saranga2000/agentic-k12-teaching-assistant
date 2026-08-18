@@ -36,6 +36,7 @@ REJECT_MESSAGES = {
     "too_small": "That photo's a little small — let's try again a bit closer.",
     "too_dark": "That photo's too dark to read — let's try again with more light.",
     "looks_like_two_pages": "That looks like two pages — one page at a time works best.",
+    "unreadable_file": "I couldn't open that photo — let's try again.",
     "could_not_transcribe": "I couldn't read this one right now — ask a grown-up if it "
     "keeps happening.",
 }
@@ -153,10 +154,7 @@ async def submit_capture(
     if student is None:
         raise HTTPException(404, "no such student")
 
-    image_bytes = ingest_capture.normalize_orientation(await photo.read())
-    verdict = ingest_capture.evaluate_image_quality(image_bytes)
-    if not verdict.accepted:
-        reason = verdict.reason or "too_small"
+    def _reject(reason: str) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "result.html",
@@ -167,6 +165,20 @@ async def submit_capture(
                 "assignment_id": assignment_id,
             },
         )
+
+    try:
+        image_bytes = ingest_capture.normalize_orientation(await photo.read())
+    except Exception:
+        # An unsupported or corrupt upload -- AGENTS.md rule 11: a failed call is
+        # a plain-language state, not a crash. Not narrowed to a specific Pillow
+        # exception type on purpose: the boundary here is "arbitrary bytes a
+        # student picked from a file chooser," and any way Image.open can fail
+        # on that gets the same honest reject, not a 500.
+        return _reject("unreadable_file")
+
+    verdict = ingest_capture.evaluate_image_quality(image_bytes)
+    if not verdict.accepted:
+        return _reject(verdict.reason or "too_small")
 
     outcome = process_capture(
         conn,

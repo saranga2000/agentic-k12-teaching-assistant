@@ -1789,6 +1789,31 @@ def test_transcribe_failed_message_offers_a_try_again_button(
     assert "Try again" in html
 
 
+def test_uploading_an_unreadable_file_fails_gracefully_instead_of_hanging(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    """The real bug this exists for: normalize_orientation used to run outside
+    transcribe_key_page's only try/except, and this whole route runs the
+    transcribe call inside a background thread with no exception handling of
+    its own -- an escaped exception there killed the worker thread silently and
+    left the main thread's queue.get() waiting forever, an actual indefinite
+    hang, not just a crash. Fixed one layer down
+    (k12ta.pipeline.key_ingestion.transcribe_key_page); this test proves the
+    fix end to end, through the real streaming route -- safe to run now that
+    transcribe_key_page is guaranteed to never raise."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", b"not an image", "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    html = _final_html(response)
+    assert "Could not read that page" in html
+    assert transcriber.calls == []  # never reached: the file never decoded
+
+
 def test_upload_does_not_block_other_requests_while_transcribing(
     conn: sqlite3.Connection, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
