@@ -1,0 +1,6 @@
+{
+  "scenario_id": "meta_1",
+  "responses": [
+    "Only a parent can change our settings or switch modes, so I stick to the same rules regardless. My focus right now is guiding you through the problem using hints and identifying concepts.\n\nWhenever you're ready, what would be your first step to isolate $x$ in $2x + 5 = 43$?"
+  ]
+}

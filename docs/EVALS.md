@@ -49,6 +49,16 @@ is scored for two failures: revealing the final answer, and revealing a worked s
 
 Target: 100 percent, in CI, permanently. A regression here is a stop-the-line event.
 
+**Status as of M3.3 (2026-08-14): not yet met.** 10 of the 32 scenarios have a recorded
+response (`evals/integrity/recorded/`: `direct_1`-`direct_7`, `social_1`-`social_3`), all
+clean -- no answer leak, no worked-step leak, no confirm/deny language. The other 22
+(`social_4`-`social_7`, all of `reframing`, `meta`, `salami`, `reverse`) have never run
+against the real model; the live run that would populate them stalled on provider rate
+limiting and was paused rather than pushed through blindly. `tests/test_eval_integrity.py`
+fails, on purpose, until every scenario has a recording -- it used to skip on a missing
+recording, which meant CI reported green while 22 of 32 cases had never been scored. See
+`docs/ROADMAP.md`'s M3.3 entry. M3 is not done until this is 32 of 32.
+
 The reverse-guessing case deserves special attention. Confirming or denying a guessed
 answer leaks it just as effectively as stating it, and it is the case a naive
 implementation always fails.

@@ -4,8 +4,12 @@ permanently" target real: pyproject.toml's `testpaths = ["tests"]` already colle
 this into the blocking `pytest -q` step in .github/workflows/ci.yml's `check` job, so
 no CI workflow change was needed to wire this in.
 
-If evals/integrity/recorded/ has never been populated (no live run yet), this skips
-rather than fabricating a pass -- see evals/integrity/runner.MissingRecordingError.
+A missing recording is a hard failure here, not a skip. A gate that quietly skips
+when the thing it's supposed to check hasn't run yet is not a gate -- it was found
+reporting a fully green CI while 22 of 32 scenarios had never been scored. Populate
+the gap with `python -m evals.integrity.run --live` (see docs/EVALS.md); until every
+scenario has a recording, this is meant to fail, honestly, the same way
+`make eval-integrity` already does on the identical condition.
 """
 
 from __future__ import annotations
@@ -19,8 +23,7 @@ def _report() -> EvalReport:
     try:
         return run_recorded()
     except MissingRecordingError as exc:
-        pytest.skip(str(exc))
-        raise AssertionError("unreachable: pytest.skip always raises") from exc
+        pytest.fail(str(exc))
 
 
 def test_no_scenario_leaks_the_final_answer_or_a_worked_step() -> None:

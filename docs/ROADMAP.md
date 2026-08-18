@@ -233,6 +233,12 @@ restructure, which does exactly this for the two sections above that don't exist
 Done when: the leakage eval passes at 100 percent and is in CI. This is the milestone
 that makes the project defensible to another parent, another school, or an interviewer.
 
+**Not done as of 2026-08-17.** The eval set and its CI wiring shipped (M3.3, below), but
+only 10 of its 32 scenarios have actually run against the real model; CI now fails
+rather than silently passing until the rest do. Parent override (bullet above) also has
+no PIN or audit row yet -- `resolve_mode()`'s `parent_override` parameter exists but
+nothing in `k12ta.keys` or `k12ta.web` calls it from an authenticated action.
+
 **Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
 the schema linked two captures as attempts at the same underlying homework problem --
 `process_capture` mints a fresh `session_id` and `capture_id` on every photo, and
@@ -252,6 +258,39 @@ CSS-driving `outcome` alike, since a response that varies with correctness by an
 channel is itself the oracle. `k12ta.keys`'s enrollment screen surfaces a plain
 per-problem attempt count to the parent (never the student) wherever the mode
 withholds the answer.
+
+**M3.3: adversarial integrity eval, `evals/integrity/`.** Builds the leakage eval
+`docs/EVALS.md` section 2 specifies: 32 adversarial scenarios (44 turns) across direct,
+social pressure, reframing, salami slicing, reverse guessing, and meta categories against
+`prompts/coach_voice.md` under `DIAGNOSTIC_ONLY`. `tests/test_eval_integrity.py` replays
+committed recordings from `evals/integrity/recorded/` (zero network, zero cost,
+deterministic) and is collected by the existing blocking `pytest -q` step, so no
+`ci.yml` change was needed to wire it in. `make eval-integrity-live` spends real quota
+(~44 calls) to populate `evals/integrity/recorded/`; `resume`-by-default so a stalled
+run only re-calls what never completed.
+
+**Not done.** The live run is partial: 10 of 32 scenarios completed (`direct_1`-`7`,
+`social_1`-`3`), all clean -- no leak of any kind. The rest never ran; the live run
+stalled on the provider's rate limiting and was paused rather than pushed through
+blindly. `tests/test_eval_integrity.py` now fails on a missing recording instead of
+skipping -- it used to skip, which let CI report green while 22 of 32 scenarios had
+never been scored against the real model, the opposite of what "100 percent, in CI,
+permanently" is supposed to mean. CI will stay red on this until the remaining 22
+scenarios are recorded. See `docs/EVALS.md` section 2 for the exact status.
+
+**M3.4, scheduled before term starts: manual answer-key entry.** This is mitigation
+(a) from M6's risk note below, scheduled rather than left as an option. From September
+the two sources in daily use, RSM and Kumon, have no printed answer key. M6 keyless
+grading is not close and is gated on a precision number that does not exist yet — without
+a bridge, the system grades nothing from September onward. Manual entry: a parent types
+the answers for a page directly, no photograph, no model call. Cheap, safe, and no new
+shape to build — it reuses the same confirm-before-store path `k12ta.keys`'s key-scanning
+flow already has, and the same per-source identity schema. Manual *identity* entry
+already exists (`k12ta.keys.app.submit_manual_mapping`, `source="manual"` on the
+`page_identities` row, built for a Section/Day-to-page table verified against the
+physical workbook, no re-scan needed) — manual *answer* entry is the same shape, applied
+to `answer_key_entries` instead. The honest limitation: it only helps for work where a
+parent knows the answers, which covers Kumon English and some RSM, not all of either.
 
 ## M4. Mastery model in the loop
 **4 evenings. This is the headline chapter of the repo.**
@@ -315,11 +354,14 @@ Done when: you can state a precision number, not a vibe.
 nor Kumon has an answer key, and Summer Bridge ends in roughly two weeks. From
 September, the two sources actually in daily use have no key, so under the current
 design the system grades nothing at all until this milestone ships. Two candidate
-mitigations, not decided here:
+mitigations:
 (a) manual key entry by a parent — cheap and completely safe, no model in the
-grading loop at all — or
+grading loop at all — **scheduled as M3.4, before term starts, not left as an open
+option** — or
 (b) independent solving with cross-check, which is this milestone, gated on a
-measured precision number before it ships behind a flag.
+measured precision number before it ships behind a flag. (a) is the bridge; (b) still
+ships on its own timeline, gated on the precision number this milestone's own
+"Done when" requires.
 
 ## M7 and beyond, in priority order
 
