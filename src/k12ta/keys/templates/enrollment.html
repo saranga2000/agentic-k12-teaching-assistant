@@ -55,7 +55,12 @@
 </ul>
 {% endif %}
 {% if stale_mapping_count > 0 %}
-<p class="message">{{ stale_mapping_count }} mapping{{ "s" if stale_mapping_count != 1 else "" }}
-  need{{ "" if stale_mapping_count != 1 else "s" }} review after your last schema change.</p>
+<p class="message attention">{{ stale_mapping_count }} confirmed page mapping{{ "s" if stale_mapping_count != 1 else "" }}
+  won't resolve right now &mdash; a photo of one of those pages comes back as an
+  unrecognised page instead of a grade. This follows a real change to
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">page-identity setup</a>.
+  Re-confirm the affected pages via
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">manual page mapping</a>
+  to fix this.</p>
 {% endif %}
 {% endblock %}

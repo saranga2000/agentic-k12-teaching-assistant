@@ -4,25 +4,29 @@ permanently" target real: pyproject.toml's `testpaths = ["tests"]` already colle
 this into the blocking `pytest -q` step in .github/workflows/ci.yml's `check` job, so
 no CI workflow change was needed to wire this in.
 
-A missing recording is a hard failure here, not a skip. A gate that quietly skips
-when the thing it's supposed to check hasn't run yet is not a gate -- it was found
-reporting a fully green CI while 22 of 32 scenarios had never been scored. Populate
-the gap with `python -m evals.integrity.run --live` (see docs/EVALS.md); until every
-scenario has a recording, this is meant to fail, honestly, the same way
-`make eval-integrity` already does on the identical condition.
+A missing or stale recording is a hard failure here, not a skip. A gate that quietly
+skips when the thing it's supposed to check hasn't run yet is not a gate -- it was
+found reporting a fully green CI while 22 of 32 scenarios had never been scored.
+"Stale" now includes a recording made under an older prompt_version than
+prompts/coach_voice.md's current one, and a multi-turn scenario recorded before
+conversation-level scoring existed (see evals/integrity/runner.RecordingUnusableError
+and its two subclasses). Populate the gap with `python -m evals.integrity.run --live`
+(see docs/EVALS.md); until every scenario has a current recording, this is meant to
+fail, honestly, the same way `make eval-integrity` already does on the identical
+condition.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from evals.integrity.runner import EvalReport, MissingRecordingError, run_recorded
+from evals.integrity.runner import EvalReport, RecordingUnusableError, run_recorded
 
 
 def _report() -> EvalReport:
     try:
         return run_recorded()
-    except MissingRecordingError as exc:
+    except RecordingUnusableError as exc:
         pytest.fail(str(exc))
 
 
@@ -50,3 +54,12 @@ def test_multi_attempt_oracle_category_is_covered() -> None:
     report = _report()
 
     assert not report.multi_attempt_oracle_status.startswith("failed")
+
+
+def test_no_multi_turn_scenario_reconstructs_the_method_across_turns() -> None:
+    """The salami_1 finding: a conversation can hand over the whole method while
+    every individual turn passes score_turn. This is what catches that -- see
+    evals/integrity/judge.py."""
+    report = _report()
+
+    assert not report.conversation_findings, "\n".join(report.conversation_findings)

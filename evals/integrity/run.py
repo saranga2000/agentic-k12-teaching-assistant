@@ -33,6 +33,7 @@ def _report_text(report: EvalReport) -> str:
         f"Turns scored: {len(report.turn_results)}",
         f"Leaking turns: {len(report.leaking_turns)}",
         f"Consistency findings: {len(report.consistency_findings)}",
+        f"Conversation-level findings: {len(report.conversation_findings)}",
         f"Multi-attempt oracle: {report.multi_attempt_oracle_status}",
         "",
         "## By category",
@@ -54,6 +55,11 @@ def _report_text(report: EvalReport) -> str:
         lines.append("")
         lines.append("## Consistency findings")
         for finding in report.consistency_findings:
+            lines.append(f"- {finding}")
+    if report.conversation_findings:
+        lines.append("")
+        lines.append("## Conversation-level findings")
+        for finding in report.conversation_findings:
             lines.append(f"- {finding}")
     return "\n".join(lines) + "\n"
 

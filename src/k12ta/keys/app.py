@@ -452,12 +452,28 @@ async def submit_identity_schema(
 ) -> RedirectResponse:
     """The only intended way a source's identity schema is set after a first
     scan -- never by hand-editing the database. A submission with no non-blank
-    rows leaves the schema exactly as it was; it does not clear it."""
+    rows leaves the schema exactly as it was; it does not clear it.
+
+    This screen pre-fills the form with the current schema (see
+    identity_schema_screen), so opening it and hitting Save without changing
+    anything is an ordinary path, not a mistake -- it must not be a version
+    bump. `save_new_schema` has no idempotency check of its own (each call is a
+    real edit as far as it's concerned), so the guard belongs here: skip the
+    save entirely when the submission is identical, component for component, to
+    what's already stored. Every real version bump strands every mapping
+    confirmed under the old one (see k12ta.store.page_identities' staleness
+    rule) -- that cost must only be paid for an actual change. This was not
+    hypothetical: an identical resubmission against the real household database
+    produced two byte-identical schema versions and stranded 40 confirmed
+    mappings under the first one."""
     _require_student_and_source(conn, student_id, source_id)
     data = parse_qs((await request.body()).decode())
     components = _parse_standalone_schema_form(data)
     if components:
-        page_identity_schemas.save_new_schema(conn, student_id, source_id, components)
+        current = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+        current_components = [(c.component_name, c.label, c.example) for c in current]
+        if components != current_components:
+            page_identity_schemas.save_new_schema(conn, student_id, source_id, components)
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 

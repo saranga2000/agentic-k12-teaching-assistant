@@ -14,6 +14,7 @@ from k12ta.domain.policy import FeedbackRules
 
 _PROBLEM_PLACEHOLDER = "{{PROBLEM_CONTEXT}}"
 _PERMISSION_PLACEHOLDER = "{{PERMISSION_SET}}"
+_PRIOR_RESPONSE_COUNT_PLACEHOLDER = "{{PRIOR_RESPONSE_COUNT}}"
 
 
 def render_problem_context(
@@ -45,8 +46,16 @@ def build_coach_prompt(
     problem_text: str,
     correct_answer: str,
     worked_steps: Sequence[str],
+    prior_response_count: int,
 ) -> str:
+    """`prior_response_count`: how many times the coach has already responded about
+    this exact problem earlier in this conversation -- computed by the caller from
+    the real turn history (see evals/integrity/runner.run_live), never left for the
+    model to infer from raw history on its own. This is what lets
+    prompts/coach_voice.md's "repeated turns" rule hold a hard line under
+    salami-slicing pressure instead of trusting the model's own turn count."""
     prompt = base_prompt.replace(
         _PROBLEM_PLACEHOLDER, render_problem_context(problem_text, correct_answer, worked_steps)
     )
-    return prompt.replace(_PERMISSION_PLACEHOLDER, render_permission_set(rules))
+    prompt = prompt.replace(_PERMISSION_PLACEHOLDER, render_permission_set(rules))
+    return prompt.replace(_PRIOR_RESPONSE_COUNT_PLACEHOLDER, str(prior_response_count))

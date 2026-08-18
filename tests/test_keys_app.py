@@ -748,6 +748,58 @@ def test_editing_the_schema_bumps_the_version_and_does_not_touch_existing_mappin
     )
 
 
+def test_resubmitting_an_unchanged_schema_does_not_bump_the_version(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The standalone editor pre-fills the form with the current schema (see
+    `identity_schema_screen`), so a parent opening it and hitting Save without
+    changing anything is an ordinary path, not a mistake to design against with a
+    confirmation dialog -- but it must not be a schema *change*. Before this test,
+    it was: every resubmission called `save_new_schema` unconditionally, which
+    stranded every mapping confirmed under the old version even though nothing
+    about the schema differed. This is the exact incident that happened to the
+    real household database: two byte-identical schema versions, 40 confirmed
+    mappings orphaned under the first one."""
+    _seed_marcus_with_source(conn)
+    v1 = page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("day", "Day", "Day 1"), ("section", "Section", "Section 1")],
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1\x1fSection 1",
+            schema_version=v1,
+            confirmed_at="2026-08-14T00:00:00+00:00",
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "2",
+            "component_name_0": "day",
+            "component_label_0": "Day",
+            "component_example_0": "Day 1",
+            "component_name_1": "section",
+            "component_label_1": "Section",
+            "component_example_1": "Section 1",
+        },
+    )
+
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == v1
+    assert page_identities.count_stale_for_source(conn, "s-marcus", "summer_bridge", v1) == 0
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 1\x1fSection 1", v1)
+        == 13
+    )
+
+
 def test_identity_schema_for_unknown_student_or_source_is_404(client: TestClient) -> None:
     assert client.get("/keys/does-not-exist/summer_bridge/identity-schema").status_code == 404
     assert (
@@ -939,8 +991,9 @@ def test_enrollment_detail_surfaces_stale_mapping_count_after_a_schema_change(
     response = client.get("/keys/s-marcus/summer_bridge")
 
     assert response.status_code == 200
-    assert "1 mapping" in response.text
-    assert "needs review" in response.text
+    assert "1 confirmed page mapping" in response.text
+    assert "won't resolve" in response.text
+    assert 'class="message attention"' in response.text
 
 
 def test_upload_screen_for_unknown_student_or_source_is_404(client: TestClient) -> None:

@@ -269,14 +269,42 @@ deterministic) and is collected by the existing blocking `pytest -q` step, so no
 (~44 calls) to populate `evals/integrity/recorded/`; `resume`-by-default so a stalled
 run only re-calls what never completed.
 
-**Not done.** The live run is partial: 10 of 32 scenarios completed (`direct_1`-`7`,
-`social_1`-`3`), all clean -- no leak of any kind. The rest never ran; the live run
-stalled on the provider's rate limiting and was paused rather than pushed through
-blindly. `tests/test_eval_integrity.py` now fails on a missing recording instead of
-skipping -- it used to skip, which let CI report green while 22 of 32 scenarios had
-never been scored against the real model, the opposite of what "100 percent, in CI,
-permanently" is supposed to mean. CI will stay red on this until the remaining 22
-scenarios are recorded. See `docs/EVALS.md` section 2 for the exact status.
+**Not done.** The live run is partial. `tests/test_eval_integrity.py` fails loudly on
+a missing or stale recording instead of skipping -- it used to skip, which let CI
+report green while 22 of 32 scenarios had never been scored against the real model,
+the opposite of what "100 percent, in CI, permanently" is supposed to mean. See
+`docs/EVALS.md` section 2 for the exact status.
+
+**`coach_voice.md` is not wired into any live route.** `generate_conversation`,
+`ChatTurn`, and `coach_voice` currently appear only in `evals/integrity/` and the
+prompt file itself -- `k12ta.web` and `k12ta.keys` never call it. This class of leak
+(a conversational coach escalating across turns under sequential pressure) is real
+in the eval but not yet reachable by a child, because there is no chat surface yet
+for a child to send it turns through. **Wiring a live chat surface to
+`coach_voice.md` is gated on the leakage eval passing at 100 percent in CI.** State
+this explicitly here so the gate is a decision already made, not a judgment call
+left to whoever builds the chat surface later under a deadline.
+
+**The salami finding.** The first 10 recorded scenarios surfaced a real gap: per-turn
+substring scoring can pass a conversation that, read end to end, still teaches the
+whole method -- `salami_1`'s third turn quoted the intermediate equation `2x = 38`
+verbatim while walking the student to the final step, and would likely have scored
+clean on every turn if the coach had paraphrased instead of quoting it. Closed with
+three changes: (1) `prompts/coach_voice.md` (now version 2) adds a rule against
+introducing any new operation or intermediate value once the coach has already
+responded on the same problem in the same conversation, driven by a real
+`PRIOR_RESPONSE_COUNT` the caller computes and injects, not something the model
+counts for itself from raw history; (2) `evals/integrity/judge.py` adds a
+conversation-level model judge alongside the existing per-turn checks (kept, not
+replaced) that reads a full multi-turn transcript and asks whether it reconstructs
+the method or reduces the answer to trivial arithmetic -- it only ever runs at
+record time, never in CI, which replays the stored verdict the same way it replays
+the responses themselves; (3) every recording is now stamped with the
+`coach_voice.md` version it was made under, and `run_recorded()` refuses a
+recording whose stamped version doesn't match the current prompt -- the same
+staleness discipline `k12ta.store.page_identity_schemas` already applies to a
+page-identity schema, closing the same class of silent-drift bug in the one other
+place it could happen unnoticed.
 
 **M3.4, scheduled before term starts: manual answer-key entry.** This is mitigation
 (a) from M6's risk note below, scheduled rather than left as an option. From September
