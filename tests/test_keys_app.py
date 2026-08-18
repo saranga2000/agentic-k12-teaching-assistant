@@ -230,6 +230,7 @@ def test_enrollment_setup_screen_shows_a_blank_form(
     # Plain-language options, not the internal enum values.
     assert "Workbook" in response.text
     assert "Worksheet packet" in response.text
+    assert "Online exercise" in response.text
     # "generated" is the coach's own mechanism, never a parent's setup choice.
     assert "generated" not in response.text.lower()
     # graded_by_someone_else's real consequence, stated plainly, not left implicit.
@@ -270,6 +271,29 @@ def test_submit_enrollment_setup_creates_the_source_and_redirects_to_its_detail_
     assert row.graded_by_someone_else is True
     assert row.default_mode == "diagnostic_only"
     assert row.typical_session_minutes == 45
+
+
+def test_submit_enrollment_setup_accepts_online_exercise_kind(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus(conn)
+
+    response = client.post(
+        "/keys/s-marcus/enrollments/new",
+        data={
+            "label": "Reading eggs",
+            "kind": "online_exercise",
+            "subject": "reading",
+            "default_mode": "full",
+            "typical_session_minutes": "15",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    row = content.get_content_source(conn, "s-marcus", "reading_eggs")
+    assert row is not None
+    assert row.kind == "online_exercise"
 
 
 def test_submit_enrollment_setup_without_the_two_checkboxes_stores_them_false(

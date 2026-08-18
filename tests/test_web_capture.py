@@ -244,6 +244,44 @@ def test_capture_screen_framing_guide_distinguishes_good_from_bad_without_relyin
     assert "Not this" in bad_block
 
 
+def test_capture_screen_hides_the_page_framing_guide_for_an_online_exercise_source(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The framing guide illustrates "one physical page vs. two" -- a screenshot
+    has no page edges to frame, and showing it would tell a parent testing an
+    online programme from their laptop to do something that doesn't apply."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="online_math",
+            label="Online math programme",
+            kind="online_exercise",
+            subject="math",
+            has_answer_key=False,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=20,
+        ),
+    )
+
+    response = client.get("/capture/s-marcus?source_id=online_math")
+
+    assert response.status_code == 200
+    assert 'class="framing-guide"' not in response.text
+    assert "Add Screenshot" in response.text
+
+
 def test_capture_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -297,6 +335,54 @@ def test_capture_screen_without_a_scheduled_source_shows_fallback(
 def test_capture_screen_for_unknown_student_is_404(client: TestClient) -> None:
     response = client.get("/capture/does-not-exist")
     assert response.status_code == 404
+
+
+def test_a_landscape_screenshot_is_not_rejected_as_a_spread_for_an_online_exercise_source(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeTranscriber,
+) -> None:
+    """The gap the plan was written to close: SourceKind.ONLINE_EXERCISE turns
+    off the photography-only spread heuristic, by configuration, not by
+    guessing from the image. LOOKS_LIKE_TWO_PAGES is a plain landscape image --
+    the same bytes that get rejected for a workbook source below are accepted
+    here."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="online_math",
+            label="Online math programme",
+            kind="online_exercise",
+            subject="math",
+            has_answer_key=False,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=20,
+        ),
+    )
+    assignment = get_or_create_todays_assignment(conn, "s-marcus", "online_math", date.today())
+    transcriber.result = _success_result(0.99)
+
+    response = client.post(
+        "/capture/s-marcus",
+        data={"assignment_id": assignment.assignment_id},
+        files={"photo": ("screenshot.jpg", LOOKS_LIKE_TWO_PAGES, "image/jpeg")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/session/s-marcus/")
 
 
 def test_post_capture_with_a_good_photo_redirects_to_the_results_page(

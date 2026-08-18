@@ -82,6 +82,34 @@ def test_rejects_a_landscape_image_as_a_likely_two_page_spread() -> None:
     assert verdict.reason == "looks_like_two_pages"
 
 
+def test_check_for_spread_false_accepts_a_landscape_image() -> None:
+    """A landscape screenshot of one online exercise is not two pages -- the
+    spread heuristic is a photography-only assumption (a single physical page
+    held up is portrait, two pages photographed flat is landscape), and has
+    nothing to say about a rendered screenshot's own shape. Callers skip this
+    check by source kind (SourceKind.ONLINE_EXERCISE), not by guessing from
+    the image, so this is the caller's decision to make, exercised here as a
+    plain keyword argument."""
+    verdict = capture.evaluate_image_quality(LOOKS_LIKE_TWO_PAGES, check_for_spread=False)
+
+    assert verdict.accepted is True
+    assert verdict.reason is None
+
+
+def test_check_for_spread_true_is_the_default() -> None:
+    verdict = capture.evaluate_image_quality(LOOKS_LIKE_TWO_PAGES)
+
+    assert verdict.accepted is False
+    assert verdict.reason == "looks_like_two_pages"
+
+
+def test_check_for_spread_false_still_rejects_too_small_or_too_dark() -> None:
+    """Skipping the spread check for a screenshot source doesn't skip the
+    other gates -- a tiny or unreadably dark screenshot is still rejected."""
+    assert capture.evaluate_image_quality(TOO_SMALL, check_for_spread=False).reason == "too_small"
+    assert capture.evaluate_image_quality(TOO_DARK, check_for_spread=False).reason == "too_dark"
+
+
 def test_accepts_a_large_bright_portrait_image() -> None:
     verdict = capture.evaluate_image_quality(ACCEPTED)
     assert verdict.accepted is True

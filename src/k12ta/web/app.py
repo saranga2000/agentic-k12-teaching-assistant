@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
+from k12ta.content.source import SourceKind
 from k12ta.domain.attempts import PastAttempt
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.ingest import capture as ingest_capture
@@ -137,6 +138,10 @@ def capture_screen(
             "assignment": assignment,
             "all_sources": content.list_content_sources(conn, student_id),
             "no_assignment_message": NO_ASSIGNMENT_MESSAGE,
+            # The framing guide illustrates "one physical page vs. two" -- not
+            # meaningful for a screenshot, which has no page edges to frame.
+            "is_online_exercise": source is not None
+            and source.kind == SourceKind.ONLINE_EXERCISE.value,
         },
     )
 
@@ -176,7 +181,19 @@ async def submit_capture(
         # on that gets the same honest reject, not a 500.
         return _reject("unreadable_file")
 
-    verdict = ingest_capture.evaluate_image_quality(image_bytes)
+    assignment = content.get_assignment(conn, student_id, assignment_id)
+    source = (
+        content.get_content_source(conn, student_id, assignment.source_id)
+        if assignment is not None
+        else None
+    )
+    # The spread heuristic assumes a photograph of a physical page; a source
+    # configured as SourceKind.ONLINE_EXERCISE is a screenshot, whose own aspect
+    # ratio has nothing to do with "two pages." Configuration, not inference --
+    # source is None only if the assignment somehow outlived its source, in
+    # which case the safer default (still check) applies.
+    check_for_spread = source is None or source.kind != SourceKind.ONLINE_EXERCISE.value
+    verdict = ingest_capture.evaluate_image_quality(image_bytes, check_for_spread=check_for_spread)
     if not verdict.accepted:
         return _reject(verdict.reason or "too_small")
 

@@ -67,6 +67,7 @@ SOURCE_KIND_LABELS: dict[str, str] = {
     "worksheet_packet": "Worksheet packet",
     "textbook": "Textbook",
     "fluency_drill": "Fluency drill",
+    "online_exercise": "Online exercise (a screenshot, not a printed page)",
 }
 # Same reasoning, for k12ta.domain.policy.FeedbackMode.
 FEEDBACK_MODE_LABELS: dict[str, str] = {

@@ -21,6 +21,13 @@ class SourceKind(Enum):
     WORKSHEET_PACKET = "worksheet_packet"
     TEXTBOOK = "textbook"
     FLUENCY_DRILL = "fluency_drill"
+    ONLINE_EXERCISE = "online_exercise"
+    """A programme done on a screen, captured as a screenshot rather than
+    photographed. Configuration, not inference: k12ta.ingest.capture's
+    two-page-spread check and capture.html's photography-specific framing guide
+    both assume a physical page, an assumption that doesn't hold for a
+    screenshot's aspect ratio, so both are skipped for a source of this kind
+    rather than guessed from the image itself."""
     GENERATED = "generated"
     """Produced by the coach itself, e.g. a targeted follow-up quiz."""
 

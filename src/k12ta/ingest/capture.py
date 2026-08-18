@@ -66,7 +66,13 @@ def normalize_orientation(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
-def evaluate_image_quality(image_bytes: bytes) -> QualityVerdict:
+def evaluate_image_quality(image_bytes: bytes, *, check_for_spread: bool = True) -> QualityVerdict:
+    """`check_for_spread=False` for a source configured as
+    SourceKind.ONLINE_EXERCISE: the aspect-ratio heuristic below assumes a
+    photograph of a physical page (portrait) versus two pages photographed flat
+    (landscape) -- an assumption a screenshot's own shape has no relation to.
+    Configuration, decided by the caller from the assignment's source kind,
+    never guessed here from the image itself."""
     image = Image.open(io.BytesIO(image_bytes))
     width, height = image.size
 
@@ -77,7 +83,7 @@ def evaluate_image_quality(image_bytes: bytes) -> QualityVerdict:
     if brightness < DARK_MEAN_BRIGHTNESS_THRESHOLD:
         return QualityVerdict(accepted=False, reason="too_dark")
 
-    if width / height >= SPREAD_ASPECT_RATIO_THRESHOLD:
+    if check_for_spread and width / height >= SPREAD_ASPECT_RATIO_THRESHOLD:
         return QualityVerdict(accepted=False, reason="looks_like_two_pages")
 
     return QualityVerdict(accepted=True, reason=None)

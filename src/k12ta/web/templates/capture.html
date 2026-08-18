@@ -20,6 +20,7 @@
     <p class="message">{{ no_assignment_message }}</p>
   {% endif %}
 
+  {% if not is_online_exercise %}
   <div class="framing-guide">
     <div class="frame-good">
       <div class="frame-outline">
@@ -34,11 +35,12 @@
       <p class="frame-label">Not this — two pages</p>
     </div>
   </div>
+  {% endif %}
 
   {% if assignment %}
   <form id="capture-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
     <input type="hidden" name="assignment_id" value="{{ assignment.assignment_id }}">
-    <label id="take-photo-button" class="big-button" for="photo-input">Take Photo</label>
+    <label id="take-photo-button" class="big-button" for="photo-input">{{ "Add Screenshot" if is_online_exercise else "Take Photo" }}</label>
     <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
   </form>
   <div id="working-state" class="working-state" hidden>
