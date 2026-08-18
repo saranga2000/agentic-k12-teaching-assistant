@@ -19,10 +19,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pillow_heif
 from PIL import Image, ImageOps, ImageStat
 
 from k12ta.config import Settings
 from k12ta.store import captures
+
+pillow_heif.register_heif_opener()
+"""Module-level, run once at import time: makes Image.open transparently decode
+HEIC, the default format every iPhone and iPad camera produces, the same way it
+already handles JPEG and PNG. Without this, normalize_orientation's Image.open
+call below raises UnidentifiedImageError on a real HEIC upload -- not a
+screenshot-era edge case, a crash on the household's own primary devices."""
 
 MIN_DIMENSION_PX = 600
 DARK_MEAN_BRIGHTNESS_THRESHOLD = 50.0

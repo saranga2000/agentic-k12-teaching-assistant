@@ -50,6 +50,20 @@ ACCEPTED = _jpeg_bytes((1200, 1600), (200, 200, 200))
 PORTRAIT_STORED_SIDEWAYS = _jpeg_bytes_with_exif_orientation((1600, 1200), (210, 210, 210), 6)
 
 
+def _heic_bytes(size: tuple[int, int], color: tuple[int, int, int]) -> bytes:
+    """A real HEIC file, not a renamed JPEG -- built with pillow-heif's own writer
+    so this test proves the actual format iPhone/iPad cameras produce decodes,
+    not just a file with a .heic-shaped name."""
+    import pillow_heif
+
+    buf = io.BytesIO()
+    pillow_heif.from_pillow(Image.new("RGB", size, color=color)).save(buf, quality=90)
+    return buf.getvalue()
+
+
+A_HEIC_PHOTO = _heic_bytes((1200, 1600), (200, 200, 200))
+
+
 def test_rejects_an_image_that_is_too_small() -> None:
     verdict = capture.evaluate_image_quality(TOO_SMALL)
     assert verdict.accepted is False
@@ -92,6 +106,28 @@ def test_a_sideways_stored_single_page_photo_is_accepted_once_normalized() -> No
     quality gate read the raw (landscape) buffer dimensions instead of the corrected
     ones. This is the regression test for that."""
     normalized = capture.normalize_orientation(PORTRAIT_STORED_SIDEWAYS)
+
+    verdict = capture.evaluate_image_quality(normalized)
+
+    assert verdict.accepted is True
+    assert verdict.reason is None
+
+
+def test_normalize_orientation_decodes_a_heic_photo() -> None:
+    """The live bug this exists for: the default format every iPhone and iPad
+    camera produces (the household's own devices) crashed normalize_orientation
+    outright before pillow-heif was registered -- Pillow alone cannot open HEIC.
+    The Pixel one child used shoots JPEG, which is the only reason this went
+    unnoticed until now."""
+    normalized = capture.normalize_orientation(A_HEIC_PHOTO)
+
+    reopened = Image.open(io.BytesIO(normalized))
+    assert reopened.format == "JPEG"
+    assert reopened.size == (1200, 1600)
+
+
+def test_a_heic_photo_is_accepted_once_normalized() -> None:
+    normalized = capture.normalize_orientation(A_HEIC_PHOTO)
 
     verdict = capture.evaluate_image_quality(normalized)
 

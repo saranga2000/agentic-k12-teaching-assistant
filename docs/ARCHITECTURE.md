@@ -69,6 +69,15 @@ are the parts worth reading, and they should be testable in milliseconds.
   processing happens in this codebase; this is not a general vision or CV dependency,
   and true skew/perspective detection is out of scope for it — that gate is an aspect
   ratio heuristic, not real skew detection.
+- **pillow-heif**: stock Pillow cannot decode HEIC, the default photo format on every
+  iPhone and iPad camera since iOS 11 -- not a screenshot concern, a live crash on the
+  household's actual primary devices (the Pixel one child used shoots JPEG, which is
+  the only reason this went unnoticed). Registers a Pillow-compatible opener
+  (`pillow_heif.register_heif_opener()`, called once at import time in
+  `k12ta.ingest.capture`) so `k12ta.ingest.capture.normalize_orientation`'s existing
+  `Image.open` call handles a `.heic` upload the same way it already handles JPEG and
+  PNG, with no branch anywhere else in the capture path. Read-only in this codebase;
+  every capture is still re-encoded to JPEG on disk exactly as before.
 - **python-multipart** (M2.2): FastAPI has no way to parse a `multipart/form-data`
   request without it, and a `<input type=file>` capture upload has to be sent that
   way — there's no working around it. Not a product dependency in its own right, it's
