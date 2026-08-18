@@ -57,7 +57,13 @@ def example_sources() -> list[ContentSource]:
             kind=SourceKind.FLUENCY_DRILL,
             subject="reading",
             has_answer_key=True,
-            graded_by_someone_else=True,
+            # Scored by the coach itself against the key, not by a person outside
+            # the household -- unlike outside_math_program_hw and school_homework
+            # below. graded_by_someone_else=True here was the actual bug: resolve_
+            # mode checks it before a source's own default_mode, unconditionally,
+            # on purpose (see test_policy.py), so True made default_mode=FLUENCY
+            # below unreachable and this source silently ran as DIAGNOSTIC_ONLY.
+            graded_by_someone_else=False,
             default_mode=FeedbackMode.FLUENCY,
             typical_session_minutes=10,
             standards_frame=None,
