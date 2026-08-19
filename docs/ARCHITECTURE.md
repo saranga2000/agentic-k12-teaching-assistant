@@ -115,6 +115,58 @@ don't have an answer key for this one yet") rather than being folded into the
 low-confidence copy above. Both render in the same neutral visual treatment; only the
 wording differs.
 
+## Asking when exactly one component is missing
+
+Refusing a `PARTIAL` page identity outright, every time, trades a real cost (a page a
+parent already scanned sits ungraded) for a real safety property (never grading against
+the wrong page's answers). `k12ta.grading.page_identity.resolve_partial` narrows that
+trade in one specific, bounded case: when a photo reads every schema component except
+one, and this source's already-confirmed `page_identities` mappings can settle which
+value that missing component must have.
+
+**Configuration over inference, always.** The candidates offered are never guessed from
+the photo and never free text — they are exactly the confirmed mappings a parent has
+already verified against the physical book, filtered to the ones agreeing with every
+component the photo did read. A wrong pick is possible only in the sense that it exists
+among the real candidates and someone chose the wrong one; it can never invent a page
+that was never confirmed.
+
+**The coverage limit.** A single agreeing match auto-resolves only when no other value
+has ever been confirmed for the missing component anywhere in this source. Early in a
+term, before a second section has been key-scanned at all, a single Day 6 match under
+Section 1 is not proof a Section 2 doesn't exist — it only means nothing from Section 2
+has been taught to the system yet. Auto-resolving on partial coverage would grade a
+Section 2 page against Section 1's answers the first time a student photographed one,
+exactly the confident-wrong-grade failure this whole system exists to refuse. Two or
+more matches, or one match without full coverage, are offered to the student as a
+constrained pick instead — real options only, plus an explicitly subordinate "not sure"
+that falls through to the ordinary honest refusal.
+
+**The residual risk, stated plainly rather than left implicit.** A student's pick can be
+validated for candidacy — the server re-derives fresh candidates from the current
+`page_identities` table at submission time and refuses anything that isn't one of them,
+which catches a stale or tampered request. It cannot be validated for factual
+correctness. If a child picks the wrong option among genuinely real candidates — because
+she doesn't actually know which section she's in, not because anything was tampered
+with — the system has no way to detect that and will grade her work against the wrong
+page's key, confidently and wrongly. This is a deliberate, bounded exception to the
+fail-closed rule elsewhere in this codebase, accepted because the alternative (refusing
+every `PARTIAL` outright, forever) has its own real cost, and because the exposure is
+narrow: only the single-missing-component case, only among pages a parent has already
+verified by hand, never a guess invented for the occasion. Anyone extending this
+mechanism should keep that scope narrow rather than widen it to cover more ambiguity
+than this trade was actually made for.
+
+Identity resolved is not the same as a key existing for the resolved page — the regrade
+that follows a pick or a newly-added key (`k12ta.pipeline.process.
+regrade_capture_for_resolved_identity`) can still land on `NEEDS_HUMAN` (typically
+`NO_KEY_FOR_PAGE`) rather than a definite grade, exactly as honest as at capture time.
+And a pick is never counted as the model succeeding: it is logged as its own outcome,
+`page_identity.RESOLVED_BY_STUDENT_PICK`, a distinct row alongside the original honest
+`PARTIAL` log entry rather than an upgrade of it, specifically so a per-source accuracy
+count can never conflate a student's pick with `resolve()`'s own composite lookup
+succeeding.
+
 ## Multi-user
 
 Every row carries `student_id`, with one deliberate category of exception:

@@ -18,11 +18,23 @@ from PIL import Image
 
 import k12ta.web.app as web_app
 from k12ta.config import Settings
+from k12ta.grading.page_identity import build_composite_key
 from k12ta.ingest.schedule import get_or_create_todays_assignment
 from k12ta.llm.base import DataRetention
 from k12ta.respond import render as respond_render
+from k12ta.store import (
+    answer_keys,
+    content,
+    db,
+    migrate,
+    page_identities,
+    page_identity_resolutions,
+    page_identity_schemas,
+    quota,
+    sessions,
+    students,
+)
 from k12ta.store import captures as store_captures
-from k12ta.store import content, db, migrate, quota, sessions, students
 from k12ta.store import schedule as store_schedule
 from k12ta.transcribe.base import FailureKind, TranscribedItem, TranscriptionResult
 from tests.fakes import FakeTranscriber
@@ -710,6 +722,292 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     assert "outcome-correct" in response.text
     assert "outcome-incorrect" in response.text
     assert "outcome-needs-human" in response.text
+
+
+def _seed_partial_identity_session(
+    conn: sqlite3.Connection, *, seen_values_json: str = '{"day": "Day 5"}'
+) -> str:
+    """A capture whose page identity resolved its Day but not its Section --
+    PARTIAL_PAGE_MARKERS, with the seen values stored for the ask-flow to
+    re-derive candidates from. Returns the session_id."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-partial",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-partial",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-partial",
+            assignment_id="a-1",
+            started_at="2026-08-12T08:00:00+00:00",
+            ended_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-partial",
+            capture_id="c-partial",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.97,
+            needs_human_cause="partial_page_markers",
+            needs_human_detail='{"seen": ["Day"], "missing": ["Section"]}',
+        ),
+    )
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-partial",
+            outcome="partial",
+            resolved_page_number=None,
+            created_at="2026-08-12T08:00:00+00:00",
+            seen_values_json=seen_values_json,
+        ),
+    )
+    return "sess-partial"
+
+
+def test_session_results_offers_a_pick_among_real_confirmed_candidates(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=63,
+            composite_key=build_composite_key(["Section 2", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.get(f"/session/s-marcus/{session_id}")
+
+    assert response.status_code == 200
+    assert "Section" in response.text  # the missing component's parent-facing label
+    assert 'name="page_number" value="15"' in response.text
+    assert 'name="page_number" value="63"' in response.text
+    assert "Not sure" in response.text
+    assert f'action="/session/s-marcus/{session_id}/resolve-identity"' in response.text
+
+
+def test_session_results_shows_nothing_to_ask_when_no_candidates_exist(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Nothing confirmed for Day 5 at all -- the honest PARTIAL refusal
+    stands, no pick offered (there's nothing real to offer)."""
+    session_id = _seed_partial_identity_session(conn)
+
+    response = client.get(f"/session/s-marcus/{session_id}")
+
+    assert response.status_code == 200
+    assert "resolve-identity" not in response.text
+
+
+def test_session_results_auto_resolves_when_only_one_candidate_ever_confirmed(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The situation became unambiguous since capture time (only one section
+    has ever been confirmed for this source) -- applied immediately on view,
+    no stale ask shown for a question that's already answered."""
+    session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.get(f"/session/s-marcus/{session_id}")
+
+    assert response.status_code == 200
+    assert "resolve-identity" not in response.text
+    assert "outcome-correct" in response.text
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].page_number == 15
+
+
+def test_submit_identity_pick_grades_the_capture_and_records_provenance(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=63,
+            composite_key=build_composite_key(["Section 2", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/resolve-identity",
+        data={"capture_id": "c-partial", "page_number": "15"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].page_number == 15
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
+    assert counts.get("resolved_by_student_pick") == 1
+    # Evals must never count this as the model resolving it -- the original
+    # honest "partial" log entry is untouched, not upgraded to "resolved".
+    assert counts.get("partial") == 1
+    assert counts.get("resolved") is None
+
+
+def test_submit_identity_pick_with_a_page_number_that_is_not_a_real_candidate_does_nothing(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The requirement stated plainly: a wrong pick must fail to resolve. Here
+    that means a submission naming a page_number that isn't among the fresh,
+    server-recomputed candidates -- a stale or tampered request -- changes
+    nothing."""
+    session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/resolve-identity",
+        data={"capture_id": "c-partial", "page_number": "999"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == "partial_page_markers"
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
+    assert counts.get("resolved_by_student_pick") is None
 
 
 def _seed_one_incorrect_session(

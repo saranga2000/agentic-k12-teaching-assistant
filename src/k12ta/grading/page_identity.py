@@ -80,6 +80,19 @@ class PageIdentityOutcome(StrEnum):
     RESOLVED = "resolved"
 
 
+RESOLVED_BY_STUDENT_PICK = "resolved_by_student_pick"
+"""Not a resolve() outcome -- resolve() never produces this, and
+PageIdentityOutcome deliberately stays exactly the seven values it can
+produce, unchanged. This is logged separately, as its own
+page_identity_resolutions row, only by the web route that accepts a
+student's constrained pick after resolve_partial found candidates to offer.
+Kept distinct from "resolved" specifically so a per-source accuracy count
+(k12ta.store.page_identity_resolutions.count_outcomes_for_source) can never
+conflate a student's pick with the model's own composite lookup succeeding
+-- see docs/ARCHITECTURE.md's "asking when exactly one component is
+missing" section for the full reasoning."""
+
+
 @dataclass(frozen=True)
 class PageIdentityResolution:
     outcome: PageIdentityOutcome
