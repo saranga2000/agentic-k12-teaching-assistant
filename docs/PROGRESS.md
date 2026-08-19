@@ -70,3 +70,26 @@ that work was reworked a day after shipping — cheap only because it was a day 
 
 Discovery mode did not spontaneously report the section banner on a real photo. The
 manual parent fallback is load-bearing, not a backstop.
+
+The first four real grades this system ever produced were 50% unjust: two of four
+marked INCORRECT on a live capture were a student writing a more specific correct
+name than the key's general one ("rhombus" vs. "quadrilateral", "Square" vs.
+"rectangle"). Exact-string matching, correct for numeric answers, was silently wrong
+for free-text ones. Fixed by routing a non-numeric key mismatch to its own
+NEEDS_HUMAN cause (`ANSWER_DIFFERS_FROM_KEY`) instead of asserting INCORRECT --
+deliberately not a synonym or taxonomy system, and deliberately not a model judging
+equivalence: both are unmeasured confidence in exactly the place a wrong mark costs
+the most. See `docs/EVALS.md`'s M1 section for the related calibration gap this
+surfaced alongside.
+
+Extending exact-match to tolerate a unit label ("496" vs. key "496 ft²") introduced
+two near-misses, both caught by sweeping the real production key data before wiring
+anything up, not by the tests written first: a thousands-comma key ("2,122.64 m²")
+truncated to "2" under a naive "digit-run then anything" grammar, and a real algebra
+key ("28y") had its variable stripped as if it were a unit, so a bare "28" would have
+been credited as correct. Neither was hypothetical -- both are live key entries on
+this project's own pages 33 and 61. Fixed by requiring a real boundary: the unit must
+be whitespace-separated from the number and contain no digit anywhere, otherwise
+`numeric_part` returns None rather than a guessed value. Same lesson as the mark
+above: tests against invented examples pass while missing failure modes the real data
+already contains.

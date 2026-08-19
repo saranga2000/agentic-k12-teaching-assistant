@@ -72,6 +72,25 @@ def test_correct_outcome_says_correct_regardless_of_mode() -> None:
         assert view.message == "Correct!"
 
 
+def test_unsimplified_correct_answer_says_so_and_still_counts_as_correct() -> None:
+    """ "2/6" matched a key of "1/3" by value, not by string
+    (k12ta.grading.needs_human.decide) -- numerically right, so outcome stays
+    "correct" (mastery, oracle suppression, everything downstream sees a real
+    correct mark), but the message says it's unreduced rather than looking
+    identical to a fully-simplified answer."""
+    view = render_student_result(
+        _row(outcome="correct", unsimplified=True),
+        "What fraction is shaded?",
+        "2/6",
+        rules=_FULL,
+        prior_attempts=(),
+    )
+    assert view.outcome == "correct"
+    assert view.glyph == "✓"
+    assert "simplif" in view.message.lower()
+    assert view.message != "Correct!"
+
+
 def test_incorrect_in_full_mode_reveals_the_expected_answer() -> None:
     view = render_student_result(
         _row(expected_answer="42"), "12 + 7", "18", rules=_FULL, prior_attempts=()
@@ -116,6 +135,26 @@ def test_needs_human_message_does_not_change_with_expected_answer_present() -> N
     view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
 
     assert "42" not in view.message
+
+
+def test_answer_differs_from_key_shows_both_answers_and_marks_nothing() -> None:
+    """The one deliberate exception to the invariant above: this cause exists
+    specifically so a name that differs from the key (a rhombus vs.
+    "quadrilateral") isn't asserted wrong -- both sides need to be visible so a
+    parent can judge, and the message must not imply a verdict either way."""
+    row = _row(
+        outcome="needs_human",
+        needs_human_cause="answer_differs_from_key",
+        expected_answer="quadrilateral",
+    )
+
+    view = render_student_result(row, "shape?", "rhombus", rules=_FULL, prior_attempts=())
+
+    assert "quadrilateral" in view.message
+    assert "rhombus" in (view.student_answer_raw,)  # her own answer, shown as-is
+    assert "not" not in view.message.lower()
+    assert "wrong" not in view.message.lower()
+    assert "incorrect" not in view.message.lower()
 
 
 def test_view_carries_no_raw_expected_answer_field() -> None:

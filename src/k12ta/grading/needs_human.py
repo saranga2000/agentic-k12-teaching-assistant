@@ -18,6 +18,14 @@ honest about what is and is not known:
   its own enum value rather than folded into `UNKNOWN_PAGE`'s copy, on purpose: the
   fix for a parent is different (photograph one page at a time, not "wait for a
   key"), and the eval harness needs to count how often each actually fires.
+- `ANSWER_DIFFERS_FROM_KEY`: the student's answer doesn't exactly match a
+  non-numeric key entry. Deliberately not INCORRECT: a name that differs from
+  the key isn't necessarily wrong (a rhombus is a quadrilateral; a square is a
+  rectangle), and telling them apart needs either a taxonomy or a model judging
+  equivalence -- both unmeasured confidence in exactly the place a wrong mark
+  costs the most, so this asks a person instead of guessing. Numeric keys don't
+  get this treatment: a number has exactly one correct value, so a mismatch
+  there is still INCORRECT (see `k12ta.grading.key_grader.looks_numeric`).
 - `PARTIAL_PAGE_MARKERS`: `k12ta.grading.page_identity` read some but not all of
   this source's identity components on one photo (e.g. the day banner but not the
   section marker). Also decided upstream of `decide`, for the same reason as
@@ -40,7 +48,12 @@ from enum import StrEnum
 from typing import Protocol
 
 from k12ta.domain.models import GradeOutcome
-from k12ta.grading.key_grader import CONFIDENCE_FLOOR, grade_against_key
+from k12ta.grading.key_grader import (
+    CONFIDENCE_FLOOR,
+    fraction_value,
+    grade_against_key,
+    looks_numeric,
+)
 
 
 class NeedsHumanCause(StrEnum):
@@ -64,6 +77,10 @@ class NeedsHumanCause(StrEnum):
     """Some but not all of this source's identity components were seen on one
     photo -- decided by k12ta.grading.page_identity, never by decide() below."""
 
+    ANSWER_DIFFERS_FROM_KEY = "answer_differs_from_key"
+    """A non-numeric answer that doesn't exactly match the key -- may still be
+    right under a different valid name. See the module docstring above."""
+
 
 @dataclass(frozen=True)
 class GradeDecision:
@@ -73,6 +90,13 @@ class GradeDecision:
 
     expected_answer: str | None = None
     """The confirmed key answer, surfaced so the renderer can show it if useful."""
+
+    unsimplified: bool = False
+    """Set only when outcome is CORRECT and the match required comparing
+    fraction values, not exact strings (e.g. "2/6" against a key of "1/3") --
+    numerically right, but not in lowest terms. Not INCORRECT (the value is
+    right) and not a bare CORRECT either (many workbooks ask to simplify),
+    so the renderer gets to say both without a new outcome value."""
 
 
 class KeyEntry(Protocol):
@@ -141,4 +165,22 @@ def decide(
             needs_human_cause=NeedsHumanCause.NEEDS_PERSON,
             expected_answer=key_answer,
         )
+    if outcome is GradeOutcome.INCORRECT:
+        key_fraction = fraction_value(key_answer)
+        if key_fraction is not None and fraction_value(student_answer) == key_fraction:
+            # Same value, different reduction ("2/6" vs "1/3") -- not wrong,
+            # but not silently indistinguishable from a fully-simplified
+            # answer either. See GradeDecision.unsimplified.
+            return GradeDecision(
+                outcome=GradeOutcome.CORRECT, expected_answer=key_answer, unsimplified=True
+            )
+        if not looks_numeric(key_answer):
+            # A name that differs from the key isn't necessarily wrong -- only
+            # a numeric key has exactly one correct value. See
+            # ANSWER_DIFFERS_FROM_KEY.
+            return GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN,
+                needs_human_cause=NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY,
+                expected_answer=key_answer,
+            )
     return GradeDecision(outcome=outcome, expected_answer=key_answer)

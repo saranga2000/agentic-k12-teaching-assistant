@@ -29,6 +29,44 @@ match is currently reported only over matched, attributed items
 (`evals/results/2026-08-12-0825-vision_llm.md`), not over all legible pages. Restate this
 target once single-page fixtures exist to measure it directly.
 
+**Calibration gap: blank answers.** `k12ta.grading.key_grader.CONFIDENCE_FLOOR = 0.95` is
+justified entirely by this eval's calibration bands (`evals/results/2026-08-12-0825-
+vision_llm.md`: 0.95-1.01 scored 100% accurate, n=13). That measurement is confidence in a
+*legible reading* — every one of the 9 fixture files has a non-empty ground-truth
+`student_answer_raw`; none has a genuinely blank one. `prompts/transcribe_page.md`
+(v4) separately asks the model for `blank_confidence`, its probability that a problem is
+genuinely blank rather than illegible in a given photo — a different claim the floor has
+never been checked against, discovered 2026-08-19 from a live capture where the model
+reported `blank_confidence`-shaped 0.95 on an item her better-lit retake proved she had
+answered. `k12ta.transcribe.vision_llm._parse_item` now clamps a blank item's `confidence`
+to 0.0 regardless of what the model reports, so nothing downstream can act on that unverified
+claim — but the claim itself still has no accuracy number.
+
+**Task**: add blank-ground-truth pages to the fixture corpus (mix of genuinely blank
+problems and problems that look blank in a poor photo but aren't) before trusting any
+`blank_confidence` value for anything, including relaxing the parse-time clamp above.
+
+**Calibration gap: free-text answer matching.** The first four real grades this system
+produced (same 2026-08-19 capture as above) were 50% unjust: `k12ta.grading.key_grader.
+grade_against_key`'s exact-string match marked "rhombus" INCORRECT against a key of
+"quadrilateral", and "Square" INCORRECT against "rectangle" -- both true, just more
+specific than the key's wording. Exact match has no failure mode for a numeric key
+(one correct value), but a free-text key can have more than one correct spelling, and
+nothing measured how often that happens. Fixed narrowly: a non-numeric key mismatch now
+escalates to `NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY` rather than INCORRECT (see
+`docs/PROGRESS.md`'s M2 entry) instead of building a synonym/taxonomy system or having a
+model judge equivalence -- same reasoning as the blank-confidence gap above, unmeasured
+confidence in exactly the place a wrong mark costs the most. This trades false INCORRECT
+for over-escalation: every non-numeric mismatch now asks a person, including genuinely
+wrong ones a taxonomy could have caught automatically. No fixture or eval yet measures
+how often a non-numeric "mismatch" is actually still correct, so there's no number for
+how big that over-escalation cost is.
+
+**Task**: once free-text answer fixtures exist, measure what fraction of non-numeric
+key mismatches are actually valid alternate names, to know whether `ANSWER_DIFFERS_
+FROM_KEY`'s parent-review burden is worth narrowing (e.g. a parent-authored list of
+accepted alternates per key entry) rather than living with permanently.
+
 Fixtures carry a `provenance` field once M5 ships: `hand-labelled` for the original M1
 corpus, `parent-correction` for pages promoted automatically by the parent correction
 loop. Report results sliced by provenance, not pooled. A hand-labelled page and a page a

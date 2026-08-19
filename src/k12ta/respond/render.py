@@ -64,6 +64,14 @@ CONFLICTING_PAGE_MARKERS_GLYPH = "⇄"
 # the cause but no usable detail (malformed, or predates this column).
 PARTIAL_PAGE_MARKERS_MESSAGE = "I can see part of the page marker, but not all of it."
 PARTIAL_PAGE_MARKERS_GLYPH = "◐"
+# The one needs-human cause whose message deliberately surfaces expected_answer
+# -- not to reveal a verdict (none exists yet) but because the whole point is
+# to show both sides so a grown-up can judge. Built dynamically in
+# _needs_human_copy; this is only the fallback for a row with the cause but no
+# expected_answer (shouldn't happen -- k12ta.grading.needs_human.decide always
+# sets one for this cause -- but honest is better than crashing).
+ANSWER_DIFFERS_FROM_KEY_MESSAGE = "Your answer is different from the key. A grown-up will check."
+ANSWER_DIFFERS_FROM_KEY_GLYPH = "≠"
 # A row graded before the needs_human_cause column existed (migration 0006) has no
 # claimed reason -- genuinely unknown, not a guess dressed up as one.
 UNKNOWN_CAUSE_MESSAGE = "I need a grown-up to look at this one."
@@ -82,10 +90,21 @@ _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
         PARTIAL_PAGE_MARKERS_GLYPH,
         PARTIAL_PAGE_MARKERS_MESSAGE,
     ),
+    NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY: (
+        ANSWER_DIFFERS_FROM_KEY_GLYPH,
+        ANSWER_DIFFERS_FROM_KEY_MESSAGE,
+    ),
 }
 
 CORRECT_GLYPH = "✓"
 CORRECT_MESSAGE = "Correct!"
+# GradedProblemRow.unsimplified only ("2/6" matched a key of "1/3" by value, not
+# by string) -- numerically right, so not INCORRECT, but many workbooks ask to
+# simplify, so not silently indistinguishable from a fully-reduced CORRECT
+# either. Same glyph as a plain correct mark; the note is carried in the message
+# text alone, since outcome/glyph also drive the multi-attempt-oracle CSS class
+# and must not grow a fourth state for this.
+CORRECT_UNSIMPLIFIED_MESSAGE = "Correct! It can still be simplified further."
 INCORRECT_GLYPH = "✎"
 # reveal_final_answer=False (DIAGNOSTIC_ONLY, FLUENCY): no location or concept
 # naming yet -- that requires k12ta.diagnose output, which does not exist on any
@@ -109,15 +128,21 @@ def _join_labels(labels: list[str]) -> str:
     return ", ".join(labels[:-1]) + f", and {labels[-1]}"
 
 
-def _needs_human_copy(cause_value: str | None, detail_json: str | None = None) -> tuple[str, str]:
+def _needs_human_copy(
+    cause_value: str | None,
+    detail_json: str | None = None,
+    expected_answer: str | None = None,
+) -> tuple[str, str]:
     """Glyph and message for a graded_problems row's stored `needs_human_cause`
-    (and, for PARTIAL_PAGE_MARKERS, its `needs_human_detail`). The one place this
+    (and, for PARTIAL_PAGE_MARKERS, its `needs_human_detail`; for
+    ANSWER_DIFFERS_FROM_KEY, its `expected_answer`). The one place this
     decision is rendered from -- never re-derived from confidence or any other
     proxy, see docs/PROGRESS.md's M2 entry for why that was wrong before. The
-    facts (which components were seen/missing) come from `k12ta.pipeline.process`
-    -- this function only interpolates them into a sentence, it never infers a
-    source's schema itself. Deliberately ignores `rules`: it doesn't take one --
-    these causes are honest in every feedback mode."""
+    facts (which components were seen/missing, or the key's own answer) come
+    from `k12ta.pipeline.process` / `k12ta.grading.needs_human.decide` -- this
+    function only interpolates them into a sentence, it never infers a
+    source's schema or a key's answer itself. Deliberately ignores `rules`: it
+    doesn't take one -- these causes are honest in every feedback mode."""
     if cause_value is None:
         return UNKNOWN_CAUSE_GLYPH, UNKNOWN_CAUSE_MESSAGE
     cause = NeedsHumanCause(cause_value)
@@ -130,6 +155,12 @@ def _needs_human_copy(cause_value: str | None, detail_json: str | None = None) -
             seen, missing = "", ""
         if seen and missing:
             return PARTIAL_PAGE_MARKERS_GLYPH, f"I can see the {seen} but not the {missing}."
+    if cause is NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY and expected_answer:
+        return (
+            ANSWER_DIFFERS_FROM_KEY_GLYPH,
+            f'Your answer and the key\'s answer ("{expected_answer}") are different. '
+            "A grown-up will check if yours is still right.",
+        )
     return _NEEDS_HUMAN_COPY[cause]
 
 
@@ -169,7 +200,9 @@ def render_student_result(
     problem identity (student, source, page, problem_id), across every session
     and capture, EXCLUDING this row itself."""
     if row.outcome == "needs_human":
-        glyph, message = _needs_human_copy(row.needs_human_cause, row.needs_human_detail)
+        glyph, message = _needs_human_copy(
+            row.needs_human_cause, row.needs_human_detail, row.expected_answer
+        )
         outcome = row.outcome
     elif (
         not rules.reveal_final_answer
@@ -178,7 +211,8 @@ def render_student_result(
     ):
         glyph, message, outcome = REPEAT_GLYPH, REPEAT_MESSAGE, "repeat"
     elif row.outcome == "correct":
-        glyph, message, outcome = CORRECT_GLYPH, CORRECT_MESSAGE, row.outcome
+        glyph, outcome = CORRECT_GLYPH, row.outcome
+        message = CORRECT_UNSIMPLIFIED_MESSAGE if row.unsimplified else CORRECT_MESSAGE
     else:
         outcome = row.outcome
         if rules.reveal_final_answer:

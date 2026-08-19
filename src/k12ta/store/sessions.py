@@ -57,6 +57,10 @@ class GradedProblemRow:
     facts beyond the cause itself (PARTIAL_PAGE_MARKERS today). Decided once in
     k12ta.pipeline.process, never re-derived by a renderer -- same rule as
     diagnosis_skill_ids on this same row."""
+    unsimplified: bool = False
+    """CORRECT only, and only when the match required comparing fraction
+    values rather than exact strings (k12ta.grading.needs_human.decide) --
+    e.g. "2/6" against a key of "1/3". See GradeDecision.unsimplified."""
     diagnosis_misconception_id: str | None = None
     diagnosis_explanation: str | None = None
     diagnosis_error_location: str | None = None
@@ -68,14 +72,14 @@ def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> No
         """
         INSERT INTO graded_problems
             (student_id, session_id, capture_id, problem_id, outcome, expected_answer,
-             page_number, needs_human_cause, needs_human_detail, grader_confidence,
-             diagnosis_misconception_id, diagnosis_explanation, diagnosis_error_location,
-             diagnosis_skill_ids)
+             page_number, needs_human_cause, needs_human_detail, unsimplified,
+             grader_confidence, diagnosis_misconception_id, diagnosis_explanation,
+             diagnosis_error_location, diagnosis_skill_ids)
         VALUES
             (:student_id, :session_id, :capture_id, :problem_id, :outcome, :expected_answer,
-             :page_number, :needs_human_cause, :needs_human_detail, :grader_confidence,
-             :diagnosis_misconception_id, :diagnosis_explanation, :diagnosis_error_location,
-             :diagnosis_skill_ids)
+             :page_number, :needs_human_cause, :needs_human_detail, :unsimplified,
+             :grader_confidence, :diagnosis_misconception_id, :diagnosis_explanation,
+             :diagnosis_error_location, :diagnosis_skill_ids)
         """,
         {**vars(row), "diagnosis_skill_ids": json.dumps(list(row.diagnosis_skill_ids))},
     )
@@ -93,6 +97,7 @@ def update_graded_problem_after_identity_resolution(
     expected_answer: str | None,
     page_number: int,
     needs_human_cause: str | None,
+    unsimplified: bool = False,
 ) -> None:
     """The shared regrade path: a problem that couldn't be graded at capture
     time because its page identity was unresolved later gets re-decided once
@@ -118,7 +123,7 @@ def update_graded_problem_after_identity_resolution(
         UPDATE graded_problems
         SET outcome = :outcome, expected_answer = :expected_answer,
             page_number = :page_number, needs_human_cause = :needs_human_cause,
-            needs_human_detail = NULL
+            needs_human_detail = NULL, unsimplified = :unsimplified
         WHERE student_id = :student_id AND session_id = :session_id
             AND capture_id = :capture_id AND problem_id = :problem_id
         """,
@@ -131,6 +136,41 @@ def update_graded_problem_after_identity_resolution(
             "expected_answer": expected_answer,
             "page_number": page_number,
             "needs_human_cause": needs_human_cause,
+            "unsimplified": unsimplified,
+        },
+    )
+    conn.commit()
+
+
+def apply_human_verdict(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+    outcome: str,
+) -> None:
+    """A parent's direct verdict on a row the grader deliberately refused to
+    call itself -- today, only ANSWER_DIFFERS_FROM_KEY (a non-numeric answer
+    that differs from the key, which might still be a valid alternate name;
+    see k12ta.grading.needs_human.decide). Not a re-decision through decide()
+    -- there is nothing new to re-derive, only a person's judgment to record.
+    expected_answer and page_number are left as they were; only the verdict
+    and the now-resolved needs_human fields change."""
+    conn.execute(
+        """
+        UPDATE graded_problems
+        SET outcome = :outcome, needs_human_cause = NULL, needs_human_detail = NULL
+        WHERE student_id = :student_id AND session_id = :session_id
+            AND capture_id = :capture_id AND problem_id = :problem_id
+        """,
+        {
+            "student_id": student_id,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "problem_id": problem_id,
+            "outcome": outcome,
         },
     )
     conn.commit()
@@ -150,6 +190,7 @@ def list_graded_problems_for_session(
 def _row_to_graded(row: sqlite3.Row) -> GradedProblemRow:
     data = dict(row)
     data["diagnosis_skill_ids"] = tuple(json.loads(data["diagnosis_skill_ids"]))
+    data["unsimplified"] = bool(data["unsimplified"])
     return GradedProblemRow(**data)
 
 
@@ -190,6 +231,9 @@ class PendingProblemRow:
     render.UNKNOWN_CAUSE_MESSAGE for the same honesty applied to the student-
     facing render of this same case."""
     captured_at: str
+    expected_answer: str | None = None
+    """The key's own answer, set only for ANSWER_DIFFERS_FROM_KEY -- what a
+    parent needs to see side by side with student_answer_raw to judge it."""
 
 
 def list_pending_for_source(
@@ -204,7 +248,8 @@ def list_pending_for_source(
         SELECT gp.session_id AS session_id, gp.capture_id AS capture_id,
                gp.problem_id AS problem_id, p.prompt_text AS prompt_text,
                p.student_answer_raw AS student_answer_raw, gp.page_number AS page_number,
-               gp.needs_human_cause AS needs_human_cause, pc.captured_at AS captured_at
+               gp.needs_human_cause AS needs_human_cause, pc.captured_at AS captured_at,
+               gp.expected_answer AS expected_answer
         FROM graded_problems gp
         JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
         JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id

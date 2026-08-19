@@ -20,6 +20,7 @@ from uuid import uuid4
 from k12ta.config import Settings
 from k12ta.domain.models import GradeOutcome
 from k12ta.grading import page_identity
+from k12ta.grading.key_grader import find_key_entry
 from k12ta.grading.needs_human import GradeDecision, NeedsHumanCause, decide
 from k12ta.ingest import capture as ingest_capture
 from k12ta.store import (
@@ -251,8 +252,11 @@ def process_capture(
             detail = partial_detail
         else:
             key_entry = (
-                answer_keys.get_entry(
-                    conn, student_id, assignment.source_id, resolved_page_number, item.problem_id
+                find_key_entry(
+                    answer_keys.get_entries_for_page(
+                        conn, student_id, assignment.source_id, resolved_page_number
+                    ),
+                    item.problem_id,
                 )
                 if resolved_page_number is not None
                 else None
@@ -277,6 +281,7 @@ def process_capture(
                     else None
                 ),
                 needs_human_detail=detail,
+                unsimplified=decision.unsimplified,
             ),
         )
 
@@ -310,8 +315,9 @@ def regrade_capture_for_resolved_identity(
     NO_KEY_FOR_PAGE) rather than a definite grade, and that is exactly as
     honest here as it is at capture time."""
     for problem in captures.list_problems_for_capture(conn, student_id, capture_id):
-        key_entry = answer_keys.get_entry(
-            conn, student_id, source_id, page_number, problem.problem_id
+        key_entry = find_key_entry(
+            answer_keys.get_entries_for_page(conn, student_id, source_id, page_number),
+            problem.problem_id,
         )
         decision = decide(
             problem.student_answer_raw, problem.transcription_confidence, page_number, key_entry
@@ -328,4 +334,5 @@ def regrade_capture_for_resolved_identity(
             needs_human_cause=(
                 decision.needs_human_cause.value if decision.needs_human_cause is not None else None
             ),
+            unsimplified=decision.unsimplified,
         )

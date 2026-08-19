@@ -1004,6 +1004,7 @@ def _seed_pending_problem(
     prompt_text: str = "12 + 7",
     student_answer_raw: str = "19",
     captured_at: str = "2026-08-13T08:00:00+00:00",
+    expected_answer: str | None = None,
 ) -> None:
     captures.insert_page_capture(
         conn,
@@ -1044,6 +1045,7 @@ def _seed_pending_problem(
             problem_id=problem_id,
             outcome="needs_human",
             grader_confidence=0.95,
+            expected_answer=expected_answer,
             page_number=page_number,
             needs_human_cause=cause,
         ),
@@ -1170,6 +1172,119 @@ def test_submit_regrade_pending_grades_only_what_now_has_a_key(
     graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-now-keyed")
     assert graded[0].outcome == "correct"
     assert graded[0].page_number == 15
+
+
+def test_enrollment_detail_shows_answer_differs_side_by_side_with_a_verdict_form(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        prompt_text="shape?",
+        student_answer_raw="rhombus",
+        expected_answer="quadrilateral",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "Answer differs from the key" in response.text
+    assert "rhombus" in response.text
+    assert "quadrilateral" in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'value="c-differs"' in response.text
+
+
+def test_submit_answer_verdict_records_correct_and_clears_the_cause(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        prompt_text="shape?",
+        student_answer_raw="rhombus",
+        expected_answer="quadrilateral",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-differs",
+            "capture_id": "c-differs",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-differs")
+    assert graded[0].outcome == "correct"
+    assert graded[0].needs_human_cause is None
+    assert graded[0].expected_answer == "quadrilateral"  # untouched, still on the row
+
+
+def test_submit_answer_verdict_rejects_a_value_that_is_not_a_verdict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        expected_answer="quadrilateral",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-differs",
+            "capture_id": "c-differs",
+            "problem_id": "1",
+            "verdict": "maybe",
+        },
+    )
+
+    assert response.status_code == 400
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-differs")
+    assert graded[0].outcome == "needs_human"  # untouched
 
 
 def test_enrollment_detail_surfaces_stale_mapping_count_after_a_schema_change(

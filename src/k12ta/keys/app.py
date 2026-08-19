@@ -21,14 +21,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
 from k12ta.domain.attempts import PastAttempt, attempt_number
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
-from k12ta.grading.key_grader import CONFIDENCE_FLOOR
+from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm import build_vision_model
 from k12ta.pipeline.key_ingestion import (
@@ -334,6 +334,7 @@ _WAITING_ON_IDENTITY_CAUSES = frozenset(
 )
 _WAITING_ON_TRANSCRIPTION_CAUSE = "low_confidence"
 _NEEDS_PERSON_CAUSE = "needs_person"
+_ANSWER_DIFFERS_CAUSE = "answer_differs_from_key"
 
 
 def _bucket_pending(
@@ -345,23 +346,30 @@ def _bucket_pending(
     """Groups the waiting list by cause, per the M2 roadmap entry this
     subsumes -- a parent needs to know what to do, not just that something is
     pending, and the fix differs by cause (scan a key page vs. re-photograph
-    vs. wait). needs_person is deliberately excluded from every "waiting"
-    bucket and returned on its own: it isn't waiting on more data arriving,
-    it's actionable right now -- exactly the case ("the key says answers
-    vary") where a parent should look at the work directly. A legacy row
-    with no cause at all (predates the needs_human_cause column) is left out
-    of every bucket rather than folded into one that would misstate why it's
-    here -- genuinely unknown, not a guess dressed up as one."""
+    vs. wait). needs_person and answer_differs are deliberately excluded from
+    every "waiting" bucket and returned on their own: neither is waiting on
+    more data arriving, both are actionable right now -- needs_person because
+    the key itself says the answer varies, answer_differs because only a
+    person can tell a valid alternate name from a real mistake (see
+    k12ta.grading.needs_human.NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY). A
+    legacy row with no cause at all (predates the needs_human_cause column)
+    is left out of every bucket rather than folded into one that would
+    misstate why it's here -- genuinely unknown, not a guess dressed up as
+    one."""
     waiting_on_key = []
     waiting_on_identity = []
     waiting_on_transcription = []
     needs_person = []
+    answer_differs = []
     now_gradable_captures: set[str] = set()
     for row in pending:
         if row.needs_human_cause == _WAITING_ON_KEY_CAUSE:
             waiting_on_key.append(row)
             if row.page_number is not None and (
-                answer_keys.get_entry(conn, student_id, source_id, row.page_number, row.problem_id)
+                find_key_entry(
+                    answer_keys.get_entries_for_page(conn, student_id, source_id, row.page_number),
+                    row.problem_id,
+                )
                 is not None
             ):
                 now_gradable_captures.add(row.capture_id)
@@ -371,11 +379,14 @@ def _bucket_pending(
             waiting_on_transcription.append(row)
         elif row.needs_human_cause == _NEEDS_PERSON_CAUSE:
             needs_person.append(row)
+        elif row.needs_human_cause == _ANSWER_DIFFERS_CAUSE:
+            answer_differs.append(row)
     return {
         "waiting_on_key": waiting_on_key,
         "waiting_on_identity": waiting_on_identity,
         "waiting_on_transcription": waiting_on_transcription,
         "needs_person": needs_person,
+        "answer_differs": answer_differs,
         "now_gradable_count": len(now_gradable_captures),
     }
 
@@ -408,6 +419,41 @@ def submit_regrade_pending(
         regrade_capture_for_resolved_identity(
             conn, student_id, row.session_id, row.capture_id, source_id, row.page_number
         )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+
+
+_VERDICTS = frozenset({"correct", "incorrect"})
+
+
+@app.post("/keys/{student_id}/{source_id}/answer-verdict")
+def submit_answer_verdict(
+    student_id: str,
+    source_id: str,
+    session_id: str = Form(...),
+    capture_id: str = Form(...),
+    problem_id: str = Form(...),
+    verdict: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """A parent's one-tap verdict on an ANSWER_DIFFERS_FROM_KEY row -- the
+    grader deliberately would not call this right or wrong itself (see
+    k12ta.grading.needs_human.decide), so this is a direct write of a
+    person's judgment, not another pass through decide(). A malformed verdict
+    value is rejected rather than silently ignored: unlike a stale identity
+    pick (k12ta.web.app.submit_identity_pick), there is no "current candidate
+    set" to re-validate against here, so there is nothing to check but the
+    value itself."""
+    _require_student_and_source(conn, student_id, source_id)
+    if verdict not in _VERDICTS:
+        raise HTTPException(400, "verdict must be 'correct' or 'incorrect'")
+    sessions.apply_human_verdict(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        outcome=verdict,
+    )
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
@@ -483,6 +529,7 @@ def enrollment_detail(
             "waiting_on_identity": pending_buckets["waiting_on_identity"],
             "waiting_on_transcription": pending_buckets["waiting_on_transcription"],
             "needs_person": pending_buckets["needs_person"],
+            "answer_differs": pending_buckets["answer_differs"],
             "now_gradable_count": pending_buckets["now_gradable_count"],
         },
     )

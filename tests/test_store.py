@@ -246,6 +246,64 @@ def _seed_marcus(conn: sqlite3.Connection) -> None:
     )
 
 
+def test_unsimplified_flag_round_trips_and_defaults_to_false() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)  # session sess-1 / capture c-1 / problem "1", unsimplified defaults False
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-fraction",
+            assignment_id="a-1",
+            captured_at="2026-08-21T08:00:00+00:00",
+            image_path="/tmp/does-not-matter-5.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-fraction",
+            problem_id="1",
+            prompt_text="probability?",
+            student_answer_raw="2/6",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-fraction",
+            assignment_id="a-1",
+            started_at="2026-08-21T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-fraction",
+            capture_id="c-fraction",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+            expected_answer="1/3",
+            unsimplified=True,
+        ),
+    )
+
+    graded = {
+        row.session_id: row
+        for row in [
+            *sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-1"),
+            *sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-fraction"),
+        ]
+    }
+    assert graded["sess-1"].unsimplified is False  # untouched row, real default
+    assert graded["sess-fraction"].unsimplified is True
+
+
 def test_round_trip_of_a_session_with_graded_problems() -> None:
     conn = _migrated_connection()
     _seed_marcus(conn)
@@ -339,6 +397,75 @@ def test_update_graded_problem_after_identity_resolution_changes_the_row_in_plac
     # The other row in this session (from _seed_marcus) is untouched.
     assert graded["1"].outcome == "correct"
     assert graded["1"].expected_answer == "19"
+
+
+def test_apply_human_verdict_records_a_parents_judgment_in_place() -> None:
+    """A row the grader deliberately refused to call itself
+    (ANSWER_DIFFERS_FROM_KEY): a parent's verdict becomes the grade directly,
+    no re-decision through decide() -- there's nothing new to re-derive."""
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            assignment_id="a-1",
+            captured_at="2026-08-19T08:10:00+00:00",
+            image_path="/tmp/does-not-matter-3.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            problem_id="1",
+            prompt_text="shape?",
+            student_answer_raw="rhombus",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-differs",
+            assignment_id="a-1",
+            started_at="2026-08-19T08:10:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-differs",
+            capture_id="c-differs",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.95,
+            expected_answer="quadrilateral",
+            page_number=15,
+            needs_human_cause="answer_differs_from_key",
+        ),
+    )
+
+    sessions.apply_human_verdict(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-differs",
+        capture_id="c-differs",
+        problem_id="1",
+        outcome="correct",
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-differs")[0]
+    assert graded.outcome == "correct"
+    assert graded.needs_human_cause is None
+    assert graded.needs_human_detail is None
+    # Untouched -- the parent judged the verdict, not the facts already on the row.
+    assert graded.expected_answer == "quadrilateral"
+    assert graded.page_number == 15
 
 
 def test_update_graded_problem_after_identity_resolution_can_land_on_a_different_cause() -> None:
@@ -464,6 +591,63 @@ def test_list_pending_for_source_returns_only_needs_human_rows_with_full_detail(
     assert row.page_number == 15
     assert row.needs_human_cause == "no_key_for_page"
     assert row.captured_at == "2026-08-12T08:10:00+00:00"
+    assert row.expected_answer is None
+
+
+def test_list_pending_for_source_carries_expected_answer_for_answer_differs_rows() -> None:
+    """A parent needs the key's own answer alongside student_answer_raw to
+    judge an ANSWER_DIFFERS_FROM_KEY row -- see k12ta.keys.app._bucket_pending."""
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            assignment_id="a-1",
+            captured_at="2026-08-19T08:10:00+00:00",
+            image_path="/tmp/does-not-matter-4.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            problem_id="1",
+            prompt_text="shape?",
+            student_answer_raw="rhombus",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-differs",
+            assignment_id="a-1",
+            started_at="2026-08-19T08:10:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-differs",
+            capture_id="c-differs",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.95,
+            expected_answer="quadrilateral",
+            page_number=15,
+            needs_human_cause="answer_differs_from_key",
+        ),
+    )
+
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+
+    row = next(r for r in pending if r.capture_id == "c-differs")
+    assert row.expected_answer == "quadrilateral"
 
 
 def test_list_pending_for_source_is_scoped_to_student_and_source() -> None:

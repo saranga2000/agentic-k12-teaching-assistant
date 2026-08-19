@@ -67,6 +67,30 @@
 <p class="message">Nothing needs a look right now.</p>
 {% endif %}
 
+<h2>Answer differs from the key</h2>
+<p class="message">Not marked wrong &mdash; her answer doesn't exactly match the key, but a
+  different valid name for the same right answer is possible (a rhombus is a quadrilateral).
+  Your call becomes the grade.</p>
+{% if answer_differs %}
+<ul class="pending-list">
+  {% for item in answer_differs %}
+  <li>{% if item.page_number %}Page {{ item.page_number }}: {% endif %}&ldquo;{{ item.prompt_text }}&rdquo;<br>
+    {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo; &mdash;
+    key says &ldquo;{{ item.expected_answer }}&rdquo;
+    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
+      <input type="hidden" name="session_id" value="{{ item.session_id }}">
+      <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
+      <input type="hidden" name="problem_id" value="{{ item.problem_id }}">
+      <button type="submit" name="verdict" value="correct">Confirm correct</button>
+      <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing waiting on your judgment right now.</p>
+{% endif %}
+
 {% if show_repeated_attempts %}
 <h2>Repeated attempts</h2>
 <p class="message">This mode withholds the answer, so a problem attempted more than

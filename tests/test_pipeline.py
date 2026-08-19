@@ -734,6 +734,60 @@ def test_partial_asks_and_stores_seen_values_when_another_section_is_known(
     assert json.loads(seen_json) == {"day": "Day 5"}
 
 
+def test_keyed_page_marks_an_unreduced_fraction_correct_with_a_note(tmp_path: Path) -> None:
+    """ "2/6" against a key of "1/3" is numerically right but not in lowest
+    terms -- CORRECT (not INCORRECT, not escalated to a parent), flagged
+    unsimplified so the render layer can say so instead of looking identical
+    to a fully-reduced answer. See k12ta.grading.needs_human.decide."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=21,
+            problem_number="1",
+            answer_text="1/3",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-19T00:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    items = (
+        TranscribedItem(
+            problem_id="1", prompt_text="probability?", student_answer_raw="2/6", confidence=0.99
+        ),
+    )
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=items,
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        )
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=21,
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].needs_human_cause is None
+    assert graded[0].unsimplified is True
+
+
 def test_regrade_capture_for_resolved_identity_grades_every_problem_from_the_capture(
     tmp_path: Path,
 ) -> None:
