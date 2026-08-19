@@ -68,13 +68,33 @@
      same time, and the spinner never stopped, because nothing was ever
      going to: it was never hidden in the first place. */
   [hidden] { display: none !important; }
-  .working-state { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
-  .working-state .message { margin: 0; }
-  .working-detail { font-size: 1rem; color: var(--text-dim); margin: 0; }
-  .working-spinner {
-    width: 48px; height: 48px; border-radius: 50%;
-    border: 5px solid var(--neutral-bg); border-top-color: var(--accent);
+  /* The checklist that replaced the single opaque "Checking your page..."
+     spinner -- so a stopped or failed request shows exactly which step it
+     got to, not just "still waiting" indefinitely. See k12ta.web.app.
+     _stream_capture_response's docstring for the protocol driving this. */
+  .checklist {
+    display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start;
+    width: 100%; max-width: 22rem;
+  }
+  .checklist-item {
+    display: flex; align-items: center; gap: 0.75rem;
+    font-size: 1.15rem; color: var(--text-dim);
+  }
+  .checklist-item.done { color: var(--text); }
+  .checklist-item.active { color: var(--text); }
+  .checklist-item.failed { color: var(--attention); font-weight: 600; }
+  .checklist-glyph {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.4rem; height: 1.4rem; flex-shrink: 0; font-weight: 700;
+  }
+  .checklist-item.done .checklist-glyph::before { content: "✓"; color: var(--affirm); }
+  .checklist-item.failed .checklist-glyph::before { content: "✗"; color: var(--attention); }
+  .checklist-item.active .checklist-glyph {
+    border-radius: 50%; border: 3px solid var(--neutral-bg); border-top-color: var(--accent);
     animation: working-spin 0.8s linear infinite;
+  }
+  .checklist-item:not(.done):not(.active):not(.failed) .checklist-glyph::before {
+    content: "○"; color: var(--neutral);
   }
   @keyframes working-spin { to { transform: rotate(360deg); } }
 </style>

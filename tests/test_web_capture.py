@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import json
 import sqlite3
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -29,6 +32,26 @@ def _jpeg_bytes(size: tuple[int, int], color: tuple[int, int, int]) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", size, color=color).save(buf, format="JPEG")
     return buf.getvalue()
+
+
+def _stream_events(response: httpx.Response) -> list[dict[str, Any]]:
+    """/capture's response is newline-delimited JSON -- zero or more {"type":
+    "step", ...} lines as the checklist advances, then one {"type": "final",
+    ...} line carrying either "html" (reject/quota/transcribe-failed, rendered
+    in place) or "redirect" (a real grade, since that case has a real URL --
+    /session/{student_id}/{session_id} -- worth keeping in the address bar for
+    refresh/back-button/bookmark, unlike the "stay and try again" cases)."""
+    return [json.loads(line) for line in response.text.strip().split("\n")]
+
+
+def _final_event(response: httpx.Response) -> dict[str, Any]:
+    events = _stream_events(response)
+    assert events[-1]["type"] == "final"
+    return events[-1]
+
+
+def _step_statuses(response: httpx.Response, step: str) -> list[str]:
+    return [e["status"] for e in _stream_events(response) if e.get("step") == step]
 
 
 _EXIF_ORIENTATION_TAG = 0x0112
@@ -290,13 +313,14 @@ def test_capture_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     "broken" and tried to retake -- which would have fired a second API call for the
     same page had the control not been disabled. No test executes JavaScript here
     (TestClient never runs a real browser), so this can only prove the server-
-    rendered contract the fix depends on: a working-state element with the right
-    copy exists, hidden by default; the button and input carry the ids the script
-    targets; the script both disables the control and switches away from a plain
-    full-page POST (which is *why* nothing could be shown during the wait -- the
-    browser owns an untouched page until navigation completes) to a fetch() call
-    the page stays in control of throughout. Whether the browser actually runs it
-    correctly is a device check, not something this suite can certify.
+    rendered contract the fix depends on: a checklist element exists, hidden by
+    default, with a row for every step; the button and input carry the ids the
+    script targets; the script both disables the control and switches away from
+    a plain full-page POST (which is *why* nothing could be shown during the
+    wait -- the browser owns an untouched page until navigation completes) to a
+    fetch() call the page stays in control of throughout. Whether the browser
+    actually runs it correctly is a device check, not something this suite can
+    certify.
     """
     _seed_two_students(conn)
     _seed_todays_schedule(conn, "s-marcus")
@@ -305,10 +329,10 @@ def test_capture_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     text = response.text
 
     assert response.status_code == 200
-    assert 'id="working-state" class="working-state" hidden' in text
-    working_block = text.split('id="working-state"')[1].split('id="submit-error"')[0]
-    assert "Got it" in working_block
-    assert "a minute" in working_block.lower()
+    assert 'id="checklist" class="checklist" hidden' in text
+    checklist_block = text.split('id="checklist"')[1].split('id="submit-error"')[0]
+    for label in ("Photo received", "Photo checked", "Page identified", "Answers read", "Graded"):
+        assert label in checklist_block
 
     assert 'id="take-photo-button"' in text
     assert 'id="photo-input"' in text
@@ -378,11 +402,10 @@ def test_a_landscape_screenshot_is_not_rejected_as_a_spread_for_an_online_exerci
         "/capture/s-marcus",
         data={"assignment_id": assignment.assignment_id},
         files={"photo": ("screenshot.jpg", LOOKS_LIKE_TWO_PAGES, "image/jpeg")},
-        follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/session/s-marcus/")
+    final = _final_event(response)
+    assert final["redirect"].startswith("/session/s-marcus/")
 
 
 def test_post_capture_with_a_good_photo_redirects_to_the_results_page(
@@ -400,11 +423,10 @@ def test_post_capture_with_a_good_photo_redirects_to_the_results_page(
         "/capture/s-marcus",
         data={"assignment_id": assignment.assignment_id},
         files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
-        follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/session/s-marcus/")
+    final = _final_event(response)
+    assert final["redirect"].startswith("/session/s-marcus/")
     assert transcriber.request_count == 1
 
     cur = conn.execute(
@@ -414,7 +436,7 @@ def test_post_capture_with_a_good_photo_redirects_to_the_results_page(
     assert row is not None
     assert Path(row["image_path"]).exists()
 
-    results = client.get(response.headers["location"])
+    results = client.get(final["redirect"])
     assert results.status_code == 200
     assert "12 + 1" in results.text
     # High confidence, but student capture has no page-number field yet (see
@@ -424,6 +446,37 @@ def test_post_capture_with_a_good_photo_redirects_to_the_results_page(
     # system can actually make today. Distinct from "couldn't read it" either way.
     assert "not sure which page" in results.text.lower()
     assert "could not read this one clearly" not in results.text.lower()
+
+
+def test_post_capture_streams_the_full_checklist_in_order_on_a_success(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeTranscriber,
+) -> None:
+    """The whole point of this: she can always see what happened and where it
+    stopped. On a clean run, every step resolves ok, in order, before the
+    terminal redirect -- nothing left ambiguous or mid-flight."""
+    _seed_two_students(conn)
+    _seed_todays_schedule(conn, "s-marcus")
+    assignment = get_or_create_todays_assignment(conn, "s-marcus", "summer_bridge", date.today())
+    transcriber.result = _success_result(0.99)
+
+    response = client.post(
+        "/capture/s-marcus",
+        data={"assignment_id": assignment.assignment_id},
+        files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
+    )
+
+    events = _stream_events(response)
+    steps = [(e["step"], e["status"]) for e in events if e["type"] == "step"]
+    assert steps == [
+        ("checked", "ok"),
+        ("read", "started"),
+        ("read", "ok"),
+        ("graded", "ok"),
+    ]
+    assert events[-1]["type"] == "final"
+    assert events[-1]["redirect"].startswith("/session/s-marcus/")
 
 
 def test_post_capture_with_a_sideways_stored_portrait_photo_is_accepted(
@@ -445,11 +498,10 @@ def test_post_capture_with_a_sideways_stored_portrait_photo_is_accepted(
         "/capture/s-marcus",
         data={"assignment_id": assignment.assignment_id},
         files={"photo": ("page.jpg", PORTRAIT_STORED_SIDEWAYS, "image/jpeg")},
-        follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/session/s-marcus/")
+    final = _final_event(response)
+    assert final["redirect"].startswith("/session/s-marcus/")
 
 
 def test_low_confidence_item_shows_the_could_not_read_message(
@@ -466,11 +518,11 @@ def test_low_confidence_item_shows_the_could_not_read_message(
         "/capture/s-marcus",
         data={"assignment_id": assignment.assignment_id},
         files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
-        follow_redirects=True,
     )
 
-    assert response.status_code == 200
-    assert "i could not read this one clearly" in response.text.lower()
+    results = client.get(_final_event(response)["redirect"])
+    assert results.status_code == 200
+    assert "i could not read this one clearly" in results.text.lower()
 
 
 def test_needs_human_copy_for_partial_page_markers_names_seen_and_missing() -> None:
@@ -527,9 +579,14 @@ def test_post_capture_when_quota_is_exhausted_calls_the_transcriber_never(
     )
 
     assert response.status_code == 200
-    assert "I have done all my reading for today, ask a grown-up." in response.text
-    assert "Retake" not in response.text
+    final = _final_event(response)
+    assert "I have done all my reading for today, ask a grown-up." in final["html"]
+    assert "Retake" not in final["html"]
     assert transcriber.calls == []
+    # The checklist resolves honestly rather than leaving "Reading your page..."
+    # stuck forever -- quota is checked before any model call, so it's the
+    # "read" step that reports why, not a step left dangling mid-progress.
+    assert _step_statuses(response, "read") == ["started", "failed"]
 
     cur = conn.execute("SELECT COUNT(*) FROM page_captures WHERE student_id = ?", ("s-marcus",))
     assert cur.fetchone()[0] == 0
@@ -552,13 +609,15 @@ def test_post_capture_when_transcription_fails_offers_retake_and_keeps_the_photo
     )
 
     assert response.status_code == 200
-    assert "Retake" in response.text
+    final = _final_event(response)
+    assert "Retake" in final["html"]
     # Same duplicate-request risk as the initial capture: a slow retake with no
     # feedback invites a second tap. Same fix required here.
-    assert 'id="working-state" class="working-state" hidden' in response.text
-    script_block = response.text.split("<script>")[1].split("</script>")[0]
+    assert 'id="checklist" class="checklist" hidden' in final["html"]
+    script_block = final["html"].split("<script>")[1].split("</script>")[0]
     assert "fetch(" in script_block
     assert ".requestSubmit(" not in script_block
+    assert _step_statuses(response, "read") == ["started", "failed"]
 
     cur = conn.execute("SELECT capture_id FROM page_captures WHERE student_id = ?", ("s-marcus",))
     row = cur.fetchone()
@@ -586,11 +645,11 @@ def test_results_page_with_zero_graded_problems_shows_an_intelligible_empty_stat
         "/capture/s-marcus",
         data={"assignment_id": assignment.assignment_id},
         files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
-        follow_redirects=True,
     )
 
-    assert response.status_code == 200
-    assert "did not find any problems" in response.text.lower()
+    results = client.get(_final_event(response)["redirect"])
+    assert results.status_code == 200
+    assert "did not find any problems" in results.text.lower()
 
 
 def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
@@ -918,8 +977,10 @@ def test_post_capture_with_a_bad_photo_is_rejected_and_nothing_is_persisted(
     )
 
     assert response.status_code == 200
-    assert expected_phrase in response.text.lower()
-    assert "Retake" in response.text
+    final = _final_event(response)
+    assert expected_phrase in final["html"].lower()
+    assert "Retake" in final["html"]
+    assert _step_statuses(response, "checked") == ["failed"]
 
     cur = conn.execute("SELECT COUNT(*) FROM page_captures WHERE student_id = ?", ("s-marcus",))
     assert cur.fetchone()[0] == 0

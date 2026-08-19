@@ -10,14 +10,17 @@ docs/ARCHITECTURE.md.
 
 from __future__ import annotations
 
+import json
 import logging
+import queue
 import sqlite3
+import threading
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
@@ -27,7 +30,7 @@ from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.ingest import capture as ingest_capture
 from k12ta.ingest import schedule as ingest_schedule
 from k12ta.llm import build_vision_model
-from k12ta.pipeline.process import PipelineStatus, process_capture
+from k12ta.pipeline.process import PipelineOutcome, PipelineStatus, process_capture
 from k12ta.respond.render import render_student_result
 from k12ta.store import captures, content, db, migrate, sessions, students
 from k12ta.transcribe.base import Transcriber
@@ -146,44 +149,68 @@ def capture_screen(
     )
 
 
-@app.post("/capture/{student_id}", response_model=None)
-async def submit_capture(
-    request: Request,
-    student_id: str,
-    assignment_id: str = Form(...),
-    photo: UploadFile = File(...),
-    conn: sqlite3.Connection = Depends(get_conn),
-    settings: Settings = Depends(get_settings),
-) -> HTMLResponse | RedirectResponse:
-    student = students.get_student(conn, student_id)
-    if student is None:
-        raise HTTPException(404, "no such student")
+def _reject_html(
+    request: Request, student: students.StudentRow, assignment_id: str, reason: str
+) -> str:
+    return templates.get_template("result.html").render(
+        request=request,
+        status="reject",
+        message=REJECT_MESSAGES[reason],
+        student=student,
+        assignment_id=assignment_id,
+    )
 
-    def _reject(reason: str) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "result.html",
-            {
-                "status": "reject",
-                "message": REJECT_MESSAGES[reason],
-                "student": student,
-                "assignment_id": assignment_id,
-            },
-        )
+
+def _stream_capture_response(
+    request: Request,
+    student: students.StudentRow,
+    assignment_id: str,
+    image_bytes_raw: bytes,
+    conn: sqlite3.Connection,
+    settings: Settings,
+) -> Iterator[str]:
+    """The checklist protocol: zero or more {"type": "step", "step": ...,
+    "status": "started"|"ok"|"failed", "reason": ...} lines as the pipeline
+    advances, then one {"type": "final", ...} line. "final" carries "html"
+    when the answer is "stay here and try again" (reject, quota, transcribe
+    failure -- result.html rendered in place, same content this route has
+    always shown for these), or "redirect" when there's a real graded session
+    with its own URL worth keeping in the address bar.
+
+    Every step that starts is always resolved -- ok or failed, with a reason
+    -- before "final" ships, on every path, so nothing is ever left visually
+    mid-flight. This is what fixed the live bug: a rejected photo used to
+    render its message while a working-state spinner (meant only for an
+    in-flight request) sat there indefinitely, because CSS had silently
+    defeated its hidden="" attribute -- see k12ta.web/templates/base.html.
+    That's fixed at the CSS layer now too; this protocol is the other half,
+    giving the client real state to render instead of a single opaque wait.
+    """
+
+    def step(name: str, status: str, reason: str | None = None) -> str:
+        event: dict[str, str] = {"type": "step", "step": name, "status": status}
+        if reason is not None:
+            event["reason"] = reason
+        return json.dumps(event) + "\n"
+
+    def final_html(html: str) -> str:
+        return json.dumps({"type": "final", "html": html}) + "\n"
 
     try:
-        image_bytes = ingest_capture.normalize_orientation(await photo.read())
+        image_bytes = ingest_capture.normalize_orientation(image_bytes_raw)
     except Exception:
-        # An unsupported or corrupt upload -- AGENTS.md rule 11: a failed call is
-        # a plain-language state, not a crash. Not narrowed to a specific Pillow
-        # exception type on purpose: the boundary here is "arbitrary bytes a
-        # student picked from a file chooser," and any way Image.open can fail
-        # on that gets the same honest reject, not a 500.
-        return _reject("unreadable_file")
+        # An unsupported or corrupt upload -- AGENTS.md rule 11: a failed call
+        # is a plain-language state, not a crash. Not narrowed to a specific
+        # Pillow exception type on purpose: the boundary here is "arbitrary
+        # bytes a student picked from a file chooser."
+        message = REJECT_MESSAGES["unreadable_file"]
+        yield step("checked", "failed", message)
+        yield final_html(_reject_html(request, student, assignment_id, "unreadable_file"))
+        return
 
-    assignment = content.get_assignment(conn, student_id, assignment_id)
+    assignment = content.get_assignment(conn, student.student_id, assignment_id)
     source = (
-        content.get_content_source(conn, student_id, assignment.source_id)
+        content.get_content_source(conn, student.student_id, assignment.source_id)
         if assignment is not None
         else None
     )
@@ -195,37 +222,81 @@ async def submit_capture(
     check_for_spread = source is None or source.kind != SourceKind.ONLINE_EXERCISE.value
     verdict = ingest_capture.evaluate_image_quality(image_bytes, check_for_spread=check_for_spread)
     if not verdict.accepted:
-        return _reject(verdict.reason or "too_small")
+        reason = verdict.reason or "too_small"
+        yield step("checked", "failed", REJECT_MESSAGES[reason])
+        yield final_html(_reject_html(request, student, assignment_id, reason))
+        return
+    yield step("checked", "ok")
 
-    outcome = process_capture(
-        conn,
-        settings,
-        lambda: get_transcriber(settings),
-        student_id,
-        assignment_id,
-        image_bytes,
-    )
+    yield step("read", "started")
+    updates: queue.Queue[PipelineOutcome] = queue.Queue()
+
+    def worker() -> None:
+        outcome = process_capture(
+            conn,
+            settings,
+            lambda: get_transcriber(settings),
+            student.student_id,
+            assignment_id,
+            image_bytes,
+        )
+        updates.put(outcome)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    outcome = updates.get()
+    thread.join()
 
     if outcome.status is PipelineStatus.QUOTA_EXHAUSTED:
-        return templates.TemplateResponse(
-            request,
-            "result.html",
-            {"status": "quota_exhausted", "message": QUOTA_EXHAUSTED_MESSAGE, "student": student},
+        yield step("read", "failed", QUOTA_EXHAUSTED_MESSAGE)
+        html = templates.get_template("result.html").render(
+            request=request,
+            status="quota_exhausted",
+            message=QUOTA_EXHAUSTED_MESSAGE,
+            student=student,
         )
+        yield final_html(html)
+        return
     if outcome.status is PipelineStatus.TRANSCRIBE_FAILED:
-        return templates.TemplateResponse(
-            request,
-            "result.html",
-            {
-                "status": "reject",
-                "message": REJECT_MESSAGES["could_not_transcribe"],
-                "student": student,
-                "assignment_id": assignment_id,
-            },
-        )
+        yield step("read", "failed", REJECT_MESSAGES["could_not_transcribe"])
+        yield final_html(_reject_html(request, student, assignment_id, "could_not_transcribe"))
+        return
 
+    yield step("read", "ok")
+    yield step("graded", "ok")
     assert outcome.session_id is not None  # PipelineStatus.GRADED always sets this
-    return RedirectResponse(f"/session/{student_id}/{outcome.session_id}", status_code=303)
+    yield (
+        json.dumps(
+            {"type": "final", "redirect": f"/session/{student.student_id}/{outcome.session_id}"}
+        )
+        + "\n"
+    )
+
+
+@app.post("/capture/{student_id}")
+def submit_capture(
+    request: Request,
+    student_id: str,
+    assignment_id: str = Form(...),
+    photo: UploadFile = File(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+    settings: Settings = Depends(get_settings),
+) -> StreamingResponse:
+    """A plain `def`, not `async def`, on purpose -- same reason as
+    k12ta.keys.app.submit_upload: Starlette dispatches a sync route to a
+    worker thread automatically, which is what keeps a slow model call from
+    freezing the single process's whole event loop. The response itself is
+    streamed too -- see _stream_capture_response's docstring for the
+    checklist protocol this sends."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    image_bytes_raw = photo.file.read()
+
+    return StreamingResponse(
+        _stream_capture_response(request, student, assignment_id, image_bytes_raw, conn, settings),
+        media_type="application/x-ndjson",
+    )
 
 
 def _group_by_problem(

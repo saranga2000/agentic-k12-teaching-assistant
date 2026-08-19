@@ -1,0 +1,108 @@
+<!-- Shared by capture.html and result.html's retake form -- both post to the
+     same /capture/{student_id} route, which always answers with the same
+     newline-delimited-JSON checklist protocol (see k12ta.web.app._stream_
+     capture_response's docstring), so both need the same client-side handling.
+     Included with form_id and input_id set via a "with" block in the caller,
+     since the two forms use different element ids. -->
+<!-- The glyph span is deliberately empty -- its icon (pending/done/failed
+     circle, check, or cross) comes entirely from base.html's ::before rules
+     keyed off the parent's state class, so JS only ever needs to toggle a
+     class, never rewrite text content. -->
+<div id="checklist" class="checklist" hidden>
+  <div class="checklist-item" data-step="received"><span class="checklist-glyph"></span><span>Photo received</span></div>
+  <div class="checklist-item" data-step="checked"><span class="checklist-glyph"></span><span>Photo checked</span></div>
+  <div class="checklist-item" data-step="identified"><span class="checklist-glyph"></span><span>Page identified</span></div>
+  <div class="checklist-item" data-step="read"><span class="checklist-glyph"></span><span>Answers read</span></div>
+  <div class="checklist-item" data-step="graded"><span class="checklist-glyph"></span><span>Graded</span></div>
+</div>
+<p id="submit-error" class="message" hidden>Could not reach the coach — check the WiFi and try again.</p>
+<script>
+  (function () {
+    var form = document.getElementById("{{ form_id }}");
+    var input = document.getElementById("{{ input_id }}");
+    var button = document.getElementById("take-photo-button");
+    var checklist = document.getElementById("checklist");
+    var submitError = document.getElementById("submit-error");
+
+    // Which checklist row(s) a given server-reported step name drives.
+    // "identified" and "read" both come from the one model call that returns
+    // page identity and transcribed answers together -- shown as two rows
+    // that resolve at the same instant, not two independently-timed ones,
+    // since claiming finer timing than the pipeline actually has would be
+    // its own kind of dishonesty.
+    var STEP_ROWS = { checked: ["checked"], read: ["identified", "read"], graded: ["graded"] };
+
+    function setRows(names, state) {
+      names.forEach(function (name) {
+        var el = checklist.querySelector('[data-step="' + name + '"]');
+        el.classList.remove("active", "done", "failed");
+        el.classList.add(state);
+      });
+    }
+
+    // The response is newline-delimited JSON, not one HTML blob -- see
+    // k12ta.web.app._stream_capture_response. Reading it incrementally
+    // (response.body.getReader(), not response.text()) is what makes each
+    // checklist row update live instead of only appearing once at the end.
+    function handleLine(line) {
+      if (!line) return;
+      var msg = JSON.parse(line);
+      if (msg.type === "step") {
+        var rows = STEP_ROWS[msg.step];
+        if (!rows) return;
+        var state = msg.status === "started" ? "active" : msg.status === "ok" ? "done" : "failed";
+        setRows(rows, state);
+      } else if (msg.type === "final") {
+        if (msg.redirect) {
+          // A real graded session has its own URL, worth keeping in the
+          // address bar for refresh/back/bookmark -- unlike the reject/
+          // quota/failure cases below, which stay on this same screen.
+          window.location.href = msg.redirect;
+        } else {
+          document.open();
+          document.write(msg.html);
+          document.close();
+        }
+      }
+    }
+
+    function pump(reader, decoder, buffer) {
+      return reader.read().then(function (result) {
+        if (result.done) return;
+        buffer += decoder.decode(result.value, { stream: true });
+        var lines = buffer.split("\n");
+        buffer = lines.pop(); // last line may be incomplete -- keep it for next read
+        lines.forEach(handleLine);
+        return pump(reader, decoder, buffer);
+      });
+    }
+
+    input.addEventListener("change", function () {
+      if (!input.files || !input.files.length) return;
+      // Built before anything below disables `input`: a disabled form control
+      // is excluded from FormData entirely (the HTML spec, not a browser
+      // quirk), so disabling the file input first silently drops the photo
+      // from the very request meant to send it.
+      var formData = new FormData(form);
+      button.hidden = true;
+      input.disabled = true;
+      submitError.hidden = true;
+      checklist.hidden = false;
+      setRows(["received"], "done");
+      // fetch() keeps this page in control for the whole wait, unlike a plain
+      // form POST, which hands the tab to the browser's own navigation with
+      // nothing of ours on screen until it finishes.
+      fetch(form.action, { method: "POST", body: formData })
+        .then(function (response) {
+          return pump(response.body.getReader(), new TextDecoder(), "");
+        })
+        .catch(function () {
+          checklist.hidden = true;
+          button.hidden = false;
+          input.disabled = false;
+          input.value = "";
+          submitError.hidden = false;
+        });
+    });
+  })();
+</script>

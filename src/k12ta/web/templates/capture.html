@@ -43,56 +43,9 @@
     <label id="take-photo-button" class="big-button" for="photo-input">{{ "Add Screenshot" if is_online_exercise else "Take Photo" }}</label>
     <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
   </form>
-  <div id="working-state" class="working-state" hidden>
-    <div class="working-spinner"></div>
-    <p class="message">Got it! Checking your page&hellip;</p>
-    <p class="working-detail">This can take up to a minute.</p>
-  </div>
-  <p id="submit-error" class="message" hidden>Could not reach the coach — check the WiFi and try again.</p>
-  <script>
-    (function () {
-      var form = document.getElementById("capture-form");
-      var input = document.getElementById("photo-input");
-      var button = document.getElementById("take-photo-button");
-      var working = document.getElementById("working-state");
-      var submitError = document.getElementById("submit-error");
-      input.addEventListener("change", function () {
-        if (!input.files || !input.files.length) return;
-        // Built before anything below disables `input`: a disabled form control
-        // is excluded from FormData entirely (the HTML spec, not a bug in this
-        // browser), so disabling the file input first silently drops the file
-        // from the very request meant to send it -- a real request that reached
-        // the server with everything except the photo, missed by every prior
-        // test because none of them executed this script.
-        var formData = new FormData(form);
-        // 1. Immediate confirmation, before any network call starts.
-        // 3. Disable the control so a second tap in flight cannot fire a second
-        //    API call for the same page.
-        button.hidden = true;
-        input.disabled = true;
-        submitError.hidden = true;
-        working.hidden = false;
-        // Submitting the plain form hands the page to the browser's own
-        // navigation for the whole wait, with nothing of ours on screen until it
-        // finishes -- exactly why a real wait read as a blank, broken screen.
-        // fetch() keeps this page in control throughout.
-        fetch(form.action, { method: "POST", body: formData })
-          .then(function (response) { return response.text(); })
-          .then(function (html) {
-            document.open();
-            document.write(html);
-            document.close();
-          })
-          .catch(function () {
-            working.hidden = true;
-            button.hidden = false;
-            input.disabled = false;
-            input.value = "";
-            submitError.hidden = false;
-          });
-      });
-    })();
-  </script>
+  {% with form_id="capture-form", input_id="photo-input" %}
+  {% include "_capture_checklist.html" %}
+  {% endwith %}
   {% endif %}
 </div>
 <style>

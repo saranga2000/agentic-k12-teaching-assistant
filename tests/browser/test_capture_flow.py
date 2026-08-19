@@ -10,6 +10,7 @@ flight).
 from __future__ import annotations
 
 import io
+import re
 from datetime import date
 
 import pytest
@@ -85,7 +86,7 @@ def _success_result() -> TranscriptionResult:
     )
 
 
-def test_capture_shows_working_state_disables_input_then_renders_result(
+def test_capture_shows_checklist_progress_then_redirects_to_the_result(
     page: Page,
     web_server: LiveServer,
     stub_web_transcriber: FakeTranscriber,
@@ -95,8 +96,8 @@ def test_capture_shows_working_state_disables_input_then_renders_result(
     stub_web_transcriber.result = _success_result()
 
     # A real, observable delay before the transcriber responds -- long enough for
-    # this test to catch the working state mid-flight, the same window a real ~18s
-    # Gemini call left empty before the fix.
+    # this test to catch the checklist mid-flight, the same window a real ~18s
+    # Gemini call left empty before the original silent-wait fix.
     import k12ta.web.app as web_app_module
 
     delayed = DelayedTranscriber(inner=stub_web_transcriber, delay_seconds=0.6)
@@ -105,43 +106,45 @@ def test_capture_shows_working_state_disables_input_then_renders_result(
     page.goto(f"{web_server.base_url}/capture/{student_id}")
     page.locator("#photo-input").set_input_files(str(SINGLE_PAGE_IMAGE))
 
-    expect(page.locator("#working-state")).to_be_visible()
+    expect(page.locator("#checklist")).to_be_visible()
+    expect(page.locator('[data-step="checked"]')).to_have_class("checklist-item done")
+    expect(page.locator('[data-step="read"]')).to_have_class("checklist-item active")
     expect(page.locator("#photo-input")).to_be_disabled()
     expect(page.locator("#take-photo-button")).to_be_hidden()
 
-    # The fetch() resolves and document.write()s the real result in place -- no
-    # navigation, so this asserts on content, not on page.url. Not "Correct!":
+    # A real grade has its own URL (see _stream_capture_response's docstring),
+    # so this is a real navigation now, not a document.write() in place --
+    # assert on both the address bar and the rendered content. Not "Correct!":
     # k12ta.web's capture route has no page-number field yet (see docs/ROADMAP.md's
     # page-identity discussion), so *any* confidence still lands on the honest
     # "not sure which page this is" cause, never a graded verdict, until that's
     # built. That is what this flow actually does today; see
     # tests/browser/test_results_needs_human.py for the other three causes.
+    expect(page).to_have_url(re.compile(rf"/session/{student_id}/"), timeout=5000)
     expect(page.locator(".outcome-label")).to_contain_text("not sure which page", timeout=5000)
 
 
-def test_working_state_is_hidden_on_a_fresh_capture_screen(
-    page: Page, web_server: LiveServer
-) -> None:
-    """The real bug: `.working-state { display: flex; ... }` in base.html has no
-    `[hidden]` override, and an author-stylesheet rule always beats the browser's
-    default `[hidden] { display: none }` regardless of specificity -- so the
-    `hidden` attribute on this div was never actually hiding it. Before the fix,
-    a student opened the capture screen and saw a "Checking your page..." spinner
-    under the Take Photo button before taking any photo at all."""
+def test_checklist_is_hidden_on_a_fresh_capture_screen(page: Page, web_server: LiveServer) -> None:
+    """The real bug: `.working-state { display: flex; ... }` (now `.checklist`)
+    in base.html had no `[hidden]` override, and an author-stylesheet rule
+    always beats the browser's default `[hidden] { display: none }` regardless
+    of specificity -- so the `hidden` attribute on this div was never actually
+    hiding it. Before the fix, a student opened the capture screen and saw a
+    "Checking your page..." spinner under the Take Photo button before taking
+    any photo at all."""
     student_id = _seed_student_with_todays_source(web_server.connection())
 
     page.goto(f"{web_server.base_url}/capture/{student_id}")
 
-    expect(page.locator("#working-state")).to_be_hidden()
+    expect(page.locator("#checklist")).to_be_hidden()
 
 
-def test_working_state_stays_hidden_on_a_rejected_photo(page: Page, web_server: LiveServer) -> None:
+def test_checklist_stays_hidden_on_a_rejected_photo(page: Page, web_server: LiveServer) -> None:
     """The exact incident reported live: a landscape photo gets rejected as a
     two-page spread, and result.html's own (also unconditionally-present,
-    hidden-by-default) working-state div was visible at the same time, saying
-    "Checking your page... this can take up to a minute" right next to the
-    rejection message -- contradictory, and since nothing in this flow's JS
-    ever intended to show it here, nothing ever hid it either."""
+    hidden-by-default) checklist was visible at the same time -- contradictory,
+    and since nothing in this flow's JS ever intended to show it here, nothing
+    ever hid it either."""
     student_id = _seed_student_with_todays_source(web_server.connection())
 
     page.goto(f"{web_server.base_url}/capture/{student_id}")
@@ -153,4 +156,4 @@ def test_working_state_stays_hidden_on_a_rejected_photo(page: Page, web_server: 
     # one element while the old and new documents briefly overlap.
     expect(page.locator("#take-photo-button")).to_contain_text("Retake", timeout=5000)
     expect(page.locator(".message").first).to_contain_text("two pages")
-    expect(page.locator("#working-state")).to_be_hidden()
+    expect(page.locator("#checklist")).to_be_hidden()
