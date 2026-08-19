@@ -238,6 +238,92 @@ def test_count_stale_counts_only_rows_below_the_current_version() -> None:
     assert page_identities.count_stale_for_source(conn, "s-marcus", "summer_bridge", 1) == 0
 
 
+def test_list_for_source_at_version_returns_only_rows_at_that_version() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Section 1\x1fDay 1",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key="Section 1\x1fDay 2",
+            schema_version=2,
+            confirmed_at="2026-08-14T08:05:00+00:00",
+        ),
+    )
+
+    rows = page_identities.list_for_source_at_version(conn, "s-marcus", "summer_bridge", 2)
+
+    assert [r.page_number for r in rows] == [15]
+
+
+def test_list_for_source_at_version_is_scoped_to_student_and_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=4,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-priya",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-priya",
+            source_id="summer_bridge",
+            page_number=99,
+            composite_key="Day 1",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    rows = page_identities.list_for_source_at_version(conn, "s-marcus", "summer_bridge", 1)
+
+    assert [r.page_number for r in rows] == [13]
+
+
 def test_reconfirming_the_same_composite_updates_rather_than_duplicates() -> None:
     conn = _migrated_connection()
     _seed_marcus_with_summer_bridge(conn)
@@ -420,6 +506,52 @@ def test_count_outcomes_groups_by_outcome() -> None:
         "no_markers": 1,
         "no_schema": 1,
     }
+
+
+def test_seen_values_json_round_trips_and_defaults_to_none() -> None:
+    """Only populated for the "ask" case (a PARTIAL identity with exactly one
+    missing component and something to offer) -- every other outcome leaves
+    it None, not an empty string or an empty object."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-1",
+            outcome="partial",
+            resolved_page_number=None,
+            created_at="2026-08-14T08:00:00+00:00",
+            seen_values_json='{"day": "Day 2"}',
+        ),
+    )
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-2",
+            outcome="resolved",
+            resolved_page_number=15,
+            created_at="2026-08-14T08:05:00+00:00",
+        ),
+    )
+
+    assert (
+        page_identity_resolutions.get_seen_values_for_capture(conn, "s-marcus", "c-1")
+        == '{"day": "Day 2"}'
+    )
+    assert page_identity_resolutions.get_seen_values_for_capture(conn, "s-marcus", "c-2") is None
+
+
+def test_get_seen_values_for_an_unknown_capture_is_none() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert (
+        page_identity_resolutions.get_seen_values_for_capture(conn, "s-marcus", "no-such") is None
+    )
 
 
 def test_counts_are_scoped_to_student_and_source() -> None:

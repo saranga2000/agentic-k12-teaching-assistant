@@ -26,19 +26,46 @@ class PageIdentityResolutionRow:
     resolved_page_number: int | None
     """Set only when outcome is "resolved"."""
     created_at: str
+    seen_values_json: str | None = None
+    """Set only for the "ask" case: a PARTIAL identity with exactly one
+    missing schema component and at least one real candidate to offer (see
+    k12ta.grading.page_identity.resolve_partial). {component_name: value} for
+    every component this capture's photo DID read -- never the candidates
+    themselves, which are always re-derived fresh from the current
+    page_identities table both when the pick screen renders and when a pick
+    is submitted, so nothing here can go stale."""
 
 
 def insert_resolution(conn: sqlite3.Connection, row: PageIdentityResolutionRow) -> None:
     conn.execute(
         """
         INSERT INTO page_identity_resolutions
-            (student_id, source_id, capture_id, outcome, resolved_page_number, created_at)
+            (student_id, source_id, capture_id, outcome, resolved_page_number, created_at,
+             seen_values_json)
         VALUES
-            (:student_id, :source_id, :capture_id, :outcome, :resolved_page_number, :created_at)
+            (:student_id, :source_id, :capture_id, :outcome, :resolved_page_number, :created_at,
+             :seen_values_json)
         """,
         vars(row),
     )
     conn.commit()
+
+
+def get_seen_values_for_capture(
+    conn: sqlite3.Connection, student_id: str, capture_id: str
+) -> str | None:
+    """The raw seen_values_json for one capture's resolution attempt, or None
+    if there isn't one (no resolution row at all, or it was never set for
+    this outcome) -- the caller parses it, this is a plain lookup."""
+    cur = conn.execute(
+        """
+        SELECT seen_values_json FROM page_identity_resolutions
+        WHERE student_id = ? AND capture_id = ?
+        """,
+        (student_id, capture_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else row[0]
 
 
 def count_outcomes_for_source(

@@ -86,6 +86,28 @@ def get_page_number(
     return None if row is None else int(row[0])
 
 
+def list_for_source_at_version(
+    conn: sqlite3.Connection, student_id: str, source_id: str, schema_version: int
+) -> list[PageIdentityRow]:
+    """Every confirmed mapping for this source at exactly `schema_version` --
+    for k12ta.grading.page_identity.resolve_partial, which needs to see every
+    composite this source's parent has already confirmed (decomposed back into
+    per-component values) to judge whether a PARTIAL identity's one missing
+    component is safely inferable. A stale (older-version) mapping is excluded
+    for the same reason get_page_number never matches one: it was confirmed
+    under a schema shape that no longer applies."""
+    cur = conn.execute(
+        """
+        SELECT student_id, source_id, page_number, composite_key, schema_version,
+               confirmed_at, source
+        FROM page_identities
+        WHERE student_id = ? AND source_id = ? AND schema_version = ?
+        """,
+        (student_id, source_id, schema_version),
+    )
+    return [PageIdentityRow(*row) for row in cur.fetchall()]
+
+
 def count_stale_for_source(
     conn: sqlite3.Connection, student_id: str, source_id: str, current_version: int
 ) -> int:

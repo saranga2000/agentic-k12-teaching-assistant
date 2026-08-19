@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import sqlite3
 
-from k12ta.grading.page_identity import PageIdentityOutcome, build_composite_key, resolve
+from k12ta.grading.page_identity import (
+    PageIdentityOutcome,
+    build_composite_key,
+    resolve,
+    resolve_partial,
+)
 from k12ta.store import content, db, migrate, page_identities, page_identity_schemas, students
 
 
@@ -376,3 +381,123 @@ def test_a_mapping_confirmed_under_an_old_schema_version_is_no_mapping_not_resol
 
 def test_build_composite_key_joins_values_in_order_with_a_non_printable_separator() -> None:
     assert build_composite_key(["Section 1", "Day 5"]) == "Section 1\x1fDay 5"
+
+
+# --- resolve_partial: asking when exactly one component is missing --------------
+#
+# Only ever meaningful after resolve() has already returned PARTIAL with
+# exactly one missing component. Auto-resolves on a single candidate only when
+# no other value has ever been confirmed for the missing component anywhere
+# in the source -- a single match early in a term, before every section has
+# been key-scanned, is not proof there is no other section.
+
+
+def _seed_three_component_schema(conn: sqlite3.Connection) -> int:
+    return page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [
+            ("chapter", "Chapter", "Chapter 1"),
+            ("section", "Section", "Section 1"),
+            ("day", "Day", "Day 5"),
+        ],
+    )
+
+
+def test_resolve_partial_auto_resolves_when_only_one_value_ever_confirmed() -> None:
+    """Day 2 is known, Section is missing. Only Section 1 has ever been
+    confirmed for anything in this source -- no evidence a second section
+    exists yet, so this is deduction, not a guess."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_section_and_day_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 1"]), version, 13)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 2"]), version, 15)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number == 15
+    assert result.matches == ()
+
+
+def test_resolve_partial_does_not_auto_resolve_when_another_value_exists_elsewhere() -> None:
+    """The exact case that motivated the limit: Day 2 has only ever been
+    confirmed under Section 1, but Section 2 is known to exist (confirmed for
+    a different day) -- an unscanned Section 2/Day 2 page might exist too, so
+    one match here is not proof there's no other one."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_section_and_day_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 2"]), version, 15)
+    _confirm_mapping(conn, build_composite_key(["Section 2", "Day 6"]), version, 71)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number is None
+    assert len(result.matches) == 1
+    assert result.matches[0].missing_value == "Section 1"
+    assert result.matches[0].page_number == 15
+
+
+def test_resolve_partial_offers_every_match_when_more_than_one_section_has_this_day() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_section_and_day_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 2"]), version, 15)
+    _confirm_mapping(conn, build_composite_key(["Section 2", "Day 2"]), version, 63)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number is None
+    values = {m.missing_value: m.page_number for m in result.matches}
+    assert values == {"Section 1": 15, "Section 2": 63}
+
+
+def test_resolve_partial_returns_nothing_when_this_day_was_never_confirmed_anywhere() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_section_and_day_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 1"]), version, 13)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 99",)})
+
+    assert result.auto_resolved_page_number is None
+    assert result.matches == ()
+
+
+def test_resolve_partial_is_a_no_op_when_more_than_one_component_is_missing() -> None:
+    """Explicit requirement: with two or more components missing, this must not
+    attempt anything -- the caller keeps refusing honestly (PARTIAL, unchanged)."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_three_component_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Chapter 1", "Section 1", "Day 2"]), version, 15)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number is None
+    assert result.matches == ()
+
+
+def test_resolve_partial_is_a_no_op_with_no_schema() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number is None
+    assert result.matches == ()
+
+
+def test_resolve_partial_ignores_a_mapping_confirmed_under_an_older_schema_version() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    old_version = _seed_day_only_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Day 2"]), old_version, 99)
+    _seed_section_and_day_schema(conn)  # bumps the current version; nothing confirmed under it
+
+    result = resolve_partial(conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)})
+
+    assert result.auto_resolved_page_number is None
+    assert result.matches == ()

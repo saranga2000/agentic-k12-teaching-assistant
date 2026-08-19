@@ -171,17 +171,7 @@ def process_capture(
             result.page_identity.candidates,
             result.page_identity.confidence,
         )
-        page_identity_resolutions.insert_resolution(
-            conn,
-            page_identity_resolutions.PageIdentityResolutionRow(
-                student_id=student_id,
-                source_id=assignment.source_id,
-                capture_id=capture_row.capture_id,
-                outcome=resolution.outcome.value,
-                resolved_page_number=resolution.page_number,
-                created_at=now,
-            ),
-        )
+        seen_values_json: str | None = None
         if resolution.outcome is page_identity.PageIdentityOutcome.RESOLVED:
             resolved_page_number = resolution.page_number
         elif resolution.outcome is page_identity.PageIdentityOutcome.CONFLICTING:
@@ -194,9 +184,46 @@ def process_capture(
             # produces PARTIAL_PAGE_MARKERS either. Which components were seen and
             # missing is decided here, once, and stored as a fact for the renderer
             # to interpolate, never re-derived from the schema at render time.
-            partial_detail = json.dumps(
-                {"seen": list(resolution.seen_labels), "missing": list(resolution.missing_labels)}
+            partial = page_identity.resolve_partial(
+                conn, student_id, assignment.source_id, result.page_identity.candidates
             )
+            if partial.auto_resolved_page_number is not None:
+                # Deduction from what a parent has already confirmed against the
+                # physical book, not a guess -- see resolve_partial's docstring
+                # and docs/ARCHITECTURE.md's "asking when exactly one component
+                # is missing" section. Grades normally from here, same as
+                # RESOLVED; the page_identity_resolutions log below still
+                # records the true underlying outcome ("partial"), never
+                # upgraded to "resolved" -- this was extraction plus deduction,
+                # not the composite lookup RESOLVED means on its own.
+                resolved_page_number = partial.auto_resolved_page_number
+            else:
+                partial_detail = json.dumps(
+                    {
+                        "seen": list(resolution.seen_labels),
+                        "missing": list(resolution.missing_labels),
+                    }
+                )
+                if partial.matches:
+                    # Something to ask about: persist only what this photo
+                    # read, never the candidates themselves, so the pick
+                    # screen and a later pick submission both re-derive fresh
+                    # matches from page_identities rather than trusting
+                    # anything computed here to still be current.
+                    seen_values_json = json.dumps(partial.seen_values)
+
+        page_identity_resolutions.insert_resolution(
+            conn,
+            page_identity_resolutions.PageIdentityResolutionRow(
+                student_id=student_id,
+                source_id=assignment.source_id,
+                capture_id=capture_row.capture_id,
+                outcome=resolution.outcome.value,
+                resolved_page_number=resolution.page_number,
+                created_at=now,
+                seen_values_json=seen_values_json,
+            ),
+        )
 
     session_id = str(uuid4())
     sessions.insert_session(

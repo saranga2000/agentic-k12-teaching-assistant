@@ -616,6 +616,120 @@ def test_capture_with_one_of_two_components_missing_is_partial_page_markers(
     assert counts == {"partial": 1}
 
 
+def test_partial_auto_resolves_when_only_one_section_has_ever_been_confirmed(
+    tmp_path: Path,
+) -> None:
+    """The deduction case: Day 5 is read, Section isn't, and Section 1 is the
+    only section this source has ever had a confirmed mapping for -- grades
+    normally, as if RESOLVED, no prompt needed."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    _seed_key_entries(conn, student_id, "summer_bridge", page_number=21)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=21,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].page_number == 21
+    assert graded[0].needs_human_cause is None  # graded normally, not needs-human at all
+
+
+def test_partial_asks_and_stores_seen_values_when_another_section_is_known(
+    tmp_path: Path,
+) -> None:
+    """The limit that matters: Day 5 has only ever been confirmed under
+    Section 1, but Section 2 is known to exist (confirmed for a different
+    day) -- must not auto-resolve. Stays PARTIAL_PAGE_MARKERS (no code to
+    grade with yet), but seen_values_json is stored so the pick screen and
+    a later pick submission can re-derive fresh candidates without asking
+    the model again."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=21,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=71,
+            composite_key=build_composite_key(["Section 2", "Day 6"]),
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].needs_human_cause == NeedsHumanCause.PARTIAL_PAGE_MARKERS.value
+    assert graded[0].page_number is None
+
+    capture_id = graded[0].capture_id
+    seen_json = page_identity_resolutions.get_seen_values_for_capture(conn, student_id, capture_id)
+    assert seen_json is not None
+    assert json.loads(seen_json) == {"day": "Day 5"}
+
+
 def test_manual_page_number_override_skips_auto_resolution_entirely(
     tmp_path: Path,
 ) -> None:
