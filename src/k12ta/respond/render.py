@@ -29,17 +29,22 @@ from k12ta.store.sessions import GradedProblemRow
 # One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
 # six read differently at a glance -- reinforcement alongside the message text,
 # never the only signal (rule 11's spirit extended to "meaning is never colour- or
-# glyph-alone"). UNKNOWN_PAGE is the one every student capture hits today: the
-# capture flow has no page-number field yet (see docs/ROADMAP.md's page-identity
-# discussion), so NO_KEY_FOR_PAGE and NEEDS_PERSON are not reachable from this route
-# at all until that's built -- still given real, distinct copy here rather than
-# left unhandled, since seeding a session directly (as the key-upload confirm flow
-# already can) reaches them today, and student capture will once page numbers land.
+# glyph-alone"). All six are reachable from student capture: Scope B wired page-
+# identity resolution into k12ta.pipeline.process, so NO_KEY_FOR_PAGE and NEEDS_
+# PERSON are live outcomes here now, not only reachable by seeding a session
+# directly the way the key-upload confirm flow always could.
 COULD_NOT_READ_MESSAGE = "I could not read this one clearly."
 COULD_NOT_READ_GLYPH = "?"
 UNKNOWN_PAGE_MESSAGE = "I'm not sure which page this is — ask a grown-up to check it."
 UNKNOWN_PAGE_GLYPH = "…"
-NO_ANSWER_KEY_MESSAGE = "I don't have an answer key for this one yet — ask a grown-up to check it."
+# "I will grade it" is a real promise, not a platitude: k12ta.pipeline.process.
+# regrade_capture_for_resolved_identity is what makes it true -- once a parent adds
+# the missing key, k12ta.keys's "waiting on an answer key" list finds this problem
+# gradable again and lets the parent trigger it, from the already-stored
+# transcription, no retake and no re-reading needed.
+NO_ANSWER_KEY_MESSAGE = (
+    "I don't have the answers for this page yet. Ask a grown-up to add them and I'll grade it."
+)
 NO_ANSWER_KEY_GLYPH = "—"
 NEEDS_PERSON_MESSAGE = "This one needs a grown-up to take a look."
 NEEDS_PERSON_GLYPH = "~"

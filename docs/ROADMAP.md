@@ -48,6 +48,20 @@ images. See `docs/DATA_POLICY.md`.
 - Parent notification of missing keys: when a page routes to NEEDS_HUMAN because no
   answer key exists for it, record that. The parent-facing surface states it plainly:
   "3 pages are waiting on an answer key: Summer Bridge pages 21, 23, 25."
+  **Done, and built wider than originally scoped here** (`k12ta.keys.app.
+  enrollment_detail`, `k12ta.store.sessions.list_pending_for_source`): the page-number
+  matching this bullet said to wait for has since landed (Scope B), so every pending
+  item shows its real page number, not just a count. Grouped by cause, per a later
+  correction to this plan -- "no answer key," "page identity," "transcription
+  unreadable," each with the fix that actually applies, plus a separate "needs a
+  person to judge" section (the key says the answer varies, or nothing was written)
+  that is deliberately *not* framed as "waiting," since it isn't waiting on more data
+  arriving, it's actionable now. Adding a key doesn't grade anything automatically --
+  the enrollment screen shows what's now gradable and a parent triggers it explicitly
+  (`k12ta.pipeline.process.regrade_capture_for_resolved_identity`), from the
+  transcription already stored, no re-photograph and no model call. The same
+  mechanism, and the same "ask when exactly one identity component is missing" idea
+  that also uses it, is written up in `docs/ARCHITECTURE.md`.
 - Key ingestion needs its own handling for being materially heavier than student
   capture: dense two-column pages, longer transcription latency, and a 503 rate high
   enough that a parent scanning six pages will hit one. Retry-with-backoff on 5xx

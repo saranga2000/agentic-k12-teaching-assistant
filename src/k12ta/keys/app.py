@@ -36,6 +36,7 @@ from k12ta.pipeline.key_ingestion import (
     KeyIngestionStatus,
     transcribe_key_page,
 )
+from k12ta.pipeline.process import regrade_capture_for_resolved_identity
 from k12ta.store import (
     answer_key_audit,
     answer_keys,
@@ -327,6 +328,89 @@ def _group_by_problem(
     return grouped
 
 
+_WAITING_ON_KEY_CAUSE = "no_key_for_page"
+_WAITING_ON_IDENTITY_CAUSES = frozenset(
+    {"unknown_page", "partial_page_markers", "conflicting_page_markers"}
+)
+_WAITING_ON_TRANSCRIPTION_CAUSE = "low_confidence"
+_NEEDS_PERSON_CAUSE = "needs_person"
+
+
+def _bucket_pending(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    pending: list[sessions.PendingProblemRow],
+) -> dict[str, object]:
+    """Groups the waiting list by cause, per the M2 roadmap entry this
+    subsumes -- a parent needs to know what to do, not just that something is
+    pending, and the fix differs by cause (scan a key page vs. re-photograph
+    vs. wait). needs_person is deliberately excluded from every "waiting"
+    bucket and returned on its own: it isn't waiting on more data arriving,
+    it's actionable right now -- exactly the case ("the key says answers
+    vary") where a parent should look at the work directly. A legacy row
+    with no cause at all (predates the needs_human_cause column) is left out
+    of every bucket rather than folded into one that would misstate why it's
+    here -- genuinely unknown, not a guess dressed up as one."""
+    waiting_on_key = []
+    waiting_on_identity = []
+    waiting_on_transcription = []
+    needs_person = []
+    now_gradable_captures: set[str] = set()
+    for row in pending:
+        if row.needs_human_cause == _WAITING_ON_KEY_CAUSE:
+            waiting_on_key.append(row)
+            if row.page_number is not None and (
+                answer_keys.get_entry(conn, student_id, source_id, row.page_number, row.problem_id)
+                is not None
+            ):
+                now_gradable_captures.add(row.capture_id)
+        elif row.needs_human_cause in _WAITING_ON_IDENTITY_CAUSES:
+            waiting_on_identity.append(row)
+        elif row.needs_human_cause == _WAITING_ON_TRANSCRIPTION_CAUSE:
+            waiting_on_transcription.append(row)
+        elif row.needs_human_cause == _NEEDS_PERSON_CAUSE:
+            needs_person.append(row)
+    return {
+        "waiting_on_key": waiting_on_key,
+        "waiting_on_identity": waiting_on_identity,
+        "waiting_on_transcription": waiting_on_transcription,
+        "needs_person": needs_person,
+        "now_gradable_count": len(now_gradable_captures),
+    }
+
+
+@app.post("/keys/{student_id}/{source_id}/regrade-pending")
+def submit_regrade_pending(
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """A parent's deliberate act, never automatic -- re-grading days-old work
+    silently, the moment a key is added, was explicitly the wrong trade: a
+    parent should see what would now be gradable and choose to trigger it.
+    Re-decides every no_key_for_page capture whose page now has a key for at
+    least one of its problems, using k12ta.pipeline.process.regrade_capture_
+    for_resolved_identity -- the page_number was already known (that's what
+    no_key_for_page means), so this never re-transcribes and never spends
+    quota. A capture where the key still doesn't cover every problem on it
+    can land back on no_key_for_page for the ones it doesn't -- honest, not
+    a guess, exactly as at capture time."""
+    _require_student_and_source(conn, student_id, source_id)
+    pending = sessions.list_pending_for_source(conn, student_id, source_id)
+    regraded_captures: set[str] = set()
+    for row in pending:
+        if row.needs_human_cause != _WAITING_ON_KEY_CAUSE or row.page_number is None:
+            continue
+        if row.capture_id in regraded_captures:
+            continue
+        regraded_captures.add(row.capture_id)
+        regrade_capture_for_resolved_identity(
+            conn, student_id, row.session_id, row.capture_id, source_id, row.page_number
+        )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+
+
 @app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
 def enrollment_detail(
     request: Request,
@@ -381,6 +465,9 @@ def enrollment_detail(
                     {"page_number": page_number, "problem_id": problem_id, "attempt_count": count}
                 )
 
+    pending = sessions.list_pending_for_source(conn, student_id, source_id)
+    pending_buckets = _bucket_pending(conn, student_id, source_id, pending)
+
     return templates.TemplateResponse(
         request,
         "enrollment.html",
@@ -392,6 +479,11 @@ def enrollment_detail(
             "stale_mapping_count": stale_mapping_count,
             "show_repeated_attempts": not rules.reveal_final_answer,
             "repeated_problems": repeated_problems,
+            "waiting_on_key": pending_buckets["waiting_on_key"],
+            "waiting_on_identity": pending_buckets["waiting_on_identity"],
+            "waiting_on_transcription": pending_buckets["waiting_on_transcription"],
+            "needs_person": pending_buckets["needs_person"],
+            "now_gradable_count": pending_buckets["now_gradable_count"],
         },
     )
 

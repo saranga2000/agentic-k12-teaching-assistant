@@ -404,6 +404,76 @@ def test_update_graded_problem_after_identity_resolution_can_land_on_a_different
     assert graded["2"].page_number == 71
 
 
+def test_list_pending_for_source_returns_only_needs_human_rows_with_full_detail() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)  # session sess-1 / capture c-1 / problem "1", outcome "correct"
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:10:00+00:00",
+            image_path="/tmp/does-not-matter-2.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            problem_id="2",
+            prompt_text="14 + 5",
+            student_answer_raw="19",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-pending",
+            assignment_id="a-1",
+            started_at="2026-08-12T08:10:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-pending",
+            capture_id="c-pending",
+            problem_id="2",
+            outcome="needs_human",
+            grader_confidence=0.95,
+            page_number=15,
+            needs_human_cause="no_key_for_page",
+        ),
+    )
+
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+
+    # _seed_marcus's own "correct" row is excluded -- only needs_human rows.
+    assert len(pending) == 1
+    row = pending[0]
+    assert row.session_id == "sess-pending"
+    assert row.capture_id == "c-pending"
+    assert row.problem_id == "2"
+    assert row.prompt_text == "14 + 5"
+    assert row.student_answer_raw == "19"
+    assert row.page_number == 15
+    assert row.needs_human_cause == "no_key_for_page"
+    assert row.captured_at == "2026-08-12T08:10:00+00:00"
+
+
+def test_list_pending_for_source_is_scoped_to_student_and_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+
+    assert sessions.list_pending_for_source(conn, "s-other", "summer_bridge") == []
+    assert sessions.list_pending_for_source(conn, "s-marcus", "other_source") == []
+
+
 def test_list_graded_attempts_for_source_joins_across_sessions_and_excludes_unresolved_pages() -> (
     None
 ):

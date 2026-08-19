@@ -482,6 +482,10 @@ def test_submit_enrollment_setup_for_unknown_student_is_404(client: TestClient) 
 def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_yet(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
+    """Recent sessions is still a real gap (M5); the "waiting on a key" section
+    this test used to check for a placeholder on is real now (see the
+    pending-item tests) -- checked here only for what's genuinely still
+    unbuilt, and with an honest empty state for what is."""
     _seed_marcus_with_source(conn)
 
     response = client.get("/keys/s-marcus/summer_bridge")
@@ -492,7 +496,7 @@ def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_ye
     # No dashboard, no invented metrics -- a plain line for each thing that has no
     # data behind it yet, not an empty panel.
     assert "not shown here yet" in response.text.lower()
-    assert "not tracked yet" in response.text.lower()
+    assert "nothing waiting on a key right now" in response.text.lower()
 
 
 def test_enrollment_detail_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -988,6 +992,184 @@ def test_enrollment_detail_surfaces_page_identity_resolution_counts(
     assert "Conflicting markers: 1" in response.text
     assert "Partially identified: 1" in response.text
     assert "No identity schema yet: 1" in response.text
+
+
+def _seed_pending_problem(
+    conn: sqlite3.Connection,
+    *,
+    capture_id: str,
+    problem_id: str,
+    cause: str | None,
+    page_number: int | None,
+    prompt_text: str = "12 + 7",
+    student_answer_raw: str = "19",
+    captured_at: str = "2026-08-13T08:00:00+00:00",
+) -> None:
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id=capture_id,
+            assignment_id="does-not-matter",
+            captured_at=captured_at,
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id=capture_id,
+            problem_id=problem_id,
+            prompt_text=prompt_text,
+            student_answer_raw=student_answer_raw,
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id=f"sess-{capture_id}",
+            assignment_id="does-not-matter",
+            started_at=captured_at,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id=f"sess-{capture_id}",
+            capture_id=capture_id,
+            problem_id=problem_id,
+            outcome="needs_human",
+            grader_confidence=0.95,
+            page_number=page_number,
+            needs_human_cause=cause,
+        ),
+    )
+
+
+def test_enrollment_detail_groups_pending_items_by_cause(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """needs_person gets its own labelled section, separate from the waiting
+    list -- it isn't waiting on more data, it's actionable right now, and a
+    parent needs to see it precisely because "the key says answers vary" is
+    exactly the case that calls for looking at the work directly."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-no-key", problem_id="1", cause="no_key_for_page", page_number=15
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unknown", problem_id="1", cause="unknown_page", page_number=None
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unreadable", problem_id="1", cause="low_confidence", page_number=None
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-person", problem_id="1", cause="needs_person", page_number=21
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "Waiting on an answer key" in response.text
+    assert "Waiting on page identity" in response.text
+    assert "Transcription could not be read" in response.text
+    assert "Needs a person to judge" in response.text
+    # Each item's actual question is shown, not just a count.
+    assert response.text.count("12 + 7") == 4
+
+
+def test_enrollment_detail_shows_a_trigger_when_a_key_now_covers_a_pending_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-no-key", problem_id="1", cause="no_key_for_page", page_number=15
+    )
+
+    response_before = client.get("/keys/s-marcus/summer_bridge")
+    assert "now gradable" not in response_before.text.lower()
+
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response_after = client.get("/keys/s-marcus/summer_bridge")
+    assert "now gradable" in response_after.text.lower()
+    assert 'action="/keys/s-marcus/summer_bridge/regrade-pending"' in response_after.text
+
+
+def test_submit_regrade_pending_grades_only_what_now_has_a_key(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-now-keyed", problem_id="1", cause="no_key_for_page", page_number=15
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-still-pending", problem_id="1", cause="no_key_for_page", page_number=71
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post("/keys/s-marcus/summer_bridge/regrade-pending", follow_redirects=False)
+
+    assert response.status_code == 303
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+    remaining_captures = {row.capture_id for row in pending}
+    assert remaining_captures == {"c-still-pending"}
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-now-keyed")
+    assert graded[0].outcome == "correct"
+    assert graded[0].page_number == 15
 
 
 def test_enrollment_detail_surfaces_stale_mapping_count_after_a_schema_change(

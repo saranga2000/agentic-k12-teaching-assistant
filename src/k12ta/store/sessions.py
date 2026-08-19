@@ -168,6 +168,56 @@ class GradedAttemptRow:
     capture_id: str
 
 
+@dataclass(frozen=True)
+class PendingProblemRow:
+    """One graded_problems row still needs_human, widened with what a parent
+    surface needs to show and act on it: the actual question and answer (so
+    "what is this" doesn't require a second lookup), whether a page was
+    resolved, why it's waiting, and when it was captured (for a parent to
+    judge how long something has been sitting). Grouping by cause is plain
+    data plumbing, done by the caller -- same reasoning as GradedAttemptRow
+    above, not a repository concern."""
+
+    session_id: str
+    capture_id: str
+    problem_id: str
+    prompt_text: str
+    student_answer_raw: str
+    page_number: int | None
+    needs_human_cause: str | None
+    """None only for a row graded before this column existed (migration 0006)
+    -- genuinely unknown, not a guess dressed up as one. See k12ta.respond.
+    render.UNKNOWN_CAUSE_MESSAGE for the same honesty applied to the student-
+    facing render of this same case."""
+    captured_at: str
+
+
+def list_pending_for_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> list[PendingProblemRow]:
+    """Every graded_problems row for this source still needs_human, across
+    every session and capture, in capture order. The parent-facing "what's
+    waiting" list (k12ta.keys) reads this and groups it by cause; the regrade-
+    trigger route re-decides the no_key_for_page subset once a key exists."""
+    cur = conn.execute(
+        """
+        SELECT gp.session_id AS session_id, gp.capture_id AS capture_id,
+               gp.problem_id AS problem_id, p.prompt_text AS prompt_text,
+               p.student_answer_raw AS student_answer_raw, gp.page_number AS page_number,
+               gp.needs_human_cause AS needs_human_cause, pc.captured_at AS captured_at
+        FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        JOIN problems p ON p.student_id = gp.student_id AND p.capture_id = gp.capture_id
+            AND p.problem_id = gp.problem_id
+        WHERE gp.student_id = ? AND a.source_id = ? AND gp.outcome = 'needs_human'
+        ORDER BY pc.captured_at, gp.capture_id, gp.problem_id
+        """,
+        (student_id, source_id),
+    )
+    return [PendingProblemRow(**dict(row)) for row in cur.fetchall()]
+
+
 def list_graded_attempts_for_source(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> list[GradedAttemptRow]:

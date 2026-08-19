@@ -10,8 +10,62 @@
 <h2>Recent sessions</h2>
 <p class="message">Session history is not shown here yet.</p>
 
-<h2>Pages waiting on a key</h2>
-<p class="message">Not tracked yet — see docs/ROADMAP.md for what this needs first.</p>
+<h2>Waiting on an answer key</h2>
+{% if waiting_on_key %}
+<ul class="pending-list">
+  {% for item in waiting_on_key %}
+  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
+  {% endfor %}
+</ul>
+{% if now_gradable_count > 0 %}
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/regrade-pending">
+  <p class="message attention">{{ now_gradable_count }} {{ "problem is" if now_gradable_count == 1 else "problems are" }}
+    now gradable &mdash; the answer key has since been added. Grading is not automatic; nothing
+    here has been graded yet.</p>
+  <button type="submit">Grade now</button>
+</form>
+{% endif %}
+{% else %}
+<p class="message">Nothing waiting on a key right now.</p>
+{% endif %}
+
+<h2>Waiting on page identity</h2>
+<p class="message">A page that could not be matched to a physical page &mdash; usually fixed by
+  re-photographing with the missing marker in frame, or (when only one component is missing)
+  by {{ student.display_name }} picking from a short list on her own results page.</p>
+{% if waiting_on_identity %}
+<ul class="pending-list">
+  {% for item in waiting_on_identity %}
+  <li>&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing waiting on page identity right now.</p>
+{% endif %}
+
+<h2>Transcription could not be read</h2>
+{% if waiting_on_transcription %}
+<ul class="pending-list">
+  {% for item in waiting_on_transcription %}
+  <li>&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing waiting on a clearer photo right now.</p>
+{% endif %}
+
+<h2>Needs a person to judge</h2>
+<p class="message">Not waiting on more data &mdash; this is where the key itself says the answer
+  varies, or nothing was written to compare. Worth looking at the work directly.</p>
+{% if needs_person %}
+<ul class="pending-list">
+  {% for item in needs_person %}
+  <li>{% if item.page_number %}Page {{ item.page_number }}: {% endif %}&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing needs a look right now.</p>
+{% endif %}
 
 {% if show_repeated_attempts %}
 <h2>Repeated attempts</h2>
