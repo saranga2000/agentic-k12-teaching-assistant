@@ -14,6 +14,7 @@ photographed is portrait, a two-page spread photographed flat is landscape.
 from __future__ import annotations
 
 import io
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +25,8 @@ from PIL import Image, ImageOps, ImageStat
 
 from k12ta.config import Settings
 from k12ta.store import captures
+
+logger = logging.getLogger(__name__)
 
 pillow_heif.register_heif_opener()
 """Module-level, run once at import time: makes Image.open transparently decode
@@ -66,6 +69,23 @@ def normalize_orientation(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _reject(reason: str, width: int, height: int) -> QualityVerdict:
+    """A rejected photo is never saved to disk (save_capture only runs after
+    acceptance), so this log line is the only record of what a real rejection
+    actually looked like -- the gap a live incident exposed: a parent's
+    paraphrase of the on-screen message was the only evidence available, and
+    the real cause had to be guessed rather than read off a log."""
+    ratio = width / height if height else None
+    logger.info(
+        "capture rejected reason=%s width=%d height=%d ratio=%s",
+        reason,
+        width,
+        height,
+        f"{ratio:.3f}" if ratio is not None else "n/a",
+    )
+    return QualityVerdict(accepted=False, reason=reason)
+
+
 def evaluate_image_quality(image_bytes: bytes, *, check_for_spread: bool = True) -> QualityVerdict:
     """`check_for_spread=False` for a source configured as
     SourceKind.ONLINE_EXERCISE: the aspect-ratio heuristic below assumes a
@@ -77,14 +97,14 @@ def evaluate_image_quality(image_bytes: bytes, *, check_for_spread: bool = True)
     width, height = image.size
 
     if width < MIN_DIMENSION_PX or height < MIN_DIMENSION_PX:
-        return QualityVerdict(accepted=False, reason="too_small")
+        return _reject("too_small", width, height)
 
     brightness = ImageStat.Stat(image.convert("L")).mean[0]
     if brightness < DARK_MEAN_BRIGHTNESS_THRESHOLD:
-        return QualityVerdict(accepted=False, reason="too_dark")
+        return _reject("too_dark", width, height)
 
     if check_for_spread and width / height >= SPREAD_ASPECT_RATIO_THRESHOLD:
-        return QualityVerdict(accepted=False, reason="looks_like_two_pages")
+        return _reject("looks_like_two_pages", width, height)
 
     return QualityVerdict(accepted=True, reason=None)
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+import logging
 import sqlite3
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from k12ta.config import Settings
@@ -108,6 +110,32 @@ def test_check_for_spread_false_still_rejects_too_small_or_too_dark() -> None:
     other gates -- a tiny or unreadably dark screenshot is still rejected."""
     assert capture.evaluate_image_quality(TOO_SMALL, check_for_spread=False).reason == "too_small"
     assert capture.evaluate_image_quality(TOO_DARK, check_for_spread=False).reason == "too_dark"
+
+
+def test_a_rejection_logs_the_actual_dimensions_and_ratio(caplog: pytest.LogCaptureFixture) -> None:
+    """The gap the Pixel 9a incident exposed: a rejected photo is never saved to
+    disk (save_capture only runs after acceptance) and nothing logged its
+    dimensions either, so the only evidence of why it was rejected was a
+    parent's paraphrase of the on-screen message. This is what makes the next
+    one diagnosable from a log line instead of a guess."""
+    with caplog.at_level(logging.INFO, logger="k12ta.ingest.capture"):
+        capture.evaluate_image_quality(LOOKS_LIKE_TWO_PAGES)
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "looks_like_two_pages" in message
+    assert "width=1600" in message
+    assert "height=1200" in message
+    assert "ratio=1.33" in message
+
+
+def test_an_acceptance_does_not_log_anything(caplog: pytest.LogCaptureFixture) -> None:
+    """The common case doesn't need a log line -- only a rejection is the thing
+    worth being able to look back at."""
+    with caplog.at_level(logging.INFO, logger="k12ta.ingest.capture"):
+        capture.evaluate_image_quality(ACCEPTED)
+
+    assert caplog.records == []
 
 
 def test_accepts_a_large_bright_portrait_image() -> None:
