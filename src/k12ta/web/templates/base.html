@@ -59,6 +59,15 @@
   .big-button:active { background: var(--accent-active); }
   .big-button.secondary { background: var(--affirm); }
   p.message { font-size: 1.25rem; line-height: 1.5; max-width: 32rem; }
+  /* [hidden] must win over any class rule below, always -- a live bug found
+     this the hard way: .working-state's own display:flex has equal CSS
+     specificity to the browser's default [hidden] rule, and author rules
+     always beat the user-agent stylesheet regardless of specificity, so
+     hidden="" was silently doing nothing for this element. A rejected photo
+     showed the reject message and a "Checking your page..." spinner at the
+     same time, and the spinner never stopped, because nothing was ever
+     going to: it was never hidden in the first place. */
+  [hidden] { display: none !important; }
   .working-state { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
   .working-state .message { margin: 0; }
   .working-detail { font-size: 1rem; color: var(--text-dim); margin: 0; }

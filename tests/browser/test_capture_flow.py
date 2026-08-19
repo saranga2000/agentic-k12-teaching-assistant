@@ -9,10 +9,12 @@ flight).
 
 from __future__ import annotations
 
+import io
 from datetime import date
 
 import pytest
-from playwright.sync_api import Page, expect
+from PIL import Image
+from playwright.sync_api import FilePayload, Page, expect
 
 from k12ta.llm.base import DataRetention
 from k12ta.store import content, students
@@ -22,6 +24,15 @@ from tests.browser.conftest import SINGLE_PAGE_IMAGE, DelayedTranscriber, LiveSe
 from tests.fakes import FakeTranscriber
 
 pytestmark = pytest.mark.browser
+
+
+def _landscape_jpeg_payload() -> FilePayload:
+    """In-memory, not a checked-in fixture: the only thing that matters is the
+    aspect ratio (>= capture.SPREAD_ASPECT_RATIO_THRESHOLD), so a real file on
+    disk would add nothing a synthetic one doesn't already give."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1600, 1200), color=(200, 200, 200)).save(buf, format="JPEG")
+    return FilePayload(name="screenshot.jpg", mimeType="image/jpeg", buffer=buf.getvalue())
 
 
 def _seed_student_with_todays_source(conn: object) -> str:
@@ -106,3 +117,40 @@ def test_capture_shows_working_state_disables_input_then_renders_result(
     # built. That is what this flow actually does today; see
     # tests/browser/test_results_needs_human.py for the other three causes.
     expect(page.locator(".outcome-label")).to_contain_text("not sure which page", timeout=5000)
+
+
+def test_working_state_is_hidden_on_a_fresh_capture_screen(
+    page: Page, web_server: LiveServer
+) -> None:
+    """The real bug: `.working-state { display: flex; ... }` in base.html has no
+    `[hidden]` override, and an author-stylesheet rule always beats the browser's
+    default `[hidden] { display: none }` regardless of specificity -- so the
+    `hidden` attribute on this div was never actually hiding it. Before the fix,
+    a student opened the capture screen and saw a "Checking your page..." spinner
+    under the Take Photo button before taking any photo at all."""
+    student_id = _seed_student_with_todays_source(web_server.connection())
+
+    page.goto(f"{web_server.base_url}/capture/{student_id}")
+
+    expect(page.locator("#working-state")).to_be_hidden()
+
+
+def test_working_state_stays_hidden_on_a_rejected_photo(page: Page, web_server: LiveServer) -> None:
+    """The exact incident reported live: a landscape photo gets rejected as a
+    two-page spread, and result.html's own (also unconditionally-present,
+    hidden-by-default) working-state div was visible at the same time, saying
+    "Checking your page... this can take up to a minute" right next to the
+    rejection message -- contradictory, and since nothing in this flow's JS
+    ever intended to show it here, nothing ever hid it either."""
+    student_id = _seed_student_with_todays_source(web_server.connection())
+
+    page.goto(f"{web_server.base_url}/capture/{student_id}")
+    page.locator("#photo-input").set_input_files(_landscape_jpeg_payload())
+
+    # A stable signal specific to the post-document.write() reject page (the
+    # pre-fetch capture.html has no "Retake" text anywhere), so this waits out
+    # the transition before asserting on content -- .message matches more than
+    # one element while the old and new documents briefly overlap.
+    expect(page.locator("#take-photo-button")).to_contain_text("Retake", timeout=5000)
+    expect(page.locator(".message").first).to_contain_text("two pages")
+    expect(page.locator("#working-state")).to_be_hidden()

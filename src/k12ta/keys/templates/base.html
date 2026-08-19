@@ -64,6 +64,12 @@
   .schema-component-row input[type=text] { width: auto; display: inline-block; }
   .schema-example { color: var(--text-dim); font-size: 0.9rem; }
   .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
+  /* Same fix, same reason as k12ta.web/templates/base.html: an author rule
+     with equal specificity to the browser's default [hidden] rule always
+     wins regardless of specificity, which silently defeated hidden="" on
+     this app's own .working-state div too. See that file's comment for the
+     live incident this was found from. */
+  [hidden] { display: none !important; }
   .message {
     background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
     padding: 0.85rem 1.1rem; border-radius: 8px;
