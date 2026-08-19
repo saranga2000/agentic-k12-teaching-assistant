@@ -82,6 +82,60 @@ def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> No
     conn.commit()
 
 
+def update_graded_problem_after_identity_resolution(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+    outcome: str,
+    expected_answer: str | None,
+    page_number: int,
+    needs_human_cause: str | None,
+) -> None:
+    """The shared regrade path: a problem that couldn't be graded at capture
+    time because its page identity was unresolved later gets re-decided once
+    more information arrives -- a student's constrained pick
+    (k12ta.grading.page_identity.resolve_partial) most commonly, or a parent
+    later adding a key for the page a pick just resolved onto. Updates the
+    existing row in place rather than inserting a new one -- list_graded_
+    attempts_for_source orders by the *capture's* own timestamp
+    (page_captures.captured_at, never touched here), so this problem keeps
+    its correct chronological position even if other captures of the same
+    problem happened in the meantime: still the first attempt, never a
+    second one, per k12ta.domain.attempts.
+
+    `needs_human_cause` is a real parameter, not always cleared to NULL:
+    resolving identity does not guarantee a key exists for the resolved page,
+    so the re-decision can land on a *different* NEEDS_HUMAN cause
+    (NO_KEY_FOR_PAGE, NEEDS_PERSON) rather than a definite grade. Always
+    clears needs_human_detail, since PARTIAL_PAGE_MARKERS's seen/missing
+    detail (the only cause that uses it) cannot apply once identity has
+    resolved."""
+    conn.execute(
+        """
+        UPDATE graded_problems
+        SET outcome = :outcome, expected_answer = :expected_answer,
+            page_number = :page_number, needs_human_cause = :needs_human_cause,
+            needs_human_detail = NULL
+        WHERE student_id = :student_id AND session_id = :session_id
+            AND capture_id = :capture_id AND problem_id = :problem_id
+        """,
+        {
+            "student_id": student_id,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "problem_id": problem_id,
+            "outcome": outcome,
+            "expected_answer": expected_answer,
+            "page_number": page_number,
+            "needs_human_cause": needs_human_cause,
+        },
+    )
+    conn.commit()
+
+
 def list_graded_problems_for_session(
     conn: sqlite3.Connection, student_id: str, session_id: str
 ) -> list[GradedProblemRow]:

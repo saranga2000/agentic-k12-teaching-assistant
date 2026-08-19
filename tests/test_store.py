@@ -269,6 +269,141 @@ def test_round_trip_of_a_session_with_graded_problems() -> None:
     assert trace.review_count == 1
 
 
+def test_update_graded_problem_after_identity_resolution_changes_the_row_in_place() -> None:
+    """The shared regrade path this exists for: a capture that couldn't be
+    graded at capture time (identity unresolved, or no key existed yet) later
+    gets a real verdict, once more information arrives -- a student's pick, or
+    a parent adding a key. Update in place, not a new row: list_graded_
+    attempts_for_source orders by the *capture's* timestamp, so updating
+    keeps this problem's correct chronological position even if other
+    captures of the same problem happened in between -- still the first
+    attempt, not a new one, per k12ta.domain.attempts."""
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:10:00+00:00",
+            image_path="/tmp/does-not-matter-2.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            problem_id="2",
+            prompt_text="14 + 5",
+            student_answer_raw="19",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-pending",
+            problem_id="2",
+            outcome="needs_human",
+            grader_confidence=0.95,
+            needs_human_cause="partial_page_markers",
+            needs_human_detail='{"seen": ["Day"], "missing": ["Section"]}',
+        ),
+    )
+
+    sessions.update_graded_problem_after_identity_resolution(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-1",
+        capture_id="c-pending",
+        problem_id="2",
+        outcome="correct",
+        expected_answer="19",
+        page_number=21,
+        needs_human_cause=None,
+    )
+
+    graded = {
+        row.problem_id: row
+        for row in sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-1")
+    }
+    assert graded["2"].outcome == "correct"
+    assert graded["2"].expected_answer == "19"
+    assert graded["2"].page_number == 21
+    assert graded["2"].needs_human_cause is None
+    assert graded["2"].needs_human_detail is None
+    # The other row in this session (from _seed_marcus) is untouched.
+    assert graded["1"].outcome == "correct"
+    assert graded["1"].expected_answer == "19"
+
+
+def test_update_graded_problem_after_identity_resolution_can_land_on_a_different_cause() -> None:
+    """Resolving identity does not guarantee a key exists for the resolved
+    page -- the re-decision can land on a different NEEDS_HUMAN cause
+    (here, no key for the page) rather than a definite grade."""
+    conn = _migrated_connection()
+    _seed_marcus(conn)
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:10:00+00:00",
+            image_path="/tmp/does-not-matter-2.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-pending",
+            problem_id="2",
+            prompt_text="14 + 5",
+            student_answer_raw="19",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-pending",
+            problem_id="2",
+            outcome="needs_human",
+            grader_confidence=0.95,
+            needs_human_cause="partial_page_markers",
+            needs_human_detail='{"seen": ["Day"], "missing": ["Section"]}',
+        ),
+    )
+
+    sessions.update_graded_problem_after_identity_resolution(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-1",
+        capture_id="c-pending",
+        problem_id="2",
+        outcome="needs_human",
+        expected_answer=None,
+        page_number=71,
+        needs_human_cause="no_key_for_page",
+    )
+
+    graded = {
+        row.problem_id: row
+        for row in sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-1")
+    }
+    assert graded["2"].outcome == "needs_human"
+    assert graded["2"].needs_human_cause == "no_key_for_page"
+    assert graded["2"].needs_human_detail is None  # partial's old detail is gone
+    assert graded["2"].page_number == 71
+
+
 def test_list_graded_attempts_for_source_joins_across_sessions_and_excludes_unresolved_pages() -> (
     None
 ):

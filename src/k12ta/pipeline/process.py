@@ -281,3 +281,51 @@ def process_capture(
         )
 
     return PipelineOutcome.graded(session_id)
+
+
+def regrade_capture_for_resolved_identity(
+    conn: sqlite3.Connection,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    source_id: str,
+    page_number: int,
+) -> None:
+    """The shared regrade path for a capture whose page identity is now
+    known, whether that came from a student's constrained pick
+    (k12ta.grading.page_identity.resolve_partial) or a parent adding a key
+    for a page that was already resolved but previously had none. Re-decides
+    every problem transcribed from this capture using the transcription
+    already stored in the problems table -- never re-transcribes, never
+    spends quota, never calls a model. Each graded_problems row is updated
+    in place (k12ta.store.sessions.update_graded_problem_after_identity_
+    resolution), not replaced with a new one, which is what keeps this
+    problem's attempt-ordering correct: k12ta.domain.attempts counts from
+    page_captures.captured_at, untouched by this function, so a problem
+    regraded long after capture is still counted at its original position,
+    not as a new attempt happening now.
+
+    Resolving identity is not the same as having a key for the resolved
+    page -- decide() can still land on NEEDS_HUMAN (most likely
+    NO_KEY_FOR_PAGE) rather than a definite grade, and that is exactly as
+    honest here as it is at capture time."""
+    for problem in captures.list_problems_for_capture(conn, student_id, capture_id):
+        key_entry = answer_keys.get_entry(
+            conn, student_id, source_id, page_number, problem.problem_id
+        )
+        decision = decide(
+            problem.student_answer_raw, problem.transcription_confidence, page_number, key_entry
+        )
+        sessions.update_graded_problem_after_identity_resolution(
+            conn,
+            student_id=student_id,
+            session_id=session_id,
+            capture_id=capture_id,
+            problem_id=problem.problem_id,
+            outcome=decision.outcome.value,
+            expected_answer=decision.expected_answer,
+            page_number=page_number,
+            needs_human_cause=(
+                decision.needs_human_cause.value if decision.needs_human_cause is not None else None
+            ),
+        )

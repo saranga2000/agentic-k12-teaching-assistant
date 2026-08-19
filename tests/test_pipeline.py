@@ -15,7 +15,11 @@ from k12ta.config import Settings
 from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm.base import DataRetention
-from k12ta.pipeline.process import PipelineStatus, process_capture
+from k12ta.pipeline.process import (
+    PipelineStatus,
+    process_capture,
+    regrade_capture_for_resolved_identity,
+)
 from k12ta.store import (
     answer_keys,
     captures,
@@ -728,6 +732,125 @@ def test_partial_asks_and_stores_seen_values_when_another_section_is_known(
     seen_json = page_identity_resolutions.get_seen_values_for_capture(conn, student_id, capture_id)
     assert seen_json is not None
     assert json.loads(seen_json) == {"day": "Day 5"}
+
+
+def test_regrade_capture_for_resolved_identity_grades_every_problem_from_the_capture(
+    tmp_path: Path,
+) -> None:
+    """The shared regrade path: once a capture's page identity is known --
+    whether from a student's pick or a parent's later key entry -- every
+    problem transcribed from that capture is re-decided using the already-
+    stored transcription, never re-sent to the model."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="19", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="2", prompt_text="q2", student_answer_raw="wrong", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+    graded_before = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert {g.outcome for g in graded_before} == {"needs_human"}
+    capture_id = graded_before[0].capture_id
+
+    # The key for the page this capture turns out to be arrives afterward.
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=21,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=21,
+            problem_number="2",
+            answer_text="42",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    regrade_capture_for_resolved_identity(
+        conn, student_id, outcome.session_id, capture_id, "summer_bridge", page_number=21
+    )
+
+    graded_after = {
+        g.problem_id: g
+        for g in sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    }
+    assert graded_after["1"].outcome == "correct"
+    assert graded_after["1"].page_number == 21
+    assert graded_after["1"].needs_human_cause is None
+    assert graded_after["2"].outcome == "incorrect"
+    assert graded_after["2"].expected_answer == "42"
+    assert transcriber.request_count == 1  # never called again
+
+
+def test_regrade_capture_for_resolved_identity_can_still_land_on_needs_human(
+    tmp_path: Path,
+) -> None:
+    """Resolving identity does not guarantee a key exists for the resolved
+    page -- the honest NO_KEY_FOR_PAGE cause, not a guess, when it doesn't."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="19", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+    capture_id = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)[
+        0
+    ].capture_id
+
+    regrade_capture_for_resolved_identity(
+        conn, student_id, outcome.session_id, capture_id, "summer_bridge", page_number=21
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+    assert graded[0].page_number == 21
 
 
 def test_manual_page_number_override_skips_auto_resolution_entirely(
