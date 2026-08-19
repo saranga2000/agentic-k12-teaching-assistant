@@ -1,6 +1,6 @@
 ---
 id: transcribe_page
-version: 3
+version: 4
 covered_by: evals/run_transcription_eval.py
 ---
 
@@ -13,15 +13,23 @@ For every problem visible on the page, emit one object with:
 - `prompt_text`: the problem as printed, in plain text, LaTeX for mathematical notation
 - `student_answer_raw`: exactly what the student wrote as their final answer, character
   for character, including errors. Do not correct it. Do not complete it.
-- `confidence`: 0.0 to 1.0, your probability that `student_answer_raw` is exactly what
-  is on the page
+- `confidence`: 0.0 to 1.0, your probability that `student_answer_raw`, as you
+  transcribed it, is exactly what is on the page. This is a claim about your reading
+  of a mark that is there. When `student_answer_raw` is empty, there is nothing to
+  have read, so report 0.0 here -- put your confidence about the blank itself in
+  `blank_confidence` below, not here. Never use this field to mean "I'm sure nothing
+  is written."
+- `blank_confidence`: 0.0 to 1.0, your probability that the problem is genuinely
+  blank -- nothing written, not just faint or hard to see. Only meaningful when
+  `student_answer_raw` is empty; report 0.0 when it is not.
 
 Rules:
-- If handwriting is ambiguous, lower the confidence. Do not pick the more plausible
+- If handwriting is ambiguous, lower `confidence`. Do not pick the more plausible
   reading. Guessing at high confidence is the worst thing you can do here.
 - If a student crossed something out, transcribe only the final uncrossed answer.
-- If a problem is visible but has no answer written, use an empty string and set
-  confidence to your confidence that it is genuinely blank.
+- If a problem is visible but has no answer written, use an empty string for
+  `student_answer_raw`, set `confidence` to 0.0, and set `blank_confidence` to your
+  confidence that it is genuinely blank rather than just illegible in this photo.
 - If work is shown but no final answer is circled or boxed, take the last line.
 - Never add a problem that is not on the page.
 
@@ -54,7 +62,7 @@ legible even when an answer next to it is not, and the reverse also happens.
 Output shape when specific markers are known to look for:
 
 ```
-{"items": [{"problem_id": "...", "prompt_text": "...", "student_answer_raw": "...", "confidence": 0.0}],
+{"items": [{"problem_id": "...", "prompt_text": "...", "student_answer_raw": "...", "confidence": 0.0, "blank_confidence": 0.0}],
  "page_identity": {"section": ["Section 1"], "day": ["Day 5"], "confidence": 0.9}}
 ```
 

@@ -161,6 +161,35 @@ def test_defaults_missing_or_invalid_confidence_to_zero(tmp_path: Path) -> None:
     assert [item.confidence for item in result.items] == [0.0, 0.0]
 
 
+def test_blank_answer_confidence_is_clamped_to_zero_regardless_of_what_the_model_reports(
+    tmp_path: Path,
+) -> None:
+    """A blank student_answer_raw can never carry a gradable confidence into the
+    pipeline -- whatever the model reports there is a claim about "genuinely
+    blank", not about a reading, and that claim type has never been calibrated
+    (see docs/EVALS.md). Clamped here, at parse time, so no downstream code path
+    can trust it; k12ta.grading.key_grader.grade_against_key's own blank check
+    is the second, independent gate."""
+    image = tmp_path / "page.jpg"
+    image.write_bytes(b"x")
+    payload = {
+        "items": [
+            {"problem_id": "1", "prompt_text": "p", "student_answer_raw": "", "confidence": 0.95},
+            {
+                "problem_id": "2",
+                "prompt_text": "p",
+                "student_answer_raw": "   ",
+                "confidence": 0.99,
+            },
+        ]
+    }
+    model = FakeVisionModel(response_text=json.dumps(payload))
+
+    result = _transcriber(model).transcribe(str(image))
+
+    assert [item.confidence for item in result.items] == [0.0, 0.0]
+
+
 def test_strips_markdown_code_fence_the_prompt_forbids(tmp_path: Path) -> None:
     image = tmp_path / "page.jpg"
     image.write_bytes(b"x")

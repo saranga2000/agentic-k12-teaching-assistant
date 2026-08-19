@@ -161,11 +161,19 @@ def _parse_page_identity(raw: object) -> PageIdentityExtraction:
 
 
 def _parse_item(raw: dict[str, object]) -> TranscribedItem:
+    student_answer_raw = str(raw.get("student_answer_raw", ""))
     confidence = raw.get("confidence")
     valid_confidence = isinstance(confidence, int | float) and not isinstance(confidence, bool)
+    reading_confidence = float(confidence) if valid_confidence else 0.0  # type: ignore[arg-type]
     return TranscribedItem(
         problem_id=str(raw.get("problem_id", "")),
         prompt_text=str(raw.get("prompt_text", "")),
-        student_answer_raw=str(raw.get("student_answer_raw", "")),
-        confidence=float(confidence) if valid_confidence else 0.0,  # type: ignore[arg-type]
+        student_answer_raw=student_answer_raw,
+        # A blank answer cannot carry a gradable confidence, full stop -- whatever
+        # the model put in `confidence` here is its claim about `blank_confidence`
+        # (see prompts/transcribe_page.md), a claim type docs/EVALS.md records as
+        # never calibrated. Clamped at parse time, structurally, rather than left
+        # for k12ta.grading.key_grader.grade_against_key's blank check to catch --
+        # that check still exists too, as a second, independent gate.
+        confidence=reading_confidence if student_answer_raw.strip() else 0.0,
     )
