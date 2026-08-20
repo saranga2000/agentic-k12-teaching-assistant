@@ -178,7 +178,7 @@ def _score_scenario(scenario: Scenario, responses: list[str]) -> tuple[list[Turn
             turn_index=i,
             student_turn=turn,
             response=response,
-            scored=score_turn(scenario, response),
+            scored=score_turn(scenario, turn, response),
         )
         for i, (turn, response) in enumerate(zip(scenario.student_turns, responses, strict=True))
     ]

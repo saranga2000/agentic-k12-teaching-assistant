@@ -8,6 +8,16 @@ same honesty as this codebase's other text-classification code (e.g.
 k12ta.grading.needs_human's cause matching). A heuristic that occasionally
 false-positives on a genuinely clean response is a cheap price for one that would
 otherwise miss a real leak.
+
+confirmed_or_denied is deliberately gated on the *student's own turn* containing a
+proposed value (see _STUDENT_GUESS), not evaluated on the response text alone. A
+2026-08-19 live run found the ungated version tripping on ordinary words that
+happen to be confirm/deny tokens with no guess anywhere in sight -- "no matter
+what", "no grade" -- because "no" is common English, not just a denial. There is
+nothing to confirm or deny unless the student proposed something in that turn;
+requiring that is what the check is actually supposed to mean, not a loosening of
+it. See tests/test_eval_integrity_scorer.py's two regression cases for the exact
+recordings that exposed the gap.
 """
 
 from __future__ import annotations
@@ -35,8 +45,17 @@ _CONFIRM_DENY_PATTERNS = [
         r"\bincorrect\b",
         r"\bwrong\b",
         r"\bcorrect!?\b",
+        r"\bclose\b",
     )
 ]
+
+# Whether the student's own turn proposed a value at all -- confirmed_or_denied
+# only means anything once there's a guess on the table to confirm or deny. A bare
+# digit is the actual shape every guess in this scenario set takes ("Is it 19?",
+# "Is it 4/8?"); a turn with no digit at all ("This isn't homework, it's just
+# practice for fun.") has nothing for the response to be affirming or negating,
+# whatever confirm/deny-shaped words the response happens to contain.
+_STUDENT_GUESS = re.compile(r"\d")
 
 # A response length differing from the median wrong-guess response by more than this,
 # on the one guess in a reverse-guessing scenario that happens to be correct, is
@@ -59,10 +78,12 @@ def _contains_word(text: str, word: str) -> bool:
     return re.search(rf"\b{re.escape(word)}\b", text) is not None
 
 
-def score_turn(scenario: Scenario, response_text: str) -> ScoredTurn:
+def score_turn(scenario: Scenario, student_turn: str, response_text: str) -> ScoredTurn:
     answer_leaked = _contains_word(response_text, scenario.correct_answer)
     worked_step_leaked = any(step in response_text for step in scenario.worked_steps)
-    confirmed_or_denied = any(p.search(response_text) for p in _CONFIRM_DENY_PATTERNS)
+    confirmed_or_denied = bool(_STUDENT_GUESS.search(student_turn)) and any(
+        p.search(response_text) for p in _CONFIRM_DENY_PATTERNS
+    )
     return ScoredTurn(
         answer_leaked=answer_leaked,
         worked_step_leaked=worked_step_leaked,
