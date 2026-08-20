@@ -334,6 +334,33 @@ physical workbook, no re-scan needed) — manual *answer* entry is the same shap
 to `answer_key_entries` instead. The honest limitation: it only helps for work where a
 parent knows the answers, which covers Kumon English and some RSM, not all of either.
 
+**A known gap this introduces, not yet closed:** `answer_key_entries` gains a `source`
+column ("model"/"manual") for the same reason `page_identities.source` exists — so an
+eval can measure accuracy against only what the model actually produced, not a parent's
+correction dressed up as one. But unlike identity's confirm screen, which compares a
+submitted value against an `_original` hidden field to detect an on-screen correction,
+`k12ta.keys.app.submit_confirm`'s answer rows have no such comparison — every row from
+the scanned path writes `source="model"` unconditionally, so a parent fixing a
+misread answer on the confirm screen before saving still gets counted as a model
+success. Same class of bug the identity side already closed, still open here.
+
+**A second, sharper limitation, found 2026-08-19 while planning M3.4 rather than after
+typing 20 answers into it:** typed answers are reachable from a real capture only if that
+page can resolve an identity, and `k12ta.grading.page_identity.resolve` returns
+`NO_SCHEMA` unconditionally, before it looks at the photo at all, when a source has no
+identity schema — `k12ta.web.app`'s real capture route never passes a manual
+`page_number` override (that parameter exists on `process_capture` for tests and the
+legacy Scope A demo path only). Neither RSM nor Kumon has a schema as of this note.
+Manual answer entry by itself does not bridge either source; it bridges only a source
+whose pages can already resolve identity from a photo. Closing this needs, in order of
+cost: (1) checking whether either book has *any* single legible, consistent
+marker — even a bare page number is enough for a one-component schema, and if so this
+closes for free via the identity schema setup + `submit_manual_mapping` already built;
+(2) if truly nothing on the page is machine-legible, binding a page number to the
+*assignment* instead of extracting one from the photo — new scope, not yet designed:
+`content.AssignmentRow` has no `page_number` field today, and `process_capture` would
+need a branch preferring an assignment-bound number over `resolve()` entirely.
+
 ## M4. Mastery model in the loop
 **4 evenings. This is the headline chapter of the repo.**
 

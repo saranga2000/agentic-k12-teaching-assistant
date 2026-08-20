@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Enter answers by hand — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>Enter answers by hand — {{ source.label }}</h1>
+<p class="message">For a page you already know, typed straight from the book — no photo, no
+  model call. Recorded as a manual entry, not a model result.
+  {% if not schema %}
+  This source has no page-identity schema yet, so these answers are saved but won't be
+  reachable from a photo until one exists — set one up at
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">page identity</a>.
+  {% endif %}
+</p>
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">
+  <input type="hidden" name="row_count" id="row_count" value="{{ rows|length }}">
+
+  <label for="page_number">Page number</label>
+  <input type="text" name="page_number" id="page_number">
+
+  {% if schema %}
+  {% for component in schema %}
+  <label for="component_{{ component.component_name }}">{{ component.label }}</label>
+  <input type="text" name="component_{{ component.component_name }}" id="component_{{ component.component_name }}"
+         placeholder="{{ component.example or '' }}">
+  {% endfor %}
+  {% endif %}
+
+  <table id="answer-table">
+    <tr>
+      <th>problem</th><th>answer</th><th>ungradeable</th><th>reason</th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      <td><input type="text" name="problem_number_{{ row }}"></td>
+      <td><input type="text" name="answer_text_{{ row }}"></td>
+      <td>
+        <input
+          type="checkbox"
+          name="ungradeable_{{ row }}"
+          value="1"
+          class="ungradeable-checkbox"
+          data-reason-field="ungradeable_reason_{{ row }}"
+        >
+      </td>
+      <td>
+        <select name="ungradeable_reason_{{ row }}" id="ungradeable_reason_{{ row }}">
+          {% for reason in ungradeable_reasons %}
+          <option value="{{ reason }}">{{ reason }}</option>
+          {% endfor %}
+        </select>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <div class="actions">
+    <button type="submit">Save (Enter)</button>
+    <button type="button" id="add-rows">Add 5 more rows</button>
+  </div>
+</form>
+
+<script>
+  const form = document.querySelector("form");
+  const table = document.getElementById("answer-table");
+  const rowCountField = document.getElementById("row_count");
+  const reasons = {{ ungradeable_reasons|tojson }};
+
+  function visibleFields() {
+    return Array.from(form.querySelectorAll("input[type=text], select"))
+      .filter((el) => el.offsetParent !== null);
+  }
+  function attachEnterAdvance(field) {
+    field.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      const fields = visibleFields();
+      const i = fields.indexOf(field);
+      if (i >= 0 && i < fields.length - 1) {
+        event.preventDefault();
+        fields[i + 1].focus();
+      }
+    });
+  }
+  form.querySelectorAll("input[type=text], select").forEach(attachEnterAdvance);
+
+  document.getElementById("add-rows").addEventListener("click", () => {
+    const start = parseInt(rowCountField.value, 10);
+    for (let j = 0; j < 5; j++) {
+      const i = start + j;
+      const tr = document.createElement("tr");
+      const reasonOptions = reasons.map((r) => `<option value="${r}">${r}</option>`).join("");
+      tr.innerHTML = `
+        <td><input type="text" name="problem_number_${i}"></td>
+        <td><input type="text" name="answer_text_${i}"></td>
+        <td><input type="checkbox" name="ungradeable_${i}" value="1" class="ungradeable-checkbox" data-reason-field="ungradeable_reason_${i}"></td>
+        <td><select name="ungradeable_reason_${i}" id="ungradeable_reason_${i}">${reasonOptions}</select></td>
+      `;
+      table.appendChild(tr);
+      tr.querySelectorAll("input[type=text], select").forEach(attachEnterAdvance);
+    }
+    rowCountField.value = start + 5;
+  });
+
+  const first = visibleFields()[0];
+  if (first) {
+    first.focus();
+  }
+</script>
+{% endblock %}

@@ -936,6 +936,204 @@ def test_manual_mapping_for_unknown_student_or_source_is_404(client: TestClient)
     )
 
 
+# --- M3.4: manual answer-key entry -- a parent types a page's answers directly,
+# no photograph, no model call. The bridge for a source with no printed key
+# (RSM, Kumon) once it also has an identity schema -- see docs/ROADMAP.md's
+# M3.4 note on why this alone doesn't help a source with none. -----------------
+
+
+def test_manual_answers_screen_renders_identity_fields_when_a_schema_exists(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/answers/manual-entry")
+
+    assert response.status_code == 200
+    assert 'name="component_day"' in response.text
+    assert 'name="problem_number_0"' in response.text
+
+
+def test_manual_answers_screen_works_with_no_schema_unlike_identity_only_entry(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The key difference from /identity/manual-entry: a stored answer is not
+    useless without a schema, only unreachable from a future photo until one
+    exists -- so this screen still renders the answer table, just without any
+    identity fields."""
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/answers/manual-entry")
+
+    assert response.status_code == 200
+    assert 'name="component_' not in response.text
+    assert 'name="problem_number_0"' in response.text
+
+
+def test_submit_manual_answers_persists_rows_marked_manual(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "2",
+            "page_number": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "problem_number_1": "2",
+            "answer_text_1": "",
+            "ungradeable_1": "1",
+            "ungradeable_reason_1": "answers_vary",
+        },
+    )
+
+    assert response.status_code == 200
+    entries = {
+        e.problem_number: e
+        for e in answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    }
+    assert entries["1"].answer_text == "8 m"
+    assert entries["1"].source == "manual"
+    assert entries["2"].ungradeable_reason == "answers_vary"
+    assert entries["2"].source == "manual"
+
+
+def test_submit_manual_answers_also_saves_identity_when_schema_and_all_fields_present(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A parent typing a page's answers from the book already knows that page's
+    identity too -- one submission, not a separate trip to /identity/manual-entry."""
+    _seed_marcus_with_source(conn)
+    v = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "17",
+            "component_day": "Day 5",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+        },
+    )
+
+    assert page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 5", v) == 17
+    row = conn.execute(
+        "SELECT source FROM page_identities WHERE composite_key = 'Day 5'"
+    ).fetchone()
+    assert row[0] == "manual"
+
+
+def test_submit_manual_answers_saves_answers_even_with_no_schema(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The gap this task does not close on its own (docs/ROADMAP.md's M3.4 note):
+    these answers are stored and correct, just unreachable from a photo until a
+    schema exists -- but storing them now means nothing has to be re-typed once
+    one does."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+        },
+    )
+
+    assert response.status_code == 200
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert len(entries) == 1
+    assert entries[0].source == "manual"
+
+
+def test_submit_manual_answers_disagreeing_with_a_stored_value_is_a_conflict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Never silently overwritten -- same rule as the scanned confirm path,
+    reused via the same _save_answer_entry."""
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="8 m",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "9 m",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "conflict" in response.text.lower() or "9 m" in response.text
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert entries[0].answer_text == "8 m"  # untouched
+
+
+def test_submit_manual_answers_skips_blank_rows(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "3",
+            "page_number": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "problem_number_1": "",
+            "problem_number_2": "",
+        },
+    )
+
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert len(entries) == 1
+
+
+def test_submit_manual_answers_without_a_page_number_is_a_400(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={"row_count": "1", "problem_number_0": "1", "answer_text_0": "8 m"},
+    )
+
+    assert response.status_code == 400
+    assert conn.execute("SELECT COUNT(*) FROM answer_key_entries").fetchone()[0] == 0
+
+
+def test_manual_answers_for_unknown_student_or_source_is_404(client: TestClient) -> None:
+    assert client.get("/keys/does-not-exist/summer_bridge/answers/manual-entry").status_code == 404
+    assert (
+        client.post("/keys/does-not-exist/summer_bridge/answers/manual-entry", data={}).status_code
+        == 404
+    )
+
+
 def test_enrollment_detail_with_no_resolutions_says_so_plainly(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

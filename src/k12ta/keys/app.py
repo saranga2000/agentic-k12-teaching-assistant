@@ -672,6 +672,137 @@ async def submit_manual_mapping(
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
+_MANUAL_ANSWER_ROWS = 20
+"""Default row count for the manual answer-entry table -- a full page at this
+project's own scale (up to 22 problems seen in real Summer Bridge data) fits in
+one sitting without reaching for "add more rows" first."""
+
+
+@app.get("/keys/{student_id}/{source_id}/answers/manual-entry", response_class=HTMLResponse)
+def manual_answers_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """M3.4: a parent types a page's answers directly, no photograph, no model
+    call -- the bridge for a source with no printed answer key (RSM, Kumon).
+    Unlike /identity/manual-entry, this renders with no schema too: a stored
+    answer isn't useless without one, only unreachable from a future photo
+    until one exists (docs/ROADMAP.md's M3.4 note)."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    return templates.TemplateResponse(
+        request,
+        "manual_answers.html",
+        {
+            "student": student,
+            "source": source,
+            "schema": schema,
+            "rows": range(_MANUAL_ANSWER_ROWS),
+            "ungradeable_reasons": UNGRADEABLE_REASONS,
+        },
+    )
+
+
+def _manual_answer_row(data: dict[str, list[str]], i: int) -> tuple[str, str | None, str | None]:
+    """Row i's (problem_number, answer_text, ungradeable_reason) from
+    manual_answers.html's submitted form -- same shape as _confirm_answer_row,
+    minus a per-row page_number: a manual session is scoped to one page,
+    entered once at the top of the form, not repeated per row."""
+    problem_number = _get(data, f"problem_number_{i}").strip()
+    if not problem_number:
+        return "", None, None
+    if _get(data, f"ungradeable_{i}") == "1":
+        reason = _get(data, f"ungradeable_reason_{i}").strip() or UNGRADEABLE_REASONS[0]
+        return problem_number, None, reason
+    answer_text = _get(data, f"answer_text_{i}").strip()
+    if answer_text:
+        return problem_number, answer_text, None
+    return "", None, None
+
+
+@app.post("/keys/{student_id}/{source_id}/answers/manual-entry", response_class=HTMLResponse)
+async def submit_manual_answers(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """Always recorded source="manual" on every row saved, answers and identity
+    alike -- these are a parent's own typed values, never the model's, same
+    reasoning as submit_manual_mapping. The identity mapping, if this source
+    has a schema and every component was filled in, is saved in the same
+    submission: a parent typing a page's answers from the book already knows
+    that page's identity too, no reason to make this two trips. Answer rows
+    go through _save_answer_entry, the same never-silently-overwrite path
+    submit_confirm's scanned rows use -- a conflict here renders resolve.html
+    exactly like a scanned one would. page_number is required (unlike
+    /identity/manual-entry's silent no-op on a blank field): discarding up to
+    twenty typed answers over one missing field is a worse failure than a
+    loud 400."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    data = parse_qs((await request.body()).decode())
+    row_count = int(_get(data, "row_count", "0"))
+    page_number_raw = _get(data, "page_number").strip()
+    if not page_number_raw.isdigit():
+        raise HTTPException(400, "page_number is required")
+    page_number = int(page_number_raw)
+    now = datetime.now(UTC).isoformat()
+
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    if schema:
+        values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
+        if all(values):
+            version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+            page_identities.upsert_identity(
+                conn,
+                page_identities.PageIdentityRow(
+                    student_id=student_id,
+                    source_id=source_id,
+                    page_number=page_number,
+                    composite_key=build_composite_key(values),
+                    schema_version=version,
+                    confirmed_at=now,
+                    source="manual",
+                ),
+            )
+
+    saved = 0
+    conflicts = []
+    for i in range(row_count):
+        problem_number, answer_text, ungradeable_reason = _manual_answer_row(data, i)
+        if not problem_number:
+            continue
+        conflict = _save_answer_entry(
+            conn,
+            student_id,
+            source_id,
+            page_number,
+            problem_number,
+            answer_text,
+            ungradeable_reason,
+            "manual",
+            now,
+        )
+        if conflict is None:
+            saved += 1
+        else:
+            conflicts.append(conflict)
+
+    if conflicts:
+        return templates.TemplateResponse(
+            request,
+            "resolve.html",
+            {"student": student, "source": source, "conflicts": conflicts},
+        )
+    return templates.TemplateResponse(
+        request,
+        "saved.html",
+        {"student": student, "source": source, "saved_count": saved},
+    )
+
+
 @app.get("/keys/{student_id}/{source_id}/upload", response_class=HTMLResponse)
 def upload_screen(
     request: Request,
@@ -936,6 +1067,86 @@ def _confirm_identity_composite(
     return build_composite_key(values), ("manual" if any_edited else "model")
 
 
+def _save_answer_entry(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    page_number: int,
+    problem_number: str,
+    answer_text: str | None,
+    ungradeable_reason: str | None,
+    source: str,
+    now: str,
+) -> dict[str, object] | None:
+    """Create, no-op-confirm, or report a conflict for one answer_key_entries
+    row -- the shared save path every writer of this table goes through
+    (submit_confirm's scanned rows below, submit_manual_answers' typed ones,
+    M3.4), so a wrong key can never silently overwrite a right one regardless
+    of how the value arrived. Never overwrites a stored answer that
+    disagrees with a new one -- that's submit_resolve's job, once a parent
+    has explicitly chosen, never this function's. Always writes an audit
+    row. Returns None once saved (created or already matched); a conflict
+    dict, in the exact shape resolve.html expects, otherwise."""
+    existing = answer_keys.get_entry(conn, student_id, source_id, page_number, problem_number)
+    if existing is None:
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=page_number,
+                problem_number=problem_number,
+                answer_text=answer_text,
+                ungradeable_reason=ungradeable_reason,
+                confirmed_at=now,
+                source=source,
+            ),
+        )
+        answer_key_audit.insert_audit_row(
+            conn,
+            answer_key_audit.AnswerKeyAuditRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=page_number,
+                problem_number=problem_number,
+                action="created",
+                old_answer_text=None,
+                old_ungradeable_reason=None,
+                new_answer_text=answer_text,
+                new_ungradeable_reason=ungradeable_reason,
+                resolution=None,
+                recorded_at=now,
+            ),
+        )
+        return None
+    if existing.answer_text == answer_text and existing.ungradeable_reason == ungradeable_reason:
+        answer_key_audit.insert_audit_row(
+            conn,
+            answer_key_audit.AnswerKeyAuditRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=page_number,
+                problem_number=problem_number,
+                action="matched",
+                old_answer_text=existing.answer_text,
+                old_ungradeable_reason=existing.ungradeable_reason,
+                new_answer_text=answer_text,
+                new_ungradeable_reason=ungradeable_reason,
+                resolution=None,
+                recorded_at=now,
+            ),
+        )
+        return None
+    return {
+        "page_number": page_number,
+        "problem_number": problem_number,
+        "old_answer_text": existing.answer_text,
+        "old_ungradeable_reason": existing.ungradeable_reason,
+        "new_answer_text": answer_text,
+        "new_ungradeable_reason": ungradeable_reason,
+    }
+
+
 @app.post("/keys/{student_id}/{source_id}/confirm", response_class=HTMLResponse)
 async def submit_confirm(
     request: Request,
@@ -1007,69 +1218,21 @@ async def submit_confirm(
                     ),
                 )
 
-        existing = answer_keys.get_entry(conn, student_id, source_id, page_number, problem_number)
-        if existing is None:
-            answer_keys.upsert_entry(
-                conn,
-                answer_keys.AnswerKeyEntryRow(
-                    student_id=student_id,
-                    source_id=source_id,
-                    page_number=page_number,
-                    problem_number=problem_number,
-                    answer_text=answer_text,
-                    ungradeable_reason=ungradeable_reason,
-                    confirmed_at=now,
-                ),
-            )
-            answer_key_audit.insert_audit_row(
-                conn,
-                answer_key_audit.AnswerKeyAuditRow(
-                    student_id=student_id,
-                    source_id=source_id,
-                    page_number=page_number,
-                    problem_number=problem_number,
-                    action="created",
-                    old_answer_text=None,
-                    old_ungradeable_reason=None,
-                    new_answer_text=answer_text,
-                    new_ungradeable_reason=ungradeable_reason,
-                    resolution=None,
-                    recorded_at=now,
-                ),
-            )
-            saved += 1
-        elif (
-            existing.answer_text == answer_text
-            and existing.ungradeable_reason == ungradeable_reason
-        ):
-            answer_key_audit.insert_audit_row(
-                conn,
-                answer_key_audit.AnswerKeyAuditRow(
-                    student_id=student_id,
-                    source_id=source_id,
-                    page_number=page_number,
-                    problem_number=problem_number,
-                    action="matched",
-                    old_answer_text=existing.answer_text,
-                    old_ungradeable_reason=existing.ungradeable_reason,
-                    new_answer_text=answer_text,
-                    new_ungradeable_reason=ungradeable_reason,
-                    resolution=None,
-                    recorded_at=now,
-                ),
-            )
+        conflict = _save_answer_entry(
+            conn,
+            student_id,
+            source_id,
+            page_number,
+            problem_number,
+            answer_text,
+            ungradeable_reason,
+            "model",
+            now,
+        )
+        if conflict is None:
             saved += 1
         else:
-            conflicts.append(
-                {
-                    "page_number": page_number,
-                    "problem_number": problem_number,
-                    "old_answer_text": existing.answer_text,
-                    "old_ungradeable_reason": existing.ungradeable_reason,
-                    "new_answer_text": answer_text,
-                    "new_ungradeable_reason": ungradeable_reason,
-                }
-            )
+            conflicts.append(conflict)
 
     if conflicts:
         return templates.TemplateResponse(

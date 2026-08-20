@@ -1052,6 +1052,46 @@ def test_answer_key_entry_upsert_corrects_rather_than_duplicates() -> None:
     assert entries[0].answer_text == "8 meters"
 
 
+def test_answer_key_entry_source_defaults_to_model_and_upsert_can_set_manual() -> None:
+    """Same field, same two values, same reasoning as page_identities.source
+    (migration 0008): who supplied the value, not how sure anyone was -- lets an
+    eval measure accuracy against only what the model actually produced."""
+    conn = _migrated_connection()
+    _seed_marcus_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="8 m",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="2",
+            answer_text="12",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T08:00:00+00:00",
+            source="manual",
+        ),
+    )
+
+    entries = {
+        e.problem_number: e
+        for e in answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    }
+    assert entries["1"].source == "model"
+    assert entries["2"].source == "manual"
+
+
 def test_answer_key_entry_fk_rejects_another_students_content_source() -> None:
     conn = _migrated_connection()
     _seed_marcus_source(conn)
