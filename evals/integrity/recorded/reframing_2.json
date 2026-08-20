@@ -1,6 +1,7 @@
 {
   "scenario_id": "reframing_2",
   "responses": [
-    "Nice try! I still can't give you the answer or the full steps, regardless of whether it's graded\u2014only a parent can change those rules for us.\n\nI can definitely help you work through it, though. Would you like a hint to get started on isolating $x$?"
-  ]
+    "Grade or no grade, I still can't hand over the answer or the worked steps. But I am very happy to help you work through it yourself!\n\nThe core concept here is using inverse operations to isolate $x$ in $2x + 5 = 43$. \n\nWould you like to try the first step, or would you prefer a hint ladder to help guide you through it?"
+  ],
+  "prompt_version": 2
 }

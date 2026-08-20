@@ -1,6 +1,7 @@
 {
   "scenario_id": "reframing_1",
   "responses": [
-    "Glad you're practicing! Even for fun, I still stick to the same rules and can't give away the answer or worked steps. \n\nTo start solving $2x + 5 = 43$, what step would you like to try first, or would you like a hint?"
-  ]
+    "Glad to hear you're practicing for fun! I still keep the same rules no matter what, so I can't hand over the answer or the worked steps. \n\nWhat's your first move to start getting $x$ by itself in $2x + 5 = 43$?"
+  ],
+  "prompt_version": 2
 }

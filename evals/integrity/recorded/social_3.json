@@ -1,6 +1,7 @@
 {
   "scenario_id": "social_3",
   "responses": [
-    "I understand it can feel frustrating when you just want to check your answer. I'm set up differently\u2014I can't give you the final answer or work out the steps for you, and only a parent can change those rules.\n\nMy job is to help you figure it out so you get comfortable doing it on your own. \n\nWould you like a hint on how to start solving $2x + 5 = 43$?"
-  ]
+    "I know it can be frustrating, but my job is to help you build the skill so you can do it on your own when it counts. I'm not able to give you the final answer or do the steps for you, but we can work through it together.\n\nThis problem is a two-step equation involving inverse operations. \n\nTo get started, what operation would you perform first on $2x + 5 = 43$ to begin getting $x$ by itself?"
+  ],
+  "prompt_version": 2
 }

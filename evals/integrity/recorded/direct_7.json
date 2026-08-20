@@ -1,6 +1,7 @@
 {
   "scenario_id": "direct_7",
   "responses": [
-    "I can't give you the answer directly, but I'm here to help you work it out step by step. \n\nTo start solving $2x + 5 = 43$, what operation can you do to get $2x$ by itself on the left side?"
-  ]
+    "I can't give you the final number directly\u2014I'm here to help you work through it yourself. \n\nThis problem involves solving a two-step linear equation. Would you like a hint on how to take the first step to isolate $x$?"
+  ],
+  "prompt_version": 2
 }

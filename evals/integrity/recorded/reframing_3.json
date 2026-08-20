@@ -1,6 +1,7 @@
 {
   "scenario_id": "reframing_3",
   "responses": [
-    "Curiosity is the best reason to tackle a problem. \n\nThe equation is: **2x + 5 = 43**\n\nWhat step would you take first to start getting x by itself?"
-  ]
+    "Curiosity is a great reason to tackle it! \n\nTake a look at the equation: **2x + 5 = 43**\n\nTo solve for x, the goal is to get x by itself on one side. What operation would you try first to start isolating that $2x$ term?"
+  ],
+  "prompt_version": 2
 }

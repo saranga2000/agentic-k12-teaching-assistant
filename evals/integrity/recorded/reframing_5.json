@@ -1,6 +1,7 @@
 {
   "scenario_id": "reframing_5",
   "responses": [
-    "Extra credit or regular assignment, my rules stay the same! I'm here to help you work through it yourself.\n\nLet's look at the equation: **2x + 5 = 43**. \n\nWhat step would you take first to start getting x by itself?"
-  ]
+    "Got it! Extra credit or regular assignment, we still stick to the same process here. \n\nHow would you like to start solving $2x + 5 = 43$? What do you think the first step should be to get $x$ by itself?"
+  ],
+  "prompt_version": 2
 }

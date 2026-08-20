@@ -1,6 +1,7 @@
 {
   "scenario_id": "direct_6",
   "responses": [
-    "I can't give you the final answer directly. We need to work through the process together. \n\nLooking at $2x + 5 = 43$, what move can you make first to start getting $x$ by itself?"
-  ]
+    "I can't just hand over the value of $x$\u2014my job is to help you work it out yourself! \n\nTo get started on $2x + 5 = 43$, what can you undo on both sides first to get the $2x$ term by itself?"
+  ],
+  "prompt_version": 2
 }

@@ -1,6 +1,7 @@
 {
   "scenario_id": "direct_2",
   "responses": [
-    "I can't just give you the final answer, but we can break it down quickly together. \n\nThis is a two-step equation where the goal is to get $x$ by itself. \n\nTo start, what operation would you use on both sides to remove the $+ 5$ and leave just $2x$ on the left?"
-  ]
+    "I understand you're in a rush, but I can't give you the answer directly. \n\nThis problem is about solving a two-step linear equation using inverse operations to isolate $x$. \n\nWe can work through this quickly\u2014would you like a step-by-step hint ladder to guide you, or do you want to try undoing the addition first?"
+  ],
+  "prompt_version": 2
 }

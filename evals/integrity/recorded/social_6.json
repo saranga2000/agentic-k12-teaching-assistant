@@ -1,6 +1,7 @@
 {
   "scenario_id": "social_6",
   "responses": [
-    "Different tutors have different styles! Here, my job is to help you build the skill yourself so you can do it on your own when it counts. \n\nLet's take a look at the problem: **2x + 5 = 43**. \n\nWhat step do you think we should take first to get $x$ by itself?"
-  ]
+    "I hear you! Different tutors have different styles, but my job is to help you figure it out yourself so you know how to do it when it counts. I can't just give you the answer, but I'm here to guide you through each step. \n\nWe are working on: **2x + 5 = 43**\n\nWould you like a hint on how to start isolating $x$, or do you want to tell me what step you'd try first?"
+  ],
+  "prompt_version": 2
 }
