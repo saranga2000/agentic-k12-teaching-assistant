@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -32,7 +33,7 @@ from k12ta.store import (
     quota,
     sessions,
 )
-from k12ta.transcribe.base import Transcriber
+from k12ta.transcribe.base import FailureKind, TranscribedItem, Transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 class PipelineStatus(Enum):
     QUOTA_EXHAUSTED = "quota_exhausted"
     TRANSCRIBE_FAILED = "transcribe_failed"
+    RATE_LIMITED = "rate_limited"
+    INTERNAL_ERROR = "internal_error"
     GRADED = "graded"
 
 
@@ -58,8 +61,57 @@ class PipelineOutcome:
         return PipelineOutcome(status=PipelineStatus.TRANSCRIBE_FAILED, failure_reason=reason)
 
     @staticmethod
+    def rate_limited(reason: str) -> PipelineOutcome:
+        """Distinct from transcribe_failed: the provider's own rate limit was
+        exhausted (FailureKind.RATE_LIMITED), not a problem with this photo."""
+        return PipelineOutcome(status=PipelineStatus.RATE_LIMITED, failure_reason=reason)
+
+    @staticmethod
     def graded(session_id: str) -> PipelineOutcome:
         return PipelineOutcome(status=PipelineStatus.GRADED, session_id=session_id)
+
+    @staticmethod
+    def internal_error(reason: str) -> PipelineOutcome:
+        """An unanticipated exception escaping capture processing entirely --
+        distinct from transcribe_failed (a classified, expected transcription
+        problem) because, by definition, nothing here is known about the
+        cause. See k12ta.web.app._stream_capture_response's worker wrapper."""
+        return PipelineOutcome(status=PipelineStatus.INTERNAL_ERROR, failure_reason=reason)
+
+
+# Shared with k12ta.respond.render, which strips this prefix back off for display
+# -- there is no real printed label to show a student for one of these, so the
+# results table shows "?" in the question-number column instead of this string.
+AMBIGUOUS_PROBLEM_ID_PREFIX = "_ambiguous_"
+
+
+def _resolve_storage_problem_ids(
+    items: Sequence[TranscribedItem],
+) -> tuple[tuple[str, bool], ...]:
+    """One (storage_problem_id, is_ambiguous) pair per item in `items`, same
+    order. A blank problem_id, or one that repeats across more than one item
+    on this same photo, has nothing to safely key a grade to -- there is no
+    honest way to tell which printed question it belongs to. Found 2026-08-20
+    on real data: two blank-problem_id items on one photo crashed process_
+    capture outright, a UNIQUE constraint violation on problems, not merely a
+    wrong grade.
+
+    storage_problem_id is a synthesized, per-index placeholder for exactly
+    the ambiguous items (never a real printed label, never used for key
+    lookup or k12ta.domain.attempts' cross-capture identity) so two ambiguous
+    items on one photo can both still be stored and shown to a parent --
+    losing nothing -- rather than silently dropped or crashing on the same
+    UNIQUE constraint that caught this in the first place. The caller forces
+    NEEDS_HUMAN/AMBIGUOUS_PROBLEM_ID for every item this marks ambiguous,
+    never decide()."""
+    counts = Counter(item.problem_id for item in items)
+    resolved = []
+    for i, item in enumerate(items):
+        ambiguous = not item.problem_id or counts[item.problem_id] > 1
+        resolved.append(
+            (f"{AMBIGUOUS_PROBLEM_ID_PREFIX}{i}" if ambiguous else item.problem_id, ambiguous)
+        )
+    return tuple(resolved)
 
 
 def process_capture(
@@ -130,6 +182,7 @@ def process_capture(
             student_id,
             reason,
         )
+        captures.record_transcribe_failure(conn, student_id, capture_row.capture_id, reason)
         return PipelineOutcome.transcribe_failed(reason)
 
     logger.info(
@@ -142,15 +195,27 @@ def process_capture(
     )
 
     if result.failure is not None:
+        if result.failure_kind is FailureKind.RATE_LIMITED:
+            # Not a transcription problem -- the photo may be perfectly legible,
+            # the provider is just out of capacity. Its own outcome, its own
+            # persisted column (never transcribe_failure_reason), so a parent-
+            # facing message and a diagnostic query can both tell it apart from
+            # an ordinary transcribe failure instead of guessing from free text.
+            captures.record_rate_limited(conn, student_id, capture_row.capture_id, result.failure)
+            return PipelineOutcome.rate_limited(result.failure)
+        captures.record_transcribe_failure(conn, student_id, capture_row.capture_id, result.failure)
         return PipelineOutcome.transcribe_failed(result.failure)
 
-    for item in result.items:
+    storage_problem_ids = _resolve_storage_problem_ids(result.items)
+    for item, (storage_problem_id, _ambiguous) in zip(
+        result.items, storage_problem_ids, strict=True
+    ):
         captures.insert_problem(
             conn,
             captures.ProblemRow(
                 student_id=student_id,
                 capture_id=capture_row.capture_id,
-                problem_id=item.problem_id,
+                problem_id=storage_problem_id,
                 prompt_text=item.prompt_text,
                 student_answer_raw=item.student_answer_raw,
                 transcription_confidence=item.confidence,
@@ -237,9 +302,19 @@ def process_capture(
             ended_at=now,
         ),
     )
-    for item in result.items:
+    for item, (storage_problem_id, ambiguous) in zip(
+        result.items, storage_problem_ids, strict=True
+    ):
         detail = None
-        if conflicting_markers:
+        if ambiguous:
+            # Checked first, unconditionally: there is no question to key this
+            # answer to at all, which is a more fundamental gap than whether
+            # the page itself resolved -- see _resolve_storage_problem_ids.
+            decision = GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN,
+                needs_human_cause=NeedsHumanCause.AMBIGUOUS_PROBLEM_ID,
+            )
+        elif conflicting_markers:
             decision = GradeDecision(
                 outcome=GradeOutcome.NEEDS_HUMAN,
                 needs_human_cause=NeedsHumanCause.CONFLICTING_PAGE_MARKERS,
@@ -270,7 +345,7 @@ def process_capture(
                 student_id=student_id,
                 session_id=session_id,
                 capture_id=capture_row.capture_id,
-                problem_id=item.problem_id,
+                problem_id=storage_problem_id,
                 outcome=decision.outcome.value,
                 grader_confidence=item.confidence,
                 expected_answer=decision.expected_answer,
@@ -336,3 +411,34 @@ def regrade_capture_for_resolved_identity(
             ),
             unsimplified=decision.unsimplified,
         )
+
+
+@dataclass(frozen=True)
+class ReplaySummary:
+    source_id: str
+    captures_replayed: int
+
+
+def replay_source(conn: sqlite3.Connection, student_id: str, source_id: str) -> ReplaySummary:
+    """Re-decide every already-resolved capture for one source against the
+    answer key and grading logic as they stand *right now* -- zero model
+    calls, since it only ever calls regrade_capture_for_resolved_identity
+    above, which itself never re-transcribes. Turns a one-time batch of real
+    photographs (which does cost quota, at ingest) into a permanent, free
+    regression corpus: re-run this after any key correction or decide()
+    change to see its effect on every real capture on file in seconds,
+    instead of re-photographing and spending quota again.
+
+    Iterates k12ta.store.sessions.list_resolved_captures_for_source, which
+    only returns captures whose page identity already resolved -- a capture
+    still sitting on NO_SCHEMA/NO_MARKERS/UNKNOWN_PAGE etc. has no page_number
+    to regrade against and is silently skipped, exactly as honest as at
+    capture time. Nothing here touches page-identity resolution itself; only
+    a real photo re-read by the model can change what page a capture
+    resolves to."""
+    resolved = sessions.list_resolved_captures_for_source(conn, student_id, source_id)
+    for row in resolved:
+        regrade_capture_for_resolved_identity(
+            conn, student_id, row.session_id, row.capture_id, source_id, row.page_number
+        )
+    return ReplaySummary(source_id=source_id, captures_replayed=len(resolved))

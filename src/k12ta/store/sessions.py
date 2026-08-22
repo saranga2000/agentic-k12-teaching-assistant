@@ -292,3 +292,40 @@ def list_graded_attempts_for_source(
         (student_id, source_id),
     )
     return [GradedAttemptRow(**dict(row)) for row in cur.fetchall()]
+
+
+@dataclass(frozen=True)
+class ResolvedCaptureRow:
+    """One distinct capture, for one source, whose page identity is already
+    known -- the unit k12ta.pipeline.process.replay_source iterates. A capture
+    with more than one distinct page_number across its rows would be a bug
+    elsewhere (one photograph is one physical page); this takes whichever one
+    SQL happens to return first rather than guessing which is right."""
+
+    capture_id: str
+    session_id: str
+    page_number: int
+
+
+def list_resolved_captures_for_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> list[ResolvedCaptureRow]:
+    """Every distinct capture for this student and source that already has a
+    resolved page_number, across every session -- regardless of outcome
+    (correct, incorrect, or still needs_human for some other reason, e.g.
+    no_key_for_page). What k12ta.pipeline.process.replay_source loops over to
+    re-decide every one of them from its already-stored transcription, never
+    the model, after an answer key or grading-logic change."""
+    cur = conn.execute(
+        """
+        SELECT DISTINCT gp.capture_id AS capture_id, gp.session_id AS session_id,
+               gp.page_number AS page_number
+        FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        WHERE gp.student_id = ? AND a.source_id = ? AND gp.page_number IS NOT NULL
+        ORDER BY pc.captured_at, gp.capture_id
+        """,
+        (student_id, source_id),
+    )
+    return [ResolvedCaptureRow(**dict(row)) for row in cur.fetchall()]

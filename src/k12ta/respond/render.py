@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from k12ta.domain.attempts import PastAttempt, already_disclosed
 from k12ta.domain.policy import FeedbackRules
 from k12ta.grading.needs_human import NeedsHumanCause
+from k12ta.pipeline.process import AMBIGUOUS_PROBLEM_ID_PREFIX
 from k12ta.store.sessions import GradedProblemRow
 
 # One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
@@ -76,6 +77,14 @@ ANSWER_DIFFERS_FROM_KEY_GLYPH = "≠"
 # claimed reason -- genuinely unknown, not a guess dressed up as one.
 UNKNOWN_CAUSE_MESSAGE = "I need a grown-up to look at this one."
 UNKNOWN_CAUSE_GLYPH = "?"
+# Actionable, not only descriptive -- "which question" points at the real gap (no
+# printed problem number to key this answer to), distinct from LOW_CONFIDENCE's
+# "I could not read your writing" (this isn't about legibility of the answer, it's
+# about identity of the question). See k12ta.grading.needs_human.NeedsHumanCause.
+# AMBIGUOUS_PROBLEM_ID's docstring for how this is found (blank/duplicate
+# problem_id on one photo).
+AMBIGUOUS_PROBLEM_ID_MESSAGE = "I could not tell which question this answer belongs to."
+AMBIGUOUS_PROBLEM_ID_GLYPH = "#"
 
 _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
     NeedsHumanCause.LOW_CONFIDENCE: (COULD_NOT_READ_GLYPH, COULD_NOT_READ_MESSAGE),
@@ -94,6 +103,10 @@ _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
         ANSWER_DIFFERS_FROM_KEY_GLYPH,
         ANSWER_DIFFERS_FROM_KEY_MESSAGE,
     ),
+    NeedsHumanCause.AMBIGUOUS_PROBLEM_ID: (
+        AMBIGUOUS_PROBLEM_ID_GLYPH,
+        AMBIGUOUS_PROBLEM_ID_MESSAGE,
+    ),
 }
 
 CORRECT_GLYPH = "✓"
@@ -105,7 +118,10 @@ CORRECT_MESSAGE = "Correct!"
 # text alone, since outcome/glyph also drive the multi-attempt-oracle CSS class
 # and must not grow a fourth state for this.
 CORRECT_UNSIMPLIFIED_MESSAGE = "Correct! It can still be simplified further."
-INCORRECT_GLYPH = "✎"
+# Matches the framing guide's own good/bad vocabulary (k12ta.web's capture screen),
+# so "✗" already means "not this" elsewhere in the app before a student ever reaches
+# the results table.
+INCORRECT_GLYPH = "✗"
 # reveal_final_answer=False (DIAGNOSTIC_ONLY, FLUENCY): no location or concept
 # naming yet -- that requires k12ta.diagnose output, which does not exist on any
 # row today (see GradedProblemRow.diagnosis_* -- always unset until that
@@ -118,6 +134,56 @@ REPEAT_GLYPH = "↺"
 # message that varies with correctness is itself the oracle the multi-attempt
 # suppression exists to close. See k12ta.domain.attempts.already_disclosed.
 REPEAT_MESSAGE = "I already told you what I can on this one — check it yourself."
+
+# The results table's display grouping: eight NeedsHumanCause values collapse to
+# three buckets so a student is learning three shapes, not eight, at a glance --
+# the per-cause message (above) stays exactly as specific as it always was, only
+# the glyph and row-tint are bucket-uniform. Every StudentResultView also carries
+# "correct", "incorrect", or "repeat" as its bucket, for the same summary tally.
+# Unmapped (None, or a future cause added to the enum but not here) falls to
+# "needs_a_person" -- the same honest default UNKNOWN_CAUSE_MESSAGE already uses,
+# never a guess about which of the other two it might be.
+_COULD_NOT_READ_CAUSES = frozenset(
+    {
+        NeedsHumanCause.LOW_CONFIDENCE,
+        NeedsHumanCause.UNKNOWN_PAGE,
+        NeedsHumanCause.CONFLICTING_PAGE_MARKERS,
+        NeedsHumanCause.PARTIAL_PAGE_MARKERS,
+        NeedsHumanCause.AMBIGUOUS_PROBLEM_ID,
+    }
+)
+_NEEDS_A_PERSON_CAUSES = frozenset(
+    {NeedsHumanCause.NEEDS_PERSON, NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY}
+)
+
+
+def _needs_human_bucket(cause_value: str | None) -> str:
+    if cause_value is not None:
+        cause = NeedsHumanCause(cause_value)
+        if cause in _COULD_NOT_READ_CAUSES:
+            return "could_not_read"
+        if cause is NeedsHumanCause.NO_KEY_FOR_PAGE:
+            return "waiting_on_key"
+        if cause in _NEEDS_A_PERSON_CAUSES:
+            return "needs_a_person"
+    return "needs_a_person"
+
+
+_BUCKET_GLYPH: dict[str, str] = {
+    "correct": CORRECT_GLYPH,
+    "incorrect": INCORRECT_GLYPH,
+    "could_not_read": COULD_NOT_READ_GLYPH,
+    "waiting_on_key": NO_ANSWER_KEY_GLYPH,
+    "needs_a_person": NEEDS_PERSON_GLYPH,
+    "repeat": REPEAT_GLYPH,
+}
+
+# Buckets that count toward the results-table summary's "to look at" tally --
+# things a student herself can act on (retry, or retake a clearer photo).
+# Everything else is either "correct" or "waiting_on_grownup"
+# ("waiting_on_key", "needs_a_person" -- neither is hers to resolve).
+_TO_LOOK_AT_BUCKETS = frozenset({"incorrect", "could_not_read", "repeat"})
+_WAITING_ON_GROWNUP_BUCKETS = frozenset({"waiting_on_key", "needs_a_person"})
 
 
 def _join_labels(labels: list[str]) -> str:
@@ -170,12 +236,21 @@ class StudentResultView:
     problem. No `expected_answer` field -- when the policy permits showing it,
     it is already folded into `message`. `outcome` drives styling only, and is
     deliberately overridden to `"repeat"` on a suppressed multi-attempt response
-    -- the true correctness must not leak through the CSS class either."""
+    -- the true correctness must not leak through the CSS class either.
+
+    `display_bucket` is the coarser, six-way grouping ("correct", "incorrect",
+    "could_not_read", "waiting_on_key", "needs_a_person", "repeat") the results
+    table's glyph and summary counts are keyed to -- see _needs_human_bucket
+    above. `display_number` is `problem_id` unless it is a synthetic
+    AMBIGUOUS_PROBLEM_ID_PREFIX placeholder (k12ta.pipeline.process), in which
+    case there is no real printed number to show and this is "?" instead."""
 
     problem_id: str
     prompt_text: str
     student_answer_raw: str
     outcome: str
+    display_bucket: str
+    display_number: str
     glyph: str
     message: str
 
@@ -200,32 +275,118 @@ def render_student_result(
     problem identity (student, source, page, problem_id), across every session
     and capture, EXCLUDING this row itself."""
     if row.outcome == "needs_human":
-        glyph, message = _needs_human_copy(
+        _, message = _needs_human_copy(
             row.needs_human_cause, row.needs_human_detail, row.expected_answer
         )
         outcome = row.outcome
+        bucket = _needs_human_bucket(row.needs_human_cause)
     elif (
         not rules.reveal_final_answer
         and row.outcome in ("correct", "incorrect")
         and already_disclosed(prior_attempts, student_answer_raw)
     ):
-        glyph, message, outcome = REPEAT_GLYPH, REPEAT_MESSAGE, "repeat"
+        message, outcome, bucket = REPEAT_MESSAGE, "repeat", "repeat"
     elif row.outcome == "correct":
-        glyph, outcome = CORRECT_GLYPH, row.outcome
+        outcome, bucket = row.outcome, "correct"
         message = CORRECT_UNSIMPLIFIED_MESSAGE if row.unsimplified else CORRECT_MESSAGE
     else:
-        outcome = row.outcome
+        outcome, bucket = row.outcome, "incorrect"
         if rules.reveal_final_answer:
-            glyph = INCORRECT_GLYPH
             message = f"Not quite. The answer is {row.expected_answer}."
         else:
-            glyph, message = INCORRECT_GLYPH, INCORRECT_RESTRICTED_MESSAGE
+            message = INCORRECT_RESTRICTED_MESSAGE
+
+    display_number = (
+        "?" if row.problem_id.startswith(AMBIGUOUS_PROBLEM_ID_PREFIX) else row.problem_id
+    )
 
     return StudentResultView(
         problem_id=row.problem_id,
         prompt_text=prompt_text,
         student_answer_raw=student_answer_raw,
         outcome=outcome,
-        glyph=glyph,
+        display_bucket=bucket,
+        display_number=display_number,
+        glyph=_BUCKET_GLYPH[bucket],
         message=message,
+    )
+
+
+@dataclass(frozen=True)
+class ResultsSummary:
+    """The shape of a results page before a student reads a single row: how many
+    right, how many worth another look, how many out of her hands entirely.
+    `encouragement` is generated here, deterministically, from this session's own
+    counts and problem numbers -- no model call, and deliberately no cross-session
+    "same as last time" comparison (that needs a "previous session for this
+    source" query that does not exist yet in k12ta.store.sessions; see
+    docs/ROADMAP.md's parent-surface note). Still written to prompts/coach_voice.
+    md's voice rules where they apply to what this layer actually has: specific
+    (names real problem numbers, not "some questions"), brief, and never
+    generic praise dressed up as personal -- see _encouragement below."""
+
+    right: int
+    to_look_at: int
+    waiting_on_grownup: int
+    encouragement: str
+
+
+def _look_at_numbers(items: Sequence[StudentResultView]) -> list[str]:
+    """Real, printed problem numbers among the to-look-at items, in results
+    order -- an AMBIGUOUS_PROBLEM_ID placeholder ("?") is never named here,
+    since there is nothing concrete on the page to point her at."""
+    return [
+        item.display_number
+        for item in items
+        if item.display_bucket in _TO_LOOK_AT_BUCKETS and item.display_number != "?"
+    ]
+
+
+def _encouragement(
+    items: Sequence[StudentResultView], right: int, to_look_at: int, waiting: int, total: int
+) -> str:
+    if total == 0:
+        return ""
+    if to_look_at == 0 and waiting == 0:
+        return "All correct." if right == 1 else f"All {right} correct."
+
+    if to_look_at == 0:
+        sentences = [f"{right} of {total} correct."]
+    else:
+        numbers = _look_at_numbers(items)
+        if numbers:
+            noun = "Problem" if len(numbers) == 1 else "Problems"
+            verb = "is" if len(numbers) == 1 else "are"
+            sentences = [
+                f"{right} of {total} correct. {noun} {_join_labels(numbers)} "
+                f"{verb} worth another look."
+            ]
+        else:
+            sentences = [f"{right} of {total} correct."]
+
+    if waiting == 1:
+        sentences.append("One needs a grown-up to check.")
+    elif waiting > 1:
+        sentences.append(f"{waiting} need a grown-up to check.")
+
+    return " ".join(sentences)
+
+
+def summarize_results(items: Sequence[StudentResultView]) -> ResultsSummary:
+    """Tally a session's already-rendered items into the three counts a parent-
+    or-student-facing header shows before any individual row. Reads only
+    `display_bucket`/`display_number`, both already policy-filtered by
+    render_student_result -- a repeat's true correctness cannot leak into this
+    tally any more than it can into its own row, since REPEAT is its own bucket,
+    never folded into "correct" or "incorrect" here."""
+    right = sum(1 for item in items if item.display_bucket == "correct")
+    to_look_at = sum(1 for item in items if item.display_bucket in _TO_LOOK_AT_BUCKETS)
+    waiting_on_grownup = sum(
+        1 for item in items if item.display_bucket in _WAITING_ON_GROWNUP_BUCKETS
+    )
+    return ResultsSummary(
+        right=right,
+        to_look_at=to_look_at,
+        waiting_on_grownup=waiting_on_grownup,
+        encouragement=_encouragement(items, right, to_look_at, waiting_on_grownup, len(items)),
     )

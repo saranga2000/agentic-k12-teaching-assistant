@@ -19,6 +19,7 @@ from k12ta.pipeline.process import (
     PipelineStatus,
     process_capture,
     regrade_capture_for_resolved_identity,
+    replay_source,
 )
 from k12ta.store import (
     answer_keys,
@@ -199,6 +200,79 @@ def test_successful_transcribe_persists_problems_and_needs_human_graded_rows(
     quota_count = quota.get_count(conn, TODAY)
     assert quota_count == 1
 
+    cur = conn.execute("SELECT capture_id FROM page_captures WHERE student_id = ?", (student_id,))
+    capture_row = captures.get_page_capture(conn, student_id, cur.fetchone()[0])
+    assert capture_row is not None
+    assert capture_row.transcribe_failure_reason is None
+
+
+def test_blank_or_duplicate_problem_id_escalates_instead_of_crashing(
+    tmp_path: Path,
+) -> None:
+    """Found 2026-08-20 on real data: two items sharing a blank problem_id
+    crashed process_capture outright (a UNIQUE constraint violation on
+    problems, raised from inside the capture worker thread). Every ambiguous
+    item -- blank, or a repeat of another item's problem_id -- must instead
+    escalate to NEEDS_HUMAN/AMBIGUOUS_PROBLEM_ID, storable without collision,
+    losing nothing. A normal, uniquely-identified item on the same photo is
+    unaffected."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="19", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="", prompt_text="q2", student_answer_raw="a1", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="", prompt_text="q3", student_answer_raw="a2", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="3", prompt_text="q4", student_answer_raw="a3", confidence=0.99
+                ),
+                TranscribedItem(
+                    problem_id="3", prompt_text="q5", student_answer_raw="a4", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.GRADED
+    assert outcome.session_id is not None
+
+    capture_id = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)[
+        0
+    ].capture_id
+    stored_problems = captures.list_problems_for_capture(conn, student_id, capture_id)
+    assert len(stored_problems) == 5  # nothing dropped
+
+    graded_by_problem_id = {
+        g.problem_id: g
+        for g in sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    }
+    assert len(graded_by_problem_id) == 5  # each stored problem_id is unique, nothing collided
+
+    # The one unambiguous item is unaffected -- unknown_page, same as any other
+    # item on a photo with no resolvable identity, never ambiguous_problem_id.
+    assert graded_by_problem_id["1"].needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value
+    ambiguous = [g for pid, g in graded_by_problem_id.items() if pid != "1"]
+    assert len(ambiguous) == 4
+    assert all(g.needs_human_cause == NeedsHumanCause.AMBIGUOUS_PROBLEM_ID.value for g in ambiguous)
+
 
 def test_quota_already_exhausted_never_calls_the_transcriber(tmp_path: Path) -> None:
     conn = _migrated_connection()
@@ -242,8 +316,13 @@ def test_transcriber_construction_failure_degrades_gracefully(tmp_path: Path) ->
     assert "unsupported LLM provider" in outcome.failure_reason
     # The photo was still preserved -- construction failing is a transcribe failure,
     # not a quota-exhausted one, and follows the same "preserve the photo" rule.
-    cur = conn.execute("SELECT COUNT(*) FROM page_captures WHERE student_id = ?", (student_id,))
-    assert cur.fetchone()[0] == 1
+    cur = conn.execute("SELECT capture_id FROM page_captures WHERE student_id = ?", (student_id,))
+    row = cur.fetchone()
+    assert row is not None
+    capture_row = captures.get_page_capture(conn, student_id, row[0])
+    assert capture_row is not None
+    # Diagnosable after the fact, not only in a log line that doesn't survive a restart.
+    assert capture_row.transcribe_failure_reason == outcome.failure_reason
 
 
 def test_transcribe_failure_preserves_the_photo_but_persists_nothing_else(
@@ -269,10 +348,48 @@ def test_transcribe_failure_preserves_the_photo_but_persists_nothing_else(
     capture_row = captures.get_page_capture(conn, student_id, row[0])
     assert capture_row is not None
     assert Path(capture_row.image_path).exists()
+    # Diagnosable after the fact, not only in a log line that doesn't survive a restart.
+    assert capture_row.transcribe_failure_reason == "simulated unreadable"
 
     assert captures.list_problems_for_capture(conn, student_id, row[0]) == []
     cur = conn.execute("SELECT COUNT(*) FROM sessions WHERE student_id = ?", (student_id,))
     assert cur.fetchone()[0] == 0
+
+
+def test_provider_rate_limit_is_a_distinct_outcome_from_an_ordinary_transcribe_failure(
+    tmp_path: Path,
+) -> None:
+    """A real 429 exhausting VisionLLMTranscriber's own retry budget (surfaced
+    as FailureKind.RATE_LIMITED, never a raised exception -- see k12ta.
+    transcribe.base.Transcriber's "must not raise" contract) is not a
+    transcription problem: the photo may be perfectly legible, the provider
+    is just out of capacity. Conflating it with "I couldn't read this one"
+    hid a whole week's worth of real rate-limiting behind a message that
+    sounded like a photo-quality issue."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(result=_failure_result(FailureKind.RATE_LIMITED))
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    assert outcome.status is PipelineStatus.RATE_LIMITED
+    assert outcome.status is not PipelineStatus.TRANSCRIBE_FAILED
+    assert outcome.session_id is None
+    assert quota.get_count(conn, TODAY) == 1  # the attempt still counted
+
+    cur = conn.execute("SELECT capture_id FROM page_captures WHERE student_id = ?", (student_id,))
+    row = cur.fetchone()
+    assert row is not None
+    capture_row = captures.get_page_capture(conn, student_id, row[0])
+    assert capture_row is not None
+    # Its own persisted reason, not the ordinary transcribe-failure column --
+    # a query can tell the two apart without parsing free text.
+    assert capture_row.rate_limited_reason == "simulated rate_limited"
+    assert capture_row.transcribe_failure_reason is None
 
 
 def test_daily_counter_survives_a_simulated_server_restart(tmp_path: Path) -> None:
@@ -905,6 +1022,68 @@ def test_regrade_capture_for_resolved_identity_can_still_land_on_needs_human(
     assert graded[0].outcome == "needs_human"
     assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
     assert graded[0].page_number == 21
+
+
+def test_replay_source_regrades_every_resolved_capture_from_stored_transcription(
+    tmp_path: Path,
+) -> None:
+    """The regression-corpus driver: once a real photo's page identity is
+    known, replay_source re-decides it against whatever the answer key says
+    *right now* -- no re-transcription, no model call -- so a key correction
+    or a decide() change can be checked against every real capture on file in
+    seconds instead of re-ingesting photos and spending quota again."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="19", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        )
+    )
+
+    # Two real captures, resolved to two different pages, both before any key exists.
+    outcome_a = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"a", page_number=13
+    )
+    outcome_b = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"b", page_number=15
+    )
+    for outcome in (outcome_a, outcome_b):
+        graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+        assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+
+    # The key arrives afterward, same as a parent scanning it days later.
+    for page_number in (13, 15):
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id=student_id,
+                source_id="summer_bridge",
+                page_number=page_number,
+                problem_number="1",
+                answer_text="19",
+                ungradeable_reason=None,
+                confirmed_at="2026-08-14T08:00:00+00:00",
+            ),
+        )
+
+    summary = replay_source(conn, student_id, "summer_bridge")
+
+    assert summary.captures_replayed == 2
+    for outcome in (outcome_a, outcome_b):
+        graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+        assert graded[0].outcome == "correct"
+    assert transcriber.request_count == 2  # never called again during replay
 
 
 def test_manual_page_number_override_skips_auto_resolution_entirely(

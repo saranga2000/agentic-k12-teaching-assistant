@@ -47,9 +47,15 @@ class Settings:
     daily_token_budget_usd: Decimal
     daily_request_limit: int
     """Hard ceiling on transcribe attempts per calendar day, persisted in the database
-    (see k12ta.store.quota) so a server restart cannot reset it. Default 20: two
-    children, a handful of pages per sitting, generous headroom, still a real ceiling.
-    Raise it via K12TA_DAILY_REQUEST_LIMIT once real usage patterns are known."""
+    (see k12ta.store.quota) so a server restart cannot reset it. This is a local safety
+    valve against a runaway loop, not an attempt to match Google's own free-tier ceiling
+    -- Google no longer publishes a static rate-limit table (checked ai.google.dev/
+    gemini-api/docs/rate-limits directly, 2026-08-20); it defers to the account's own AI
+    Studio dashboard, and this setting has no relationship to that number at all. It also
+    does not gate evals/integrity/run.py's live eval calls, which never check it. Default
+    60: three times a planned 20-photo batch of headroom for one real day's use, while
+    still stopping a genuine runaway well short of hundreds of calls unattended. Raise it
+    via K12TA_DAILY_REQUEST_LIMIT if real usage patterns need more."""
     log_level: str
 
     @staticmethod
@@ -62,6 +68,6 @@ class Settings:
             data_dir=Path(os.environ.get("K12TA_DATA_DIR", "./data")),
             coach_name=os.environ.get("K12TA_COACH_NAME", COACH_NAME_PLACEHOLDER),
             daily_token_budget_usd=Decimal(os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")),
-            daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "20")),
+            daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "60")),
             log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),
         )

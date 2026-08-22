@@ -1,6 +1,6 @@
 ---
 id: transcribe_page
-version: 4
+version: 5
 covered_by: evals/run_transcription_eval.py
 ---
 
@@ -10,7 +10,10 @@ Return JSON only. No prose, no markdown fence.
 
 For every problem visible on the page, emit one object with:
 - `problem_id`: the number or label printed on the page, as printed
-- `prompt_text`: the problem as printed, in plain text, LaTeX for mathematical notation
+- `prompt_text`: the problem as printed, in plain readable text -- a student reading
+  it back should not need to know any typesetting notation. Write a fraction as
+  "3/4", an exponent as "x^2" or "x squared" (whichever the page's own style implies),
+  a square root as "the square root of 16", never as LaTeX or any other markup
 - `student_answer_raw`: exactly what the student wrote as their final answer, character
   for character, including errors. Do not correct it. Do not complete it.
 - `confidence`: 0.0 to 1.0, your probability that `student_answer_raw`, as you

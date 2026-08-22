@@ -638,6 +638,40 @@ def test_post_capture_when_transcription_fails_offers_retake_and_keeps_the_photo
     assert cur.fetchone()[0] == 0
 
 
+def test_post_capture_when_provider_is_rate_limited_shows_a_distinct_honest_message(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeTranscriber,
+) -> None:
+    """Not "I couldn't read this one" -- that message reads as a photo problem,
+    and a real provider rate limit is not one. The two must be visibly
+    different messages, not the same generic copy for two different causes."""
+    _seed_two_students(conn)
+    _seed_todays_schedule(conn, "s-marcus")
+    assignment = get_or_create_todays_assignment(conn, "s-marcus", "summer_bridge", date.today())
+    transcriber.result = _failure_result(FailureKind.RATE_LIMITED)
+
+    response = client.post(
+        "/capture/s-marcus",
+        data={"assignment_id": assignment.assignment_id},
+        files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    final = _final_event(response)
+    assert web_app.REJECT_MESSAGES["rate_limited"] in final["html"]
+    assert web_app.REJECT_MESSAGES["could_not_transcribe"] not in final["html"]
+    assert _step_statuses(response, "read") == ["started", "failed"]
+
+    cur = conn.execute("SELECT capture_id FROM page_captures WHERE student_id = ?", ("s-marcus",))
+    row = cur.fetchone()
+    assert row is not None  # the photo was preserved, same as an ordinary transcribe failure
+    capture_row = store_captures.get_page_capture(conn, "s-marcus", row[0])
+    assert capture_row is not None
+    assert capture_row.rate_limited_reason is not None
+    assert capture_row.transcribe_failure_reason is None
+
+
 def test_results_page_for_an_unknown_session_is_a_clear_not_found(client: TestClient) -> None:
     response = client.get("/session/s-marcus/does-not-exist")
     assert response.status_code == 404
@@ -722,6 +756,71 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     assert "outcome-correct" in response.text
     assert "outcome-incorrect" in response.text
     assert "outcome-needs-human" in response.text
+
+
+def test_results_table_orders_by_real_question_number_not_string_order(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """ "10" must sort after "2", not before it -- plain string ordering would
+    put it right after "1", which doesn't match the physical page a parent or
+    student is holding while reading this table."""
+    _seed_two_students(conn)
+    _seed_todays_schedule(conn, "s-marcus")
+    assignment = get_or_create_todays_assignment(conn, "s-marcus", "summer_bridge", date.today())
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-ordering",
+            assignment_id=assignment.assignment_id,
+            captured_at="2026-08-12T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    for problem_id in ("10", "2", "1"):
+        store_captures.insert_problem(
+            conn,
+            store_captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id="c-ordering",
+                problem_id=problem_id,
+                # Trailing marker, not a bare number: "problem-1-marker" is not a
+                # substring of "problem-10-marker", so the position check below
+                # can't accidentally match the wrong row.
+                prompt_text=f"problem-{problem_id}-marker",
+                student_answer_raw="1",
+                transcription_confidence=0.99,
+            ),
+        )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-ordering",
+            assignment_id=assignment.assignment_id,
+            started_at="2026-08-12T08:00:00+00:00",
+            ended_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    for problem_id in ("10", "2", "1"):
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id="sess-ordering",
+                capture_id="c-ordering",
+                problem_id=problem_id,
+                outcome="correct",
+                grader_confidence=0.99,
+            ),
+        )
+
+    response = client.get("/session/s-marcus/sess-ordering")
+
+    assert response.status_code == 200
+    text = response.text
+    positions = {pid: text.index(f"problem-{pid}-marker") for pid in ("1", "2", "10")}
+    assert positions["1"] < positions["2"] < positions["10"]
 
 
 def _seed_partial_identity_session(

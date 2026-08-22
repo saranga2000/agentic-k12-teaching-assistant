@@ -34,6 +34,14 @@ honest about what is and is not known:
   re-photographing with the missing part in frame, and the message can say so
   specifically because `k12ta.grading.page_identity.PageIdentityResolution` names
   which components were seen and which were missing.
+- `AMBIGUOUS_PROBLEM_ID`: a photo's transcription produced an item with a blank
+  `problem_id`, or a `problem_id` that repeats across more than one item on the
+  same photo -- there is nothing to safely key a grade to. Found 2026-08-20 on
+  real data: two blank-`problem_id` items on one photo crashed the pipeline
+  outright (a UNIQUE constraint violation on `problems`), not merely graded
+  wrong. Decided in `k12ta.pipeline.process`, upstream of `decide`, for the same
+  reason as the two causes above: `decide` is never even reached for one of
+  these items, since there is no single question to key its answer to.
 
 `NEEDS_PERSON` deliberately bundles two situations that genuinely both need a
 person: the key says the answer varies, and the answer field is empty. No separate
@@ -80,6 +88,11 @@ class NeedsHumanCause(StrEnum):
     ANSWER_DIFFERS_FROM_KEY = "answer_differs_from_key"
     """A non-numeric answer that doesn't exactly match the key -- may still be
     right under a different valid name. See the module docstring above."""
+
+    AMBIGUOUS_PROBLEM_ID = "ambiguous_problem_id"
+    """A blank or duplicate problem_id on one photo -- decided by
+    k12ta.pipeline.process, never by decide() below. See the module docstring
+    above."""
 
 
 @dataclass(frozen=True)

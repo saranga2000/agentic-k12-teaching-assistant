@@ -14,7 +14,13 @@ import pytest
 
 from k12ta.domain.attempts import PastAttempt
 from k12ta.domain.policy import FeedbackMode, rules_for
-from k12ta.respond.render import render_student_result
+from k12ta.pipeline.process import AMBIGUOUS_PROBLEM_ID_PREFIX
+from k12ta.respond.render import (
+    AMBIGUOUS_PROBLEM_ID_MESSAGE,
+    StudentResultView,
+    render_student_result,
+    summarize_results,
+)
 from k12ta.store.sessions import GradedProblemRow
 
 _FULL = rules_for(FeedbackMode.FULL)
@@ -137,6 +143,18 @@ def test_needs_human_message_does_not_change_with_expected_answer_present() -> N
     assert "42" not in view.message
 
 
+def test_ambiguous_problem_id_says_which_question_not_which_answer() -> None:
+    """Actionable, not just a diagnosis: the gap is which question this answer
+    belongs to, not whether the writing was legible -- must read differently
+    from LOW_CONFIDENCE's "I could not read your writing."."""
+    row = _row(outcome="needs_human", needs_human_cause="ambiguous_problem_id")
+
+    view = render_student_result(row, "12 + 7", "19", rules=_FULL, prior_attempts=())
+
+    assert view.message == AMBIGUOUS_PROBLEM_ID_MESSAGE
+    assert "question" in view.message.lower()
+
+
 def test_answer_differs_from_key_shows_both_answers_and_marks_nothing() -> None:
     """The one deliberate exception to the invariant above: this cause exists
     specifically so a name that differs from the key (a rhombus vs.
@@ -256,6 +274,162 @@ def test_full_mode_ignores_attempt_history_entirely() -> None:
 
     assert view.message == "Correct!"
     assert view.outcome == "correct"
+
+
+# -- Results table display bucket (eight NeedsHumanCause values -> six glance-able
+# states: correct, correct-but-unsimplified, incorrect, could-not-read,
+# waiting-on-a-key, needs-a-person) -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cause,expected_bucket",
+    [
+        ("low_confidence", "could_not_read"),
+        ("unknown_page", "could_not_read"),
+        ("conflicting_page_markers", "could_not_read"),
+        ("partial_page_markers", "could_not_read"),
+        ("ambiguous_problem_id", "could_not_read"),
+        ("no_key_for_page", "waiting_on_key"),
+        ("needs_person", "needs_a_person"),
+        ("answer_differs_from_key", "needs_a_person"),
+    ],
+)
+def test_every_needs_human_cause_maps_to_one_of_three_display_buckets(
+    cause: str, expected_bucket: str
+) -> None:
+    row = _row(outcome="needs_human", needs_human_cause=cause)
+
+    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+
+    assert view.display_bucket == expected_bucket
+
+
+def test_a_needs_human_row_with_no_claimed_cause_falls_to_needs_a_person() -> None:
+    """A row graded before the needs_human_cause column existed (migration 0006)
+    -- genuinely unknown, so it goes to the bucket a grown-up must resolve,
+    never guessed into could-not-read or waiting-on-key."""
+    row = _row(outcome="needs_human", needs_human_cause=None)
+
+    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+
+    assert view.display_bucket == "needs_a_person"
+
+
+def test_correct_and_unsimplified_share_a_bucket_but_not_a_message() -> None:
+    plain = render_student_result(
+        _row(outcome="correct"), "12 + 7", "19", rules=_FULL, prior_attempts=()
+    )
+    unsimplified = render_student_result(
+        _row(outcome="correct", unsimplified=True), "2/6?", "2/6", rules=_FULL, prior_attempts=()
+    )
+
+    assert plain.display_bucket == unsimplified.display_bucket == "correct"
+    assert plain.message != unsimplified.message
+
+
+def test_display_number_is_the_real_problem_id() -> None:
+    view = render_student_result(
+        _row(problem_id="4"), "12 + 7", "18", rules=_FULL, prior_attempts=()
+    )
+
+    assert view.display_number == "4"
+
+
+def test_display_number_hides_a_synthetic_ambiguous_placeholder() -> None:
+    """AMBIGUOUS_PROBLEM_ID_PREFIX ids (k12ta.pipeline.process) are never a real
+    printed label -- showing one in the results table's "#" column would be
+    more confusing than the honest "no number to show" it actually is."""
+    row = _row(problem_id=f"{AMBIGUOUS_PROBLEM_ID_PREFIX}0")
+
+    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+
+    assert view.display_number == "?"
+
+
+def test_suppressed_repeat_still_gets_its_own_display_bucket() -> None:
+    """Not "correct" or "incorrect" -- a bucket that never varies with the true
+    outcome, mirroring the glyph/message suppression itself."""
+    prior = (PastAttempt(outcome="incorrect", student_answer_raw="18"),)
+
+    view = render_student_result(
+        _row(outcome="correct"), "12 + 7", "19", rules=_DIAGNOSTIC_ONLY, prior_attempts=prior
+    )
+
+    assert view.display_bucket == "repeat"
+
+
+# -- summarize_results: the page's summary counts and encouragement ----------
+
+
+def _view(
+    problem_id: str, prompt_text: str = "12 + 7", answer: str = "19", **overrides: object
+) -> StudentResultView:
+    row = _row(problem_id=problem_id, **overrides)  # type: ignore[arg-type]
+    return render_student_result(row, prompt_text, answer, rules=_FULL, prior_attempts=())
+
+
+def test_summary_counts_right_to_look_at_and_waiting_on_a_grownup() -> None:
+    items = [
+        _view("1", outcome="correct"),
+        _view("2", outcome="correct", unsimplified=True),
+        _view("3", outcome="incorrect"),
+        _view("4", outcome="needs_human", needs_human_cause="low_confidence"),
+        _view("5", outcome="needs_human", needs_human_cause="no_key_for_page"),
+        _view("6", outcome="needs_human", needs_human_cause="needs_person"),
+    ]
+
+    summary = summarize_results(items)
+
+    assert summary.right == 2
+    assert summary.to_look_at == 2
+    assert summary.waiting_on_grownup == 2
+
+
+def test_all_correct_encouragement_names_no_problems() -> None:
+    items = [_view(str(i), outcome="correct") for i in range(1, 4)]
+
+    summary = summarize_results(items)
+
+    assert summary.encouragement == "All 3 correct."
+
+
+def test_encouragement_names_the_real_problem_numbers_to_look_at() -> None:
+    items = [
+        _view("1", outcome="correct"),
+        _view("4", outcome="incorrect"),
+        _view("7", outcome="incorrect"),
+    ]
+
+    summary = summarize_results(items)
+
+    assert summary.encouragement == "1 of 3 correct. Problems 4 and 7 are worth another look."
+
+
+def test_encouragement_never_names_a_synthetic_ambiguous_number() -> None:
+    items = [
+        _view("1", outcome="correct"),
+        _view(
+            f"{AMBIGUOUS_PROBLEM_ID_PREFIX}0",
+            outcome="needs_human",
+            needs_human_cause="ambiguous_problem_id",
+        ),
+    ]
+
+    summary = summarize_results(items)
+
+    assert AMBIGUOUS_PROBLEM_ID_PREFIX not in summary.encouragement
+    assert summary.encouragement == "1 of 2 correct."
+
+
+def test_encouragement_mentions_waiting_on_a_grownup_separately() -> None:
+    items = [
+        _view("1", outcome="correct"),
+        _view("2", outcome="needs_human", needs_human_cause="no_key_for_page"),
+    ]
+
+    summary = summarize_results(items)
+
+    assert summary.encouragement == "1 of 2 correct. One needs a grown-up to check."
 
 
 def test_needs_human_prior_attempts_do_not_count_toward_suppression() -> None:

@@ -195,17 +195,36 @@ touching a keyboard.
 
 ## Parent surface: information architecture
 
-The parent-facing app's current shape (M2.4) puts "scan an answer key" at the top
-level — the first thing a parent sees. That's backwards: it reflects which piece got
-built first, not what a parent actually opens the app for. At 9pm the question is "how
-did they do today," not "let me scan a key." The intended structure, per child:
+The parent app is a dashboard of each child's progress — how they are performing, where
+they are lagging, where a parent needs to pay attention — across every programme
+enrollment, in one screen, per child. From there a parent adds a child, enrolls them in
+programmes, and manages each programme's exercises and answer keys, however they arrive:
+a photographed page, an uploaded screenshot, or typed by hand. That is the whole shape of
+the app, top to bottom: progress at the top, enrollment management under it, exercise/key
+management under each enrollment.
 
-1. **Daily progress.** The default view, and the reason to open the app at all: time
-   on task, what was worked on, what needs attention. Arrives with M5.
-2. **Enrollments.** The configured content sources — RSM, Kumon, school, workbooks.
-   Add, edit, and per-enrollment settings live here. "Content source" is the internal
-   name (`k12ta.content`, `content_sources`); the parent-facing word should be one a
-   parent recognises without translation. Three options, in order of preference:
+The current shape (M2.4) puts "scan an answer key" at the top level — the first thing a
+parent sees. That's backwards: it reflects which piece got built first, not what a parent
+actually opens the app for. At 9pm the question is "how did they do today," not "let me
+scan a key." The intended structure, per child, with what actually exists today against
+each piece:
+
+1. **Daily/weekly progress — the dashboard.** The default view, and the reason to open
+   the app at all: how each child is doing, where they're lagging, what needs attention,
+   rolled up across every enrollment. **Does not exist, and cannot yet.** Not a screen
+   waiting to be built — a screen with nothing to report. It depends on the mastery model
+   existing at all (M4: skill tags on graded problems, evidence per session, a
+   retention/decay signal per skill) and on M5 turning that evidence into something a
+   parent reads in one sitting instead of querying by hand. **This dashboard is the
+   payoff both M4 and M5 exist for** — see the note on each milestone below.
+2. **Enrollments.** The configured content sources — RSM, Kumon, school, workbooks. Add
+   a child, then add each enrollment, with its own settings, from here. **Exists**
+   (`k12ta.keys.app.enrollment_setup_screen` / `submit_enrollment_setup`, M3.1) —
+   creation only; there is no way to edit one afterward yet, a gap found 2026-08-19 while
+   trying to rename a source's label (`content.py` has no `update_content_source`, and
+   `enrollment_detail` only reads). "Content source" is the internal name (`k12ta.
+   content`, `content_sources`); the parent-facing word should be one a parent
+   recognises without translation. Three options, in order of preference:
    - **"Enrollments"** — matches how a parent already thinks about this ("what is
      she enrolled in this year"), covers a school subject and a tutoring programme
      and a summer workbook with one word, and doesn't imply a subscription or a
@@ -217,16 +236,28 @@ did they do today," not "let me scan a key." The intended structure, per child:
      "math" a second time.
    Recommendation: **Enrollments**, used consistently as the parent-facing label from
    here on, `content_sources` remaining the internal/schema name.
-3. **Per-enrollment detail.** Recent sessions, answer keys on file, which pages are
-   waiting on a key. Scanning a key lives *here*, under the enrollment it belongs to
-   — not at the top level, since a key only ever means something in the context of
-   one enrollment.
+3. **Per-enrollment: exercises and answer keys.** Recent sessions; the exercises and
+   answer keys on file for this one programme; which pages are waiting on one. Scanning
+   or entering a key lives *here*, under the enrollment it belongs to — not at the top
+   level, since a key only ever means something in the context of one enrollment.
+   **Exists**, piecemeal, all under `k12ta.keys.app.enrollment_detail`: key scanning
+   from a photographed page (`/upload` + `/confirm`, M2.4/Scope B), manual page-identity
+   mapping with no photo (`/identity/manual-entry`, for a mapping already verified
+   against the physical book), manual answer entry with no photo (`/answers/manual-
+   entry`, M3.4), and the pending list grouped by cause — "waiting on an answer key,"
+   "waiting on page identity," "transcription could not be read," "needs a person to
+   judge," "answer differs from the key" (Scope B). An uploaded screenshot, for a source
+   configured `SourceKind.ONLINE_EXERCISE`, goes through the same capture path with the
+   two-page-spread heuristic switched off — it does not need its own separate upload
+   flow. **Not yet built here:** a parent-side picker for the identity dead ends
+   (`NO_SCHEMA`/`NO_MARKERS`/`BELOW_FLOOR`/`NO_MAPPING`) that never auto-resolve today
+   and currently have no fix short of re-scanning (planned 2026-08-19, deliberately not
+   started before this dashboard note was written down).
 4. **Review and correct.** The M5 correction loop: a parent fixes a wrong grade or
    transcription, and each correction becomes an eval fixture as a byproduct (see M5).
+   **Does not exist** — depends on M5's correction loop.
 
-Most of this depends on milestones not yet built — daily progress needs M5's session
-rollups, review-and-correct needs M5's correction loop, and even "pages waiting on a
-key" needs the page-identity work named above. It lands incrementally, one real screen
+Most of this depends on milestones not yet built. It lands incrementally, one real screen
 per milestone, as the data behind it becomes real. **Do not build placeholder screens
 for sections with no data behind them** — say so in a line of text instead (see M2.4's
 restructure, which does exactly this for the two sections above that don't exist yet).
@@ -361,6 +392,73 @@ closes for free via the identity schema setup + `submit_manual_mapping` already 
 `content.AssignmentRow` has no `page_number` field today, and `process_capture` would
 need a branch preferring an assignment-bound number over `resolve()` entirely.
 
+**M3.5: pipeline hardening from real captures, found 2026-08-20.** Two bugs surfaced by
+real photographs going through the live pipeline rather than fixtures, plus one tool
+built in response to the second:
+
+- **A blank or duplicate `problem_id` on one photo crashed `process_capture` outright**
+  — a UNIQUE constraint violation on `problems`, not merely a wrong grade, since nothing
+  stopped two items claiming the same (or no) printed number from colliding on write.
+  `k12ta.pipeline.process._resolve_storage_problem_ids` now detects both cases and mints
+  a synthesized, per-index placeholder (`AMBIGUOUS_PROBLEM_ID_PREFIX`, never a real
+  printed label, never used for key lookup or `k12ta.domain.attempts`' cross-capture
+  identity) so both items are still stored and shown, not silently dropped. Both are
+  forced to `NEEDS_HUMAN` / `NeedsHumanCause.AMBIGUOUS_PROBLEM_ID` — decided here, before
+  `decide()` ever sees them, the same way `k12ta.grading.page_identity` already decides
+  `CONFLICTING_PAGE_MARKERS`/`PARTIAL_PAGE_MARKERS` upstream of it.
+- **A provider rate limit was being recorded and shown identically to an ordinary
+  transcription failure**, even though the photo may have been perfectly legible — the
+  provider was just out of capacity. `PipelineStatus.RATE_LIMITED` is now its own
+  outcome, `captures.record_rate_limited` its own persisted column (never
+  `capture_transcribe_failure_reason`, migrations 0014/0015), so a diagnostic query can
+  tell the two apart instead of guessing from free text. `PipelineStatus.INTERNAL_ERROR`
+  does the same for an exception that escapes capture processing entirely — the
+  `_stream_capture_response` worker wrapper's last resort, distinct from a classified
+  transcription problem because, by definition, nothing is known about its cause.
+- **`replay_source`** (`k12ta.pipeline.process`, driven by `scripts/replay_source.py`):
+  re-decides every already-resolved capture for one source against the answer key and
+  grading logic as they stand right now — zero model calls, since it only calls
+  `regrade_capture_for_resolved_identity`, which itself never re-transcribes. Turns a
+  one-time batch of real photographs into a permanent, free regression corpus: re-run
+  after any key correction or `decide()` change to see its effect on every real capture
+  on file in seconds, instead of re-photographing and spending quota again.
+
+**M3.6: student results page rework — structure and content, not styling.** The results
+screen (`session_result.html`) was a flat list of dashed cards with raw LaTeX, tiny
+status glyphs, and a message per item — it told a student nothing about the shape of her
+page before she started reading, and asked her to parse eight `NeedsHumanCause` glyphs to
+tell "retake the photo" apart from "wait for a grown-up." Reworked, per a spec shared and
+refined in conversation rather than written here first:
+
+- **LaTeX stripped at the source, not with regex after the fact.**
+  `prompts/transcribe_page.md` (version 5) now asks the model for plain readable text —
+  "3/4", "x^2" — instead of LaTeX, so `prompt_text` is human-readable the moment it's
+  transcribed. No stripping layer to maintain against every notation the model might emit.
+- **Eight `NeedsHumanCause` values collapse to three display buckets**
+  (`k12ta.respond.render._needs_human_bucket`: `could_not_read`, `waiting_on_key`,
+  `needs_a_person`) alongside `correct`, `incorrect`, and the multi-attempt-oracle's
+  `repeat` — six states a student learns to recognise by glyph and row tint at a glance,
+  not eight. The per-cause message stays exactly as specific as it always was; only the
+  glyph and background are bucket-uniform now. `INCORRECT_GLYPH` changed from `✎` to
+  `✗`, matching the capture screen's own "not this" vocabulary rather than introducing a
+  second symbol for the same idea.
+- **A table, ordered by the real printed question number**, not grading order —
+  `k12ta.web.app._problem_sort_key` sorts numeric `problem_id`s numerically ("2" before
+  "10"), not lexicographically, so the page matches what she's holding. An
+  `AMBIGUOUS_PROBLEM_ID_PREFIX` placeholder (M3.5, above) has no real number to show and
+  renders "?" in the `#` column instead of the internal placeholder string.
+- **A summary before any row** (`k12ta.respond.render.summarize_results` /
+  `ResultsSummary`): how many right, how many to look at, how many waiting on a
+  grown-up — the shape of the page before she scrolls — plus one encouragement line
+  generated deterministically from this session's own counts and real problem numbers
+  ("3 of 7 correct. Problems 4 and 10 are worth another look."). Written to
+  `prompts/coach_voice.md`'s voice where this layer can actually honour it — specific,
+  brief, never generic praise — but **deliberately session-only, not the cross-session
+  "same as last time" comparison the voice file's letter asks for**: that needs a
+  "previous session for this source" query that doesn't exist yet in
+  `k12ta.store.sessions`. A scope cut made explicitly in conversation, not an oversight —
+  worth returning to once the M4/M5 dashboard work below gives this a natural home.
+
 ## M4. Mastery model in the loop
 **4 evenings. This is the headline chapter of the repo.**
 
@@ -372,6 +470,14 @@ need a branch preferring an assignment-bound number over `resolve()` entirely.
   actually read
 
 Done when: a skill practised in week one resurfaces on its own in week four.
+
+**This milestone's real payoff is the parent dashboard**, not the mastery model sitting
+in a database on its own — see "Parent surface: information architecture" above. The
+skill tags, evidence trace, and retention signal built here are what the dashboard has
+to report; without them there is nothing to show, which is why the dashboard section
+above says it does not exist and cannot yet. This milestone's own "done when" is a
+necessary condition for that dashboard, not a sufficient one — M5 still has to turn the
+evidence into the one screen a parent actually opens.
 
 ## M5. Parent weekly digest and outcome logging
 **3 evenings. Demo: the thing that makes the household keep using it.**
@@ -408,6 +514,15 @@ the start:
   same population of label quality, and the eval harness must be able to tell them apart.
 
 Done when: you read the digest instead of asking the children how it went.
+
+**This is the other half of M4's payoff, not a separate one.** M4 makes the evidence
+exist; this milestone is what turns it into the dashboard described in "Parent surface:
+information architecture" — daily/weekly progress across every enrollment, in one
+screen, per child. State this explicitly so it isn't lost as a judgment call later:
+**neither M4 nor M5 is done, in the sense that matters to this household, until that
+one screen exists and a parent opens it instead of asking the children how it went.**
+Both milestones' own "done when" lines above are real and worth hitting on their own
+terms; this is the reason either was worth building at all.
 
 ## M6. Keyless grading with calibration
 **6 evenings. The hard one. Do not start it early.**

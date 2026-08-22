@@ -134,9 +134,9 @@ def test_all_six_needs_human_causes_render_distinct_messages(
 
     page.goto(f"{web_server.base_url}/session/{_STUDENT_ID}/{_SESSION_ID}")
 
-    labels = page.locator(".outcome-label")
-    expect(labels).to_have_count(6)
-    texts = labels.all_text_contents()
+    notes = page.locator(".outcome-note")
+    expect(notes).to_have_count(6)
+    texts = notes.all_text_contents()
     # Six causes, six genuinely different messages -- not the same string twice
     # or a generic fallback repeated across several of them.
     assert len(set(texts)) == 6, f"expected 6 distinct messages, got {texts}"

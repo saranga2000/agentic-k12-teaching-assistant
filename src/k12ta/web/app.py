@@ -39,7 +39,7 @@ from k12ta.pipeline.process import (
     process_capture,
     regrade_capture_for_resolved_identity,
 )
-from k12ta.respond.render import render_student_result
+from k12ta.respond.render import render_student_result, summarize_results
 from k12ta.store import (
     captures,
     content,
@@ -60,6 +60,14 @@ REJECT_MESSAGES = {
     "unreadable_file": "I couldn't open that photo — let's try again.",
     "could_not_transcribe": "I couldn't read this one right now — ask a grown-up if it "
     "keeps happening.",
+    # Deliberately not "I couldn't read this one" -- that reads as a photo problem, and
+    # a real provider rate limit is not one; the photo may be perfectly legible. See
+    # PipelineStatus.RATE_LIMITED.
+    "rate_limited": "The reading service is too busy right now — try again in a few minutes.",
+    # The generic last-resort message, for an exception this route never anticipated --
+    # see the worker() wrapper below. Deliberately not "I couldn't read this one": that
+    # implies a photo problem, and by definition nothing is known about this one's cause.
+    "internal_error": "Something went wrong on my end — ask a grown-up if it keeps happening.",
 }
 NO_ASSIGNMENT_MESSAGE = "No assignment is set for today yet."
 NO_STUDENTS_MESSAGE = (
@@ -73,6 +81,16 @@ load_dotenv()  # must run before any Settings.from_env() call in this module
 logging.basicConfig(
     level=Settings.from_env().log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
+logger = logging.getLogger(__name__)
+
+WORKER_TIMEOUT_SECONDS = 600
+"""A backstop, not the real timeout -- the real one is k12ta.llm._gemini_http's own
+per-attempt inactivity timeout and retry/backoff, already sized for a genuinely slow
+dense page (docs/ROADMAP.md's M2 entry has the measured numbers). This is only what
+protects the request from a *future* bug that escapes both process_capture's own
+exception handling and the worker wrapper below without ever putting anything on the
+queue -- generous on purpose, well above any real call's worst case, so it never
+fires for a legitimately slow model response."""
 
 app = FastAPI()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -249,20 +267,45 @@ def _stream_capture_response(
     updates: queue.Queue[PipelineOutcome] = queue.Queue()
 
     def worker() -> None:
-        outcome = process_capture(
-            conn,
-            settings,
-            lambda: get_transcriber(settings),
-            student.student_id,
-            assignment_id,
-            image_bytes,
-        )
+        # This is the third real hang this shape has produced (see docs/ROADMAP.md,
+        # 2026-08-20): an exception escaping process_capture inside this thread means
+        # updates.put is never called, and the main thread's updates.get blocks
+        # forever -- a stuck spinner, not a rendered failure. Catching everything here
+        # is deliberately broader than "the exceptions we expect": the whole point is
+        # a backstop for the one this codebase has not anticipated yet either.
+        try:
+            outcome = process_capture(
+                conn,
+                settings,
+                lambda: get_transcriber(settings),
+                student.student_id,
+                assignment_id,
+                image_bytes,
+            )
+        except Exception as exc:
+            logger.exception(
+                "unhandled exception in capture worker student_id=%s assignment_id=%s",
+                student.student_id,
+                assignment_id,
+            )
+            outcome = PipelineOutcome.internal_error(f"{type(exc).__name__}: {exc}")
         updates.put(outcome)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    outcome = updates.get()
-    thread.join()
+    try:
+        outcome = updates.get(timeout=WORKER_TIMEOUT_SECONDS)
+    except queue.Empty:
+        # The worker itself never reached its own except block above -- true last
+        # resort, e.g. the thread died without unwinding through Python at all.
+        logger.error(
+            "capture worker produced nothing within %ss student_id=%s assignment_id=%s",
+            WORKER_TIMEOUT_SECONDS,
+            student.student_id,
+            assignment_id,
+        )
+        outcome = PipelineOutcome.internal_error("worker timed out")
+    thread.join(timeout=1)
 
     if outcome.status is PipelineStatus.QUOTA_EXHAUSTED:
         yield step("read", "failed", QUOTA_EXHAUSTED_MESSAGE)
@@ -274,9 +317,17 @@ def _stream_capture_response(
         )
         yield final_html(html)
         return
+    if outcome.status is PipelineStatus.RATE_LIMITED:
+        yield step("read", "failed", REJECT_MESSAGES["rate_limited"])
+        yield final_html(_reject_html(request, student, assignment_id, "rate_limited"))
+        return
     if outcome.status is PipelineStatus.TRANSCRIBE_FAILED:
         yield step("read", "failed", REJECT_MESSAGES["could_not_transcribe"])
         yield final_html(_reject_html(request, student, assignment_id, "could_not_transcribe"))
+        return
+    if outcome.status is PipelineStatus.INTERNAL_ERROR:
+        yield step("read", "failed", REJECT_MESSAGES["internal_error"])
+        yield final_html(_reject_html(request, student, assignment_id, "internal_error"))
         return
 
     yield step("read", "ok")
@@ -460,6 +511,20 @@ def submit_identity_pick(
     return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
 
 
+def _problem_sort_key(problem_id: str) -> str:
+    """Numeric problem_ids ("1", "2", ..., "10") sort in real numeric order, not
+    lexicographic (which would put "10" before "2") -- the whole point of
+    ordering the results table by question number is that it matches the
+    physical page. Zero-padding turns that into a plain string comparison (so
+    the key stays a single, fully-orderable `str` rather than a mixed tuple).
+    Anything non-numeric (a label like "table-x3", or an
+    AMBIGUOUS_PROBLEM_ID_PREFIX placeholder with no real number at all) sorts
+    after every real numbered problem, in plain string order among themselves."""
+    if problem_id.isdigit():
+        return f"0{int(problem_id):09d}"
+    return f"1{problem_id}"
+
+
 def _group_by_problem(
     rows: list[sessions.GradedAttemptRow],
 ) -> dict[tuple[int, str], list[sessions.GradedAttemptRow]]:
@@ -549,6 +614,12 @@ def session_results(
             )
         )
 
+    # Ordered by question number, not database/grading order, so the table lines
+    # up with the physical page a parent or student is holding -- see
+    # _problem_sort_key.
+    items.sort(key=lambda item: _problem_sort_key(item.problem_id))
+    summary = summarize_results(items)
+
     return templates.TemplateResponse(
         request,
         "session_result.html",
@@ -556,6 +627,7 @@ def session_results(
             "student": student,
             "session_id": session_id,
             "items": items,
+            "summary": summary,
             "no_problems_message": NO_PROBLEMS_FOUND_MESSAGE,
             "identity_asks": identity_asks,
         },

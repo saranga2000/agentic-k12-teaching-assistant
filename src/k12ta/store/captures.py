@@ -18,6 +18,23 @@ class PageCaptureRow:
     assignment_id: str
     captured_at: str
     image_path: str
+    transcribe_failure_reason: str | None = None
+    """Set only when this capture's transcribe step failed for a reason other
+    than provider rate-limiting -- the exception's type and message, or a
+    TranscriptionResult's own declared `failure` string. None for a capture
+    still in flight, and None for a successful transcribe that simply found
+    zero problems (see k12ta.pipeline.process -- that is not a failure).
+    Written by record_transcribe_failure below, never at insert_page_capture
+    time, since a capture's row exists before its transcribe step even
+    starts. Never set alongside rate_limited_reason -- see that field."""
+    rate_limited_reason: str | None = None
+    """Set only when this capture's transcribe step failed specifically
+    because the provider's own rate limit was exhausted (FailureKind.
+    RATE_LIMITED) -- kept distinct from transcribe_failure_reason because it
+    is not a transcription problem: the photo may be perfectly legible, the
+    provider is just out of capacity. Written by record_rate_limited below.
+    Never set alongside transcribe_failure_reason -- process_capture's
+    failure branches are mutually exclusive by construction."""
 
 
 def insert_page_capture(conn: sqlite3.Connection, row: PageCaptureRow) -> None:
@@ -42,6 +59,40 @@ def get_page_capture(
     )
     row = cur.fetchone()
     return None if row is None else PageCaptureRow(**dict(row))
+
+
+def record_transcribe_failure(
+    conn: sqlite3.Connection, student_id: str, capture_id: str, reason: str
+) -> None:
+    """The one place a transcribe failure is written back to its capture row,
+    so it is diagnosable after the fact instead of living only in a log line
+    that does not survive a restart. Called from both of k12ta.pipeline.
+    process.process_capture's failure paths -- an exception raised by
+    get_transcriber/transcribe, and a TranscriptionResult with its own
+    declared `failure` -- with the same string each already computes for
+    PipelineOutcome.transcribe_failed."""
+    conn.execute(
+        "UPDATE page_captures SET transcribe_failure_reason = ? "
+        "WHERE student_id = ? AND capture_id = ?",
+        (reason, student_id, capture_id),
+    )
+    conn.commit()
+
+
+def record_rate_limited(
+    conn: sqlite3.Connection, student_id: str, capture_id: str, reason: str
+) -> None:
+    """Companion to record_transcribe_failure above, writing to
+    rate_limited_reason instead -- called only when a TranscriptionResult's
+    failure_kind is FailureKind.RATE_LIMITED, never for an ordinary
+    transcribe failure. Kept as its own function, not a shared one with a
+    column-name parameter, so each call site stays an unambiguous, greppable
+    statement of which column it means to write."""
+    conn.execute(
+        "UPDATE page_captures SET rate_limited_reason = ? WHERE student_id = ? AND capture_id = ?",
+        (reason, student_id, capture_id),
+    )
+    conn.commit()
 
 
 @dataclass(frozen=True)

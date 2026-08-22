@@ -29,43 +29,81 @@
   {% endfor %}
   {% endif %}
   {% if items %}
-  <ul class="problem-list">
-    {% for item in items %}
-    <li class="problem outcome-{{ item.outcome | replace('_', '-') }}">
-      <div class="prompt">{{ item.prompt_text }}</div>
-      <div class="answer">You wrote: {{ item.student_answer_raw }}</div>
-      <div class="outcome-label"><span class="outcome-glyph">{{ item.glyph }}</span> {{ item.message }}</div>
-    </li>
-    {% endfor %}
-  </ul>
+  <div class="results-summary">
+    <div class="summary-counts">
+      <span class="summary-count summary-right"><strong>{{ summary.right }}</strong> right</span>
+      <span class="summary-count summary-to-look-at"><strong>{{ summary.to_look_at }}</strong> to look at</span>
+      <span class="summary-count summary-waiting"><strong>{{ summary.waiting_on_grownup }}</strong> waiting on a grown-up</span>
+    </div>
+    {% if summary.encouragement %}
+    <p class="summary-encouragement">{{ summary.encouragement }}</p>
+    {% endif %}
+  </div>
+  <table class="results-table">
+    <thead>
+      <tr>
+        <th class="col-number">#</th>
+        <th class="col-question">Question</th>
+        <th class="col-answer">You wrote</th>
+        <th class="col-result">Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr class="outcome-{{ item.outcome | replace('_', '-') }} bucket-{{ item.display_bucket | replace('_', '-') }}">
+        <td class="col-number">{{ item.display_number }}</td>
+        <td class="col-question">{{ item.prompt_text }}</td>
+        <td class="col-answer">{{ item.student_answer_raw }}</td>
+        <td class="col-result outcome-label">
+          <span class="outcome-glyph">{{ item.glyph }}</span>
+          <span class="outcome-note">{{ item.message }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% else %}
   <p class="message">{{ no_problems_message }}</p>
   {% endif %}
 </div>
 <style>
-  .results { justify-content: flex-start; padding-top: 3rem; }
-  .problem-list { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 1rem; }
-  .problem { border-radius: 16px; padding: 1.1rem 1.3rem; text-align: left; }
-  .problem .prompt { font-size: 1.15rem; font-weight: 600; }
-  .problem .answer { color: var(--text-dim); margin-top: 0.3rem; }
-  .problem .outcome-label { margin-top: 0.6rem; font-weight: 600; display: flex; align-items: baseline; gap: 0.5rem; }
-  .outcome-glyph { font-size: 1.1rem; font-weight: 700; }
-  /* Solid border = affirmed, dashed = needs a look -- same language as the capture
-     screen's framing guide, so the whole app speaks one visual dialect. Colour is
-     the third signal here, after the glyph and the label, never the only one. */
-  .outcome-correct { background: var(--affirm-bg); border: 2px solid var(--affirm); }
-  .outcome-correct .outcome-glyph { color: var(--affirm); }
-  .outcome-incorrect { background: var(--attention-bg); border: 2px dashed var(--attention); }
-  .outcome-incorrect .outcome-glyph { color: var(--attention); }
-  .outcome-needs-human { background: var(--neutral-bg); border: 2px dashed var(--neutral); }
-  .outcome-needs-human .outcome-glyph { color: var(--neutral); }
-  /* Neutral like needs-human on purpose: a repeated attempt's true correctness
-     must not leak through the border colour any more than through the message
-     text. */
-  .outcome-repeat { background: var(--neutral-bg); border: 2px dashed var(--neutral); }
-  .outcome-repeat .outcome-glyph { color: var(--neutral); }
+  .results { justify-content: flex-start; padding-top: 3rem; align-items: stretch; }
+  .results-summary,
+  .results-table { width: 100%; max-width: 720px; margin: 0 auto; }
+  .results-summary { text-align: left; margin-bottom: 1.5rem; }
+  .summary-counts { display: flex; flex-wrap: wrap; gap: 1.2rem; font-size: 1.1rem; }
+  .summary-count strong { font-size: 1.4rem; }
+  .summary-right strong { color: var(--affirm); }
+  .summary-to-look-at strong { color: var(--attention); }
+  .summary-waiting strong { color: var(--neutral); }
+  .summary-encouragement { margin: 0.8rem 0 0; color: var(--text-dim); }
+  .results-table { border-collapse: collapse; text-align: left; }
+  .results-table th, .results-table td { padding: 0.6rem 0.7rem; vertical-align: top; }
+  .results-table thead th { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 2px solid var(--neutral-bg); }
+  .results-table .col-number { width: 2.5rem; font-weight: 700; }
+  .results-table .col-answer { color: var(--text-dim); }
+  /* Row background is the third signal, after glyph and note text -- never the
+     only one (rule: meaning is never colour- or glyph-alone). Same three-family
+     palette as the rest of the app: affirm for correct, attention for incorrect,
+     neutral for anything not yet resolved either way. */
+  .results-table tbody tr { border-bottom: 1px solid var(--neutral-bg); }
+  .results-table tr.bucket-correct { background: var(--affirm-bg); }
+  .results-table tr.bucket-correct .outcome-glyph { color: var(--affirm); }
+  .results-table tr.bucket-incorrect { background: var(--attention-bg); }
+  .results-table tr.bucket-incorrect .outcome-glyph { color: var(--attention); }
+  .results-table tr.bucket-could-not-read,
+  .results-table tr.bucket-waiting-on-key,
+  .results-table tr.bucket-needs-a-person,
+  .results-table tr.bucket-repeat { background: var(--neutral-bg); }
+  .results-table tr.bucket-could-not-read .outcome-glyph,
+  .results-table tr.bucket-waiting-on-key .outcome-glyph,
+  .results-table tr.bucket-needs-a-person .outcome-glyph,
+  .results-table tr.bucket-repeat .outcome-glyph { color: var(--neutral); }
+  .col-result { display: table-cell; }
+  .outcome-glyph { font-size: 1.15rem; font-weight: 700; margin-right: 0.4rem; }
+  .outcome-note { font-size: 0.92rem; }
   .identity-ask {
-    width: 100%; max-width: 560px; margin-bottom: 1.5rem; text-align: left;
+    width: 100%; max-width: 720px; margin: 0 auto 1.5rem; text-align: left;
     background: var(--neutral-bg); border: 2px dashed var(--neutral); border-radius: 16px;
     padding: 1.1rem 1.3rem;
   }
