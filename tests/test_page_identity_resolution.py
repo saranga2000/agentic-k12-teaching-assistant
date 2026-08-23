@@ -13,6 +13,8 @@ from k12ta.grading.page_identity import (
     build_composite_key,
     resolve,
     resolve_partial,
+    resolve_with_schema_history,
+    schema_version_for_seen_component_names,
 )
 from k12ta.store import content, db, migrate, page_identities, page_identity_schemas, students
 
@@ -501,3 +503,164 @@ def test_resolve_partial_ignores_a_mapping_confirmed_under_an_older_schema_versi
 
     assert result.auto_resolved_page_number is None
     assert result.matches == ()
+
+
+# -- schema_version override + resolve_with_schema_history (M3.7: page number as
+# primary, Day+Section retained as an explicit one-version-back fallback) --------
+
+
+def _seed_page_number_schema_over_day_and_section(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Version 1: Day+Section, with page 15 confirmed. Version 2 (current):
+    page_number alone, with the same page 15 backfilled under it -- exactly
+    scripts/add_page_number_schema.py's real shape. Returns (v1, v2)."""
+    v1 = _seed_section_and_day_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["Section 1", "Day 2"]), v1, 15)
+    v2 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("page_number", "Page number", "15")]
+    )
+    page_identities.backfill_page_number_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        new_schema_version=v2,
+        from_schema_version=v1,
+        confirmed_at="2026-08-22T00:00:00+00:00",
+    )
+    return v1, v2
+
+
+def test_page_number_schema_resolves_on_its_own_when_legible() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    result, version_used = resolve_with_schema_history(
+        conn, "s-marcus", "summer_bridge", {"page_number": ("15",)}, confidence=0.98
+    )
+
+    assert result.outcome is PageIdentityOutcome.RESOLVED
+    assert result.page_number == 15
+    assert version_used == 2
+
+
+def test_falls_back_to_day_and_section_when_page_number_is_not_legible() -> None:
+    """The exact real-data shape this was built for: a photo shows Day and
+    Section but no page number at all -- NO_MARKERS on the current (page-
+    number) schema, PARTIAL on the fallback, resolved via the same auto-
+    resolve resolve_partial already does."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    result, version_used = resolve_with_schema_history(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        {"section": ("Section 1",), "day": ("Day 2",)},
+        confidence=0.98,
+    )
+
+    assert result.outcome is PageIdentityOutcome.RESOLVED
+    assert result.page_number == 15
+    assert version_used == 1
+
+
+def test_falls_back_to_day_only_partial_when_section_is_missing() -> None:
+    """Day legible, Section not (the real finding: Section is never printed
+    on a Summer Bridge exercise page) -- PARTIAL from the fallback version,
+    exactly resolve_partial's existing single-match auto-resolve."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    result, version_used = resolve_with_schema_history(
+        conn, "s-marcus", "summer_bridge", {"day": ("Day 2",)}, confidence=0.98
+    )
+
+    assert result.outcome is PageIdentityOutcome.PARTIAL
+    assert version_used == 1
+
+
+def test_conflicting_page_numbers_never_falls_back() -> None:
+    """A two-page spread showing two different page numbers is refused
+    outright -- rescuing it via a less-conflicting-looking older schema
+    would be exactly the confident-wrong-grade this module exists to
+    refuse. The fallback must not even be attempted."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    result, version_used = resolve_with_schema_history(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        {"page_number": ("14", "15"), "day": ("Day 1",)},
+        confidence=0.98,
+    )
+
+    assert result.outcome is PageIdentityOutcome.CONFLICTING
+    assert version_used == 2
+
+
+def test_neither_schema_resolves_reports_the_current_ones_outcome() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    result, version_used = resolve_with_schema_history(
+        conn, "s-marcus", "summer_bridge", {}, confidence=0.98
+    )
+
+    assert result.outcome is PageIdentityOutcome.NO_MARKERS
+    assert version_used == 2
+
+
+def test_no_previous_version_never_attempts_a_fallback() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_day_only_schema(conn)  # only ever one version
+
+    result, version_used = resolve_with_schema_history(
+        conn, "s-marcus", "summer_bridge", {}, confidence=0.98
+    )
+
+    assert result.outcome is PageIdentityOutcome.NO_MARKERS
+    assert version_used == 1
+
+
+def test_schema_version_for_seen_component_names_trusts_a_stored_value() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    version = schema_version_for_seen_component_names(
+        conn, "s-marcus", "summer_bridge", ["page_number"], stored_schema_version=7
+    )
+
+    assert version == 7
+
+
+def test_schema_version_for_seen_component_names_infers_the_fallback_version() -> None:
+    """No stored version (a row logged before migration 0016) -- inferred from
+    which schema's own component names the seen values actually belong to."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    version = schema_version_for_seen_component_names(
+        conn, "s-marcus", "summer_bridge", ["day"], stored_schema_version=None
+    )
+
+    assert version == 1
+
+
+def test_schema_version_for_seen_component_names_infers_the_current_version() -> None:
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_page_number_schema_over_day_and_section(conn)
+
+    version = schema_version_for_seen_component_names(
+        conn, "s-marcus", "summer_bridge", ["page_number"], stored_schema_version=None
+    )
+
+    assert version == 2

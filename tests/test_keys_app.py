@@ -29,9 +29,11 @@ from k12ta.llm.base import DataRetention
 from k12ta.store import (
     answer_key_audit,
     answer_keys,
+    capture_duplicates,
     captures,
     content,
     db,
+    key_page_images,
     migrate,
     page_identities,
     page_identity_resolutions,
@@ -496,7 +498,7 @@ def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_ye
     # No dashboard, no invented metrics -- a plain line for each thing that has no
     # data behind it yet, not an empty panel.
     assert "not shown here yet" in response.text.lower()
-    assert "nothing waiting on a key right now" in response.text.lower()
+    assert "nothing pending right now" in response.text.lower()
 
 
 def test_enrollment_detail_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -1250,6 +1252,215 @@ def _seed_pending_problem(
     )
 
 
+def test_enrollment_detail_summary_bar_counts_and_links_to_each_section(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-identity", problem_id="1", cause="unknown_page", page_number=None
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-key", problem_id="1", cause="no_key_for_page", page_number=21
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.99,
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="2",
+            prompt_text="12 + 8",
+            student_answer_raw="21",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+            page_number=17,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="2",
+            outcome="incorrect",
+            grader_confidence=0.99,
+            page_number=17,
+            expected_answer="20",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    text = response.text
+    assert 'id="cg-c-review"' in text
+    assert 'id="cg-c-identity"' in text
+    assert 'id="cg-c-key"' in text
+    assert 'href="#cg-c-review"' in text
+    assert 'href="#cg-c-identity"' in text
+    assert 'href="#cg-c-key"' in text
+    assert 'href="#graded-correct"' in text
+    assert 'href="#graded-incorrect"' in text
+    assert 'id="graded-correct"' in text
+    assert 'id="graded-incorrect"' in text
+    # Each count is real, not just present -- one of each state was seeded.
+    assert text.count("needs my review") == 1
+    assert "1</strong> needs my review" in text.replace("\n", "").replace("  ", " ")
+
+
+def test_enrollment_detail_summary_shows_zero_states_as_plain_text_not_dead_links(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert 'href="#graded-correct"' not in response.text
+    assert 'href="#graded-incorrect"' not in response.text
+    assert "0</strong> graded correct" in response.text.replace("\n", "").replace("  ", " ")
+
+
+def test_enrollment_detail_lists_graded_correct_and_incorrect_items(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="1",
+            prompt_text="a correct problem",
+            student_answer_raw="19",
+            transcription_confidence=0.99,
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="2",
+            prompt_text="an incorrect problem",
+            student_answer_raw="21",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+            page_number=17,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="2",
+            outcome="incorrect",
+            grader_confidence=0.99,
+            page_number=17,
+            expected_answer="20",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "a correct problem" in response.text
+    assert "an incorrect problem" in response.text
+    assert "key says &ldquo;20&rdquo;" in response.text
+
+
 def test_enrollment_detail_groups_pending_items_by_cause(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -1287,8 +1498,567 @@ def test_enrollment_detail_groups_pending_items_by_cause(
     assert "Waiting on page identity" in response.text
     assert "Transcription could not be read" in response.text
     assert "Needs a person to judge" in response.text
-    # Each item's actual question is shown, not just a count.
-    assert response.text.count("12 + 7") == 4
+    # Each item's actual question is shown, not just a count -- plus two more
+    # mentions from the mark-as-duplicate dropdown each of the two unresolved
+    # captures (c-unknown, c-unreadable) now offers, listing the other by its
+    # own question text since there's no page number to label it with yet.
+    assert response.text.count("12 + 7") == 6
+
+
+def test_enrollment_detail_dedupes_repeated_captures_of_the_same_resolved_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The real page-15 finding (docs/ROADMAP.md's M3.7): three captures of
+    the same physical page, each stuck needs_human with a different
+    transcription, must not appear as three separate rows -- only the most
+    recently captured survives, with a note that earlier attempts exist.
+    Nothing is deleted: k12ta.store.sessions.list_pending_for_source still
+    returns all three underneath this display collapse."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-first",
+        problem_id="10",
+        cause="low_confidence",
+        page_number=15,
+        prompt_text="The clear blue water seemed to beckon to Rafael.",
+        student_answer_raw="The clear, blue water seemed to beckon to Rafael.",
+        captured_at="2026-08-19T03:14:19+00:00",
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-second",
+        problem_id="10",
+        cause="needs_person",
+        page_number=15,
+        prompt_text="The clear blue water seemed to beckon to Rafael.",
+        student_answer_raw="",
+        captured_at="2026-08-19T04:59:49+00:00",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    # Only the most recent capture's row -- the blank answer from c-second,
+    # bucketed under "needs a person" -- appears; c-first's full, correctly
+    # transcribed answer is folded into the note, not shown as its own row.
+    assert response.text.count("The clear") == 1
+    assert "1 earlier attempt at this page, not shown" in response.text
+
+
+def test_enrollment_detail_offers_a_duplicate_picker_for_unresolved_captures(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-first",
+        problem_id="1",
+        cause="unknown_page",
+        page_number=None,
+        prompt_text="first unresolved question",
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-second",
+        problem_id="1",
+        cause="unknown_page",
+        page_number=None,
+        prompt_text="second unresolved question",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert '/keys/s-marcus/summer_bridge/mark-duplicate"' in response.text
+    assert 'value="c-second"' in response.text  # c-first's dropdown offers c-second
+    assert "second unresolved question" in response.text
+
+
+def test_enrollment_detail_hides_the_duplicate_picker_with_only_one_unresolved_capture(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-alone", problem_id="1", cause="unknown_page", page_number=None
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "mark-duplicate" not in response.text
+
+
+def test_submit_mark_duplicate_folds_items_into_the_target_capture(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-target",
+        problem_id="1",
+        cause="unknown_page",
+        page_number=None,
+        prompt_text="target question",
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-dup",
+        problem_id="1",
+        cause="unknown_page",
+        page_number=None,
+        prompt_text="dup question",
+    )
+
+    submit_response = client.post(
+        "/keys/s-marcus/summer_bridge/mark-duplicate",
+        data={"capture_id": "c-dup", "duplicate_of_capture_id": "c-target"},
+        follow_redirects=False,
+    )
+    assert submit_response.status_code == 303
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "target question" in response.text
+    assert "dup question" not in response.text
+    assert "1 earlier attempt at this page, not shown" in response.text
+    # Nothing was deleted or regraded -- the store still has both.
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+    assert {row.capture_id for row in pending} == {"c-target", "c-dup"}
+
+
+def test_submit_mark_duplicate_follows_a_chain(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """C marked a duplicate of B, B already marked a duplicate of A -- C's
+    items belong with A's group, not their own or B's."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-a",
+        problem_id="1",
+        cause="unknown_page",
+        page_number=None,
+        prompt_text="root question",
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-b", problem_id="1", cause="unknown_page", page_number=None
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-c", problem_id="1", cause="unknown_page", page_number=None
+    )
+    client.post(
+        "/keys/s-marcus/summer_bridge/mark-duplicate",
+        data={"capture_id": "c-b", "duplicate_of_capture_id": "c-a"},
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/mark-duplicate",
+        data={"capture_id": "c-c", "duplicate_of_capture_id": "c-b"},
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "root question" in response.text
+    assert "2 earlier attempts at this page, not shown" in response.text
+
+
+def test_submit_mark_duplicate_ignores_a_self_reference(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-a", problem_id="1", cause="unknown_page", page_number=None
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/mark-duplicate",
+        data={"capture_id": "c-a", "duplicate_of_capture_id": "c-a"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert capture_duplicates.get_duplicate_map(conn, "s-marcus") == {}
+
+
+def test_submit_mark_duplicate_ignores_an_unknown_capture(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/mark-duplicate",
+        data={"capture_id": "no-such-a", "duplicate_of_capture_id": "no-such-b"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert capture_duplicates.get_duplicate_map(conn, "s-marcus") == {}
+
+
+def test_dedup_tiebreak_prefers_a_real_verdict_over_recency(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Recency alone is not a proxy for quality (2026-08-22): an older capture
+    that produced at least one real correct/incorrect verdict anywhere among
+    its own items beats a newer capture for the same page that never
+    produced one, even though the newer one was taken later."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    # Older capture, page 15: one decisive verdict elsewhere on the same
+    # photo (problem 2, correct) alongside its own pending problem 1.
+    _seed_pending_problem(
+        conn,
+        capture_id="c-older-with-verdict",
+        problem_id="1",
+        cause="low_confidence",
+        page_number=15,
+        prompt_text="older captures question",
+        captured_at="2026-08-19T03:14:19+00:00",
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-older-with-verdict",
+            problem_id="2",
+            prompt_text="already-graded neighbour",
+            student_answer_raw="19",
+            transcription_confidence=0.98,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-older-with-verdict",
+            capture_id="c-older-with-verdict",
+            problem_id="2",
+            outcome="correct",
+            grader_confidence=0.98,
+            page_number=15,
+        ),
+    )
+    # Newer capture, same page 15: no decisive verdict anywhere on it.
+    _seed_pending_problem(
+        conn,
+        capture_id="c-newer-no-verdict",
+        problem_id="1",
+        cause="needs_person",
+        page_number=15,
+        prompt_text="newer captures question",
+        captured_at="2026-08-20T09:00:00+00:00",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "older captures question" in response.text
+    assert "newer captures question" not in response.text
+    assert "1 earlier attempt at this page, not shown" in response.text
+
+
+def test_pending_capture_image_serves_the_real_file(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"not a real jpeg but bytes are bytes for this test")
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-photo",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path=str(image_path),
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/captures/c-photo/image")
+
+    assert response.status_code == 200
+    assert response.content == image_path.read_bytes()
+
+
+def test_pending_capture_image_for_an_unknown_capture_is_404(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/captures/no-such/image")
+
+    assert response.status_code == 404
+
+
+def test_key_page_image_serves_when_one_is_on_file(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "key.jpg"
+    image_path.write_bytes(b"a key scan")
+    _seed_marcus_with_source(conn)
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            image_path=str(image_path),
+            confirmed_at="2026-08-22T00:00:00+00:00",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/key-image/15")
+
+    assert response.status_code == 200
+    assert response.content == image_path.read_bytes()
+
+
+def test_key_page_image_is_404_when_none_was_ever_saved(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/key-image/15")
+
+    assert response.status_code == 404
+
+
+def test_enrollment_detail_shows_the_page_entry_ask_for_an_unresolved_capture(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert "/keys/s-marcus/summer_bridge/preview-page-entry" in response.text
+    assert 'name="capture_id" value="c-unresolved"' in response.text
+
+
+def test_preview_page_entry_shows_photo_and_key_preview(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/preview-page-entry",
+        data={
+            "capture_id": "c-unresolved",
+            "session_id": "sess-c-unresolved",
+            "page_number": "15",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Is this page 15?" in response.text
+    assert "/keys/s-marcus/summer_bridge/captures/c-unresolved/image" in response.text
+    assert "Problem 1: 19" in response.text
+
+
+def test_preview_page_entry_with_no_key_yet_says_so_honestly(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/preview-page-entry",
+        data={
+            "capture_id": "c-unresolved",
+            "session_id": "sess-c-unresolved",
+            "page_number": "15",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "No answers on file for page 15 yet" in response.text
+
+
+def test_preview_page_entry_rejects_a_non_numeric_page_silently(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/preview-page-entry",
+        data={"capture_id": "c-unresolved", "session_id": "sess-x", "page_number": "nope"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+
+
+def test_commit_page_entry_grades_and_records_parent_provenance(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Logged as RESOLVED_BY_PARENT_ENTRY -- distinct from both
+    RESOLVED_BY_STUDENT_PICK and RESOLVED_BY_STUDENT_ENTRY, so an accuracy
+    count can tell who supplied the claim apart."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/commit-page-entry",
+        data={
+            "capture_id": "c-unresolved",
+            "session_id": "sess-c-unresolved",
+            "page_number": "15",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-unresolved")
+    assert graded[0].outcome == "correct"
+    assert graded[0].page_number == 15
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
+    assert counts.get("resolved_by_parent_entry") == 1
+    assert counts.get("resolved_by_student_entry") is None
+    assert counts.get("resolved_by_student_pick") is None
 
 
 def test_enrollment_detail_shows_a_trigger_when_a_key_now_covers_a_pending_page(
@@ -1656,6 +2426,43 @@ def test_confirm_persists_exactly_the_submitted_values_not_the_original_transcri
     entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
     assert len(entries) == 1
     assert entries[0].answer_text == "8 meters"
+
+
+def test_confirm_persists_the_scanned_image_for_every_page_it_covers(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    """Persisted going forward (2026-08-22): the upload writes the photo to
+    disk, confirm.html threads its path through as a hidden field, and
+    submit_confirm links it to every page_number this scan actually saved
+    an answer for -- so the parent scan display has a real key image to
+    show, not a permanently-empty slot."""
+    _seed_marcus_with_source(conn)
+    transcriber.result = _success_result()
+
+    upload_response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+    html = _final_html(upload_response)
+    image_path = html.split('name="image_path" value="')[1].split('"')[0]
+    assert image_path  # a real path was threaded through, not left blank
+
+    confirm_response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "2",
+            "image_path": image_path,
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "page_number_1": "17",
+            "problem_number_1": "2",
+            "answer_text_1": "12 cm",
+        },
+    )
+
+    assert confirm_response.status_code == 200
+    assert key_page_images.get_image_path(conn, "s-marcus", "summer_bridge", 17) == image_path
 
 
 def test_confirm_screen_shows_a_discovery_panel_when_the_scan_found_markers_and_no_schema_exists(

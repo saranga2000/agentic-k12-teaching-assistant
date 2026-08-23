@@ -33,7 +33,10 @@ class PageIdentityRow:
     source: str = "model"
     """"model" when the parent confirmed the value the transcriber extracted
     unchanged, "manual" when the parent typed or corrected it (on the confirm
-    screen, or through the no-photo manual-mapping entry route). Distinct from
+    screen, or through the no-photo manual-mapping entry route), "backfill"
+    when neither happened -- an older schema's already-confirmed mapping was
+    mechanically re-expressed under a new schema's shape, nothing freshly
+    extracted or typed (see `backfill_page_number_schema`). Distinct from
     confidence: a low-confidence value the parent leaves as-is is still "model" --
     this field is about who supplied the value, not how sure anyone was. Lets
     page-identity accuracy be measured against only what the model actually
@@ -106,6 +109,54 @@ def list_for_source_at_version(
         (student_id, source_id, schema_version),
     )
     return [PageIdentityRow(*row) for row in cur.fetchall()]
+
+
+def backfill_page_number_schema(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    new_schema_version: int,
+    from_schema_version: int,
+    confirmed_at: str,
+) -> int:
+    """Derives confirmed mappings for a brand-new single-component
+    "page_number" schema entirely from what an older schema has already
+    confirmed -- every row at `from_schema_version` already carries the real
+    page_number as a plain column, so its own value *is* the new schema's
+    one-component composite key (`str(page_number)`, no separator needed).
+    No parent re-entry, no re-scanning: the physical page and its printed
+    page number never changed, only which marker the schema now leads with
+    (docs/ROADMAP.md's M3.7 -- Summer Bridge's Day+Section schema replaced by
+    a page-number-primary one because Section is never printed on an
+    exercise page).
+
+    `source="model"` would overstate it -- nothing was freshly extracted and
+    confirmed here, an existing confirmation was mechanically re-expressed
+    under a new schema's shape -- so every backfilled row is written with
+    source="backfill" instead, its own distinct provenance value, so a later
+    accuracy measurement can still tell "the model actually read this page
+    number" apart from "this page number was inherited from an older
+    schema's confirmation" once real page-number extractions start landing
+    alongside it.
+
+    Returns how many rows were backfilled. Safe to re-run: upsert_identity's
+    own ON CONFLICT (student_id, source_id, composite_key) makes this
+    idempotent for the same new_schema_version."""
+    source_rows = list_for_source_at_version(conn, student_id, source_id, from_schema_version)
+    for row in source_rows:
+        upsert_identity(
+            conn,
+            PageIdentityRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=row.page_number,
+                composite_key=str(row.page_number),
+                schema_version=new_schema_version,
+                confirmed_at=confirmed_at,
+                source="backfill",
+            ),
+        )
+    return len(source_rows)
 
 
 def count_stale_for_source(

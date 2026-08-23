@@ -262,6 +262,261 @@ per milestone, as the data behind it becomes real. **Do not build placeholder sc
 for sections with no data behind them** — say so in a line of text instead (see M2.4's
 restructure, which does exactly this for the two sections above that don't exist yet).
 
+### Parent app gaps, found 2026-08-22 running the real app on real data
+
+Not milestones yet, not scheduled — recorded here so they aren't lost before a milestone
+picks them up. Found while investigating why real grading was failing (see the M3.7 note
+below): using the app on the real seeded data surfaced problems that have nothing to do
+with page identity.
+
+- **Seeded sources a parent never created must be deletable and renameable.**
+  `seed_dev_data` creates `daily_fluency_drill` ("Daily timed fluency packet") and
+  `school_homework` ("School homework") whether or not this family uses either —
+  `k12ta.content` has no `delete_content_source` or `update_content_source` today (the
+  same gap the enrollment-detail note above already names for editing generally).
+  `outside_math_program_hw`'s seeded label, "Outside maths programme homework," should
+  read **"Russian School of Math"** — a generic placeholder label sitting in front of a
+  parent as if it were real content is worse than an empty list.
+- **A parent must see the page scan and the key scan alongside the evaluation**, not
+  just the transcribed text and a verdict. Right now judging whether a grade is right
+  means trusting the transcription blind — there is no route that shows the original
+  photograph next to what the model read from it. This is also the fastest real fix for
+  the page-15 duplicate-capture problem below: a parent looking at the actual photo
+  would immediately see "I already did this page" in a way three text-only pending rows
+  don't make obvious.
+- **A child must see her own page scan alongside her evaluation** — same gap, student
+  side. Right now `session_result.html` shows the transcribed prompt and her answer,
+  never the photo she took.
+- **Both need a page-by-page evaluation view and a history of past attempts on that
+  page** — today a session is a flat list of whatever one capture produced; there is no
+  view scoped to "this page, every time it's been photographed," which is exactly the
+  view that would have made the page-15 problem below obvious immediately instead of
+  needing a database query to explain.
+- **The pending list must make the needed action obvious, item by item.** Grouping by
+  `needs_human_cause` (M2.4) was a real improvement over one undifferentiated list, but
+  the group label alone still leaves a parent to infer what to *do* — "waiting on page
+  identity" doesn't say "pick which page this is," "needs a person to judge" doesn't say
+  "read her answer and mark it right or wrong yourself." Each row needs its own action,
+  not just its own category.
+
+**M3.7: page identity essentially never resolves for Summer Bridge, found 2026-08-22.**
+Requested before ingest began; not done until now. Investigated from the real database
+(`data/k12ta.db`) and the real photographs (`data/captures/`), not from theory:
+
+Of 17 real captures, 11 ever reached `page_identity.resolve()` with no page number
+already known. Of those 11: 10 came back `PARTIAL` (day read, section not), 1 came back
+`NO_MAPPING` (nothing legible at all), and **zero ever came back `RESOLVED`** — the
+composite Day+Section lookup this schema depends on has not once succeeded
+automatically across real use. The 10 partials only ever got a page number when a
+parent manually picked one (3 of the 10); the other 7 are still stuck.
+
+Every one of the 10 partials has the identical shape:
+`{"seen": ["Day"], "missing": ["Section"]}`. Eight of the underlying photographs were
+opened directly (pages 13, 14, 15, 16, and 18) and **none show a "Section" label
+anywhere on the page** — each shows a "DAY N" banner, a subject-area label, an IXL skill
+code, and a clear, unobstructed printed page number, and nothing else identifying. This
+confirms the hypothesis: **Section is not printed on Summer Bridge exercise pages.**
+(No divider page was available to inspect directly — none was among the 17 captures,
+unsurprising since a student has no reason to photograph one — but the confirmed
+`page_identities` table shows the book really does have two sections, Day 1–20 repeated
+under each, which is exactly why Day alone is structurally ambiguous: page 15 and page
+63 are both "Day 2," distinguishable only by the section neither exercise page shows.)
+
+**The identity design for this source is wrong, not unlucky.** A schema built from two
+components, one of which is physically absent from every page a student ever
+photographs, cannot resolve by design — this was never going to improve with more
+photos or a better model.
+
+Options, not decided, nothing built:
+
+1. **Extract the printed page number directly instead of Day+Section.** It was legible,
+   fully in-frame, and unobstructed in all 8 photos opened — a stronger candidate than
+   the day banner, which this book pairs with a section that's simply never there. Page
+   number is already the real unique key `page_identities` stores underneath the
+   composite — this would stop deriving it indirectly through a lookup and start
+   reading it straight from the page, which should make resolution succeed on the first
+   photo instead of never. Main risk not yet checked: the capture-quality gate and
+   framing guide were built around centering the *work*, not the corner page number —
+   worth confirming across more than 8 samples before relying on it.
+2. **Bind a page number to the assignment instead of extracting one from the photo at
+   all** — already named above in the M3.4 note as the fallback if no marker on the page
+   is machine-legible. Robust regardless of what's printed, but pushes more manual setup
+   onto a parent per assignment and doesn't help a photo taken outside an assignment.
+3. **Do both** — page number as the primary signal, assignment-bound number as the
+   fallback when a photo crops the corner out.
+4. **Fix nothing about the schema; make manual pick the primary path, not the
+   fallback.** Since automatic resolution is at 0 of 11 and structurally can't improve,
+   stop spending a wasted resolve attempt before asking — go straight to the pick
+   question. Doesn't fix the underlying friction, but it's the cheapest option and may
+   be the right stopgap if 1–3 are more than an evening.
+
+**Data bug, separate from the identity finding, found investigating the same data:**
+the same six comma-punctuation sentences on page 15 appear three times in the parent
+app with three different answers, traced to three genuinely separate photographs of the
+same physical page (captures `03650fd7`, `b73c3ac7`, `e2fe9317`; Aug 19 03:14, Aug 19
+04:59, and Aug 21 01:16), not one capture rendered twice. Each capture got its own
+session and its own independent model read of the same handwriting: one full and
+correctly transcribed with commas (bucketed `low_confidence` → "waiting on a clearer
+photo"), one entirely blank (bucketed `needs_person` → "needs a person to judge"), and
+one reading only the punctuation and none of the words (bucketed `partial_page_markers`
+→ "waiting on page identity," since that capture's identity never resolved at all).
+`k12ta.store.sessions.list_pending_for_source` returns every still-`needs_human` row
+across every session and capture for a source with no deduplication by resolved
+identity — three photos of one page were always going to produce three permanent,
+independent pending entries. The likely trigger: a parent or student re-photographing
+the same page repeatedly because M3.7's identity failure kept it from ever grading,
+which would make this a downstream symptom of M3.7 rather than an unrelated bug — worth
+confirming once M3.7 is fixed, since a page that resolves on the first photo also stops
+generating repeat photos of itself to deduplicate in the first place. Also worth its own
+look independently: the same handwritten comma placement produced three visibly
+different transcription qualities (full, blank, punctuation-only) across three separate
+model calls, which is a transcription-consistency question for short handwritten
+insertions into sparse printed sentences, not something explained by identity alone.
+
+**M3.7 fix, built and applied to real data, 2026-08-22.** Option 1 above, chosen: page
+number promoted to Summer Bridge's primary identity signal, Day+Section kept as an
+explicit fallback rather than discarded.
+
+- `summer_bridge` is now schema version 2 (`page_number`, one component). Version 1
+  (Day+Section) is untouched and still queryable —
+  `k12ta.grading.page_identity.resolve_with_schema_history` tries the current schema
+  first and, only when that doesn't resolve (and never for `CONFLICTING`, which is
+  contradictory data, not missing data — falling back there would rescue a two-page
+  spread via whichever schema happens to look less conflicting), falls back to the
+  *immediately preceding* version — one version back, deliberately, not a general
+  history walk. `k12ta.pipeline.process` now asks the model for the union of both
+  schemas' components in one photo, so a single capture can carry markers for both.
+- The 40 already-confirmed pages were backfilled to the new schema mechanically
+  (`page_identities.backfill_page_number_schema`, run via `scripts/
+  add_page_number_schema.py`) from their own already-known `page_number` column —
+  **confirmed before starting, as required: nothing was re-typed or re-scanned.**
+  Backfilled rows are marked `source="backfill"`, their own distinct provenance, so
+  an accuracy measurement never confuses them with a fresh model extraction.
+- **Real re-identification run, `scripts/reidentify_stuck_captures.py`, 10 real model
+  calls, trivial cost:** every capture that was still stuck was re-read from its
+  already-stored photo (no re-photographing) under the new schema. Of 13 real
+  photographs with actual content, captures resolving to a real page went from 3
+  (23%) to 7 (54%) — using the exact same photos already on file. **4 of the 10
+  re-read photos had a legible page number; 6 did not** — page number beats
+  Day+Section decisively (which never once auto-resolved in 11 tries) but is not a
+  silver bullet. Zero `INCORRECT` marks were produced, before or after — this
+  database has still never produced one.
+
+**M3.8: "ask the human and proceed," and the parent scan display, 2026-08-22.**
+A new, general principle, requested to apply throughout: when identity or another
+minimal piece of key data cannot be read from the photo, ask the human who's already
+looking at the page rather than refuse and wait for a re-scan that gets the same
+failure. Narrower than it sounds — see the carve-outs below.
+
+- **Capture time (`k12ta.web.app`).** When a capture's identity comes back
+  `UNKNOWN_PAGE`, or `PARTIAL_PAGE_MARKERS` with nothing real to constrain a pick
+  from (`resolve_partial` found no matches), the results screen now shows her own
+  photo (new `GET /captures/{student_id}/{capture_id}/image` route,
+  `k12ta.store.captures.get_page_capture`) beside a plain "What page is this?"
+  input, instead of only the honest refusal. **Never for `CONFLICTING_PAGE_MARKERS`**
+  — two markers on one photo is contradictory, not missing, data, and the fix is
+  re-photographing one page, not a question a two-page spread has no correct answer
+  to. The *existing* constrained-pick flow (real candidates from `resolve_partial`)
+  is untouched — this only fills the gap where that flow had nothing to offer.
+- **The confirmation is real, not a second tap.** Typing a number renders a preview
+  step (`preview_page_entry` → `confirm_page_entry.html`), never committing directly:
+  her photo again, plus the first `_PAGE_ENTRY_PREVIEW_COUNT` (3) of that page's own
+  confirmed answers, so she's confirming against real content, not a bare number. A
+  page with no key yet says so honestly instead of showing nothing. Only her second,
+  informed tap (`commit_page_entry`) regrades the capture.
+  - **Considered and cut:** cross-checking the typed page against the *transcribed
+    problem text*, comparing what was read from her photo to what the page's key
+    entries say the questions are. Checked first, as required: `answer_key_entries`
+    stores `problem_number` and `answer_text` only — `prompts/transcribe_key_page.md`
+    never asks the model to transcribe problem text at all, because Summer Bridge's
+    printed answer key doesn't carry it (its own pages are compressed running
+    answers, not restated questions). There is no problem-text signal on the key
+    side to check against; the answer preview is the strongest available signal.
+  - If she's unsure or doesn't answer, today's honest refusal stands unchanged, and
+    it lands on the parent's pending list exactly as before.
+  - New provenance, `page_identity.RESOLVED_BY_STUDENT_ENTRY`, its own
+    `page_identity_resolutions` row — deliberately distinct from
+    `RESOLVED_BY_STUDENT_PICK` (a pick among real, already-confirmed candidates) so
+    an accuracy count can never conflate a typed-and-self-confirmed claim with a
+    constrained choice among verified ones. Never counted as `resolve()` succeeding.
+- **Parent scan display (`k12ta.keys.app`), this task's concrete deliverable.** The
+  pending list is grouped by capture, not flat by cause: one photograph, its image
+  (new route, same shape as the student one), its still-pending items beneath it,
+  each item still carrying its own cause label. Where a page has a key scan on file,
+  it's shown too — **key page images are now persisted going forward**
+  (`k12ta.store.key_page_images`, written from `k12ta.pipeline.key_ingestion.
+  save_key_page_image` at upload, linked to whichever page numbers a scan actually
+  saved answers for at confirm time); every key confirmed before this migration has
+  no image and never will, an honest gap, not a bug.
+- **Dedup tiebreak, corrected, not just re-labelled.** The original "most recent
+  capture per page" rule (docs/ROADMAP.md's M3.6 pending-list work) surfaced the
+  *worse* of two page-15 attempts in the exact case it was built from — recency said
+  nothing about quality. Now: prefer the most recent capture with a real
+  (`correct`/`incorrect`) verdict *anywhere* among its own items, checked across its
+  whole `graded_problems`, not just what's pending (`sessions.
+  capture_has_decisive_outcome`); fall back to plain most-recent only when no
+  candidate for that page ever produced one.
+- **The framing risk named in M3.7's options is now a cost, not a blocker.** 6 of the
+  10 real re-identification attempts had an illegible or frame-edge-cropped page
+  number — under M3.7 alone that's 6 photos still stuck. Under this principle it's 6
+  questions asked instead: a capture whose page number can't be read still lands on
+  the free-text ask above rather than staying refused, so a tighter framing guide for
+  the corner page number becomes a nice-to-have, not a precondition for this fix to
+  matter.
+
+**M3.9: the parent side of the ask-flow, LaTeX's remaining two fields, a real summary,
+and manual duplicate marking — four fixes from using M3.8 for real, 2026-08-22.**
+
+- **`k12ta.keys.app` gets the same ask-and-confirm flow M3.8 gave the student, not a
+  smaller version of it.** A parent reading the photo on the pending list can now type
+  a page number directly on any "Page not identified yet" block, see the same
+  preview-then-confirm step (her photo again, the page's first few answers), and only
+  her second tap commits. New provenance `page_identity.RESOLVED_BY_PARENT_ENTRY`,
+  distinct from both `RESOLVED_BY_STUDENT_ENTRY` and `RESOLVED_BY_STUDENT_PICK` — an
+  accuracy count should be able to tell who supplied a claim apart, not just that it
+  wasn't the model.
+- **LaTeX, the two fields M3.6's fix didn't reach.** That fix only touched
+  `transcribe_page.md`'s `prompt_text` field; `student_answer_raw` in the same file and
+  `answer_text` in `transcribe_key_page.md` were still framed as "exactly as printed" /
+  "character for character" with no explicit prohibition, and the model reached for
+  `$5\text{ ft}$`-style markup on its own initiative despite nothing on the page being
+  typeset that way. Both fields (`transcribe_page.md` v6, `transcribe_key_page.md` v6)
+  now carry the same explicit instruction as `prompt_text` already did. Still prompt-only,
+  no regex stripping layer, consistent with M3.6's stated preference — revisit if it
+  recurs a third time.
+- **A real summary, not just a bigger page.** Five counts at the top of
+  `enrollment.html` — needs my review, waiting on page identity, waiting on a key,
+  graded correct, graded incorrect — each linking to a real section. The first three
+  jump into "Pending review" (grouped by capture since M3.8, not by cause, so there is
+  no separate cause-labelled section left to link to — the summary jumps to the first
+  capture-group block containing a matching item instead,
+  `k12ta.keys.app._summarize_enrollment`). The last two are genuinely new sections:
+  nothing on this page ever showed a correct or incorrect grade before, only what was
+  still pending, so `sessions.list_resolved_for_source` (a twin of `list_pending_for_
+  source`, for `outcome IN ('correct', 'incorrect')`) had to be built to have something
+  to link to. A count of zero renders as plain text, never a dead link.
+- **Manual duplicate marking, the fallback automatic dedup can never reach.**
+  `page_identity_resolutions`-based dedup (M3.6/M3.7) only ever groups captures that
+  share a *resolved* page_number — an unresolved capture has none, so three
+  photographs of the same not-yet-identified page still show as three separate blocks,
+  which was the exact complaint (page 13 shown three times). Automatic content-based
+  grouping was considered and explicitly not built: real data already showed the same
+  physical page transcribed three different ways by three different model calls (full
+  text, blank, punctuation-only — the M3.7 finding), so fuzzy-matching transcribed
+  problem text across captures would most likely fail on exactly the cases it exists
+  for. Built instead: a parent's own "this photo is the same page as that one"
+  (`k12ta.store.capture_duplicates`, one row per capture, upsert — re-marking
+  overwrites, deletes and regrades nothing), a dropdown on each unresolved block
+  listing the *other* unresolved blocks by their own question text (no page number
+  exists yet to label them with). `_resolve_duplicate_root` follows a chain (C marked
+  a duplicate of B, B already a duplicate of A → C folds into A) and stops the moment
+  a walk would revisit a capture already seen, so a cycle can't loop forever.
+  Automatic grouping by exact-match seen-values (the earlier considered option) is
+  explicitly on hold, not rejected — deliberately deferred until this manual path has
+  been used for a few days, since the ask-flow above should make new unresolved
+  captures stop accumulating in the first place, at which point the grouping problem
+  may mostly have disappeared rather than needing a heuristic at all.
+
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**
 

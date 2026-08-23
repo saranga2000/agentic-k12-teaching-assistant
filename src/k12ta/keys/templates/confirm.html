@@ -6,6 +6,7 @@
 
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/confirm">
   <input type="hidden" name="row_count" value="{{ entries|length }}">
+  <input type="hidden" name="image_path" value="{{ image_path }}">
 
   {% if not schema %}
   <div class="identity-schema-editor">

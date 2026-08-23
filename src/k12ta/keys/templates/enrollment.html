@@ -4,6 +4,14 @@
 <p><a href="/">&larr; {{ student.display_name }}</a></p>
 <h1>{{ source.label }}</h1>
 
+<ul class="summary-bar">
+  <li>{% if summary.needs_review_count > 0 and summary.first_needs_review_capture_id %}<a href="#cg-{{ summary.first_needs_review_capture_id }}"><strong>{{ summary.needs_review_count }}</strong> needs my review</a>{% else %}<strong>{{ summary.needs_review_count }}</strong> needs my review{% endif %}</li>
+  <li>{% if summary.waiting_on_identity_count > 0 and summary.first_waiting_on_identity_capture_id %}<a href="#cg-{{ summary.first_waiting_on_identity_capture_id }}"><strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity</a>{% else %}<strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity{% endif %}</li>
+  <li>{% if summary.waiting_on_key_count > 0 and summary.first_waiting_on_key_capture_id %}<a href="#cg-{{ summary.first_waiting_on_key_capture_id }}"><strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key</a>{% else %}<strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key{% endif %}</li>
+  <li>{% if summary.correct_count > 0 %}<a href="#graded-correct"><strong>{{ summary.correct_count }}</strong> graded correct</a>{% else %}<strong>{{ summary.correct_count }}</strong> graded correct{% endif %}</li>
+  <li>{% if summary.incorrect_count > 0 %}<a href="#graded-incorrect"><strong>{{ summary.incorrect_count }}</strong> graded incorrect</a>{% else %}<strong>{{ summary.incorrect_count }}</strong> graded incorrect{% endif %}</li>
+</ul>
+
 <h2>Answer keys</h2>
 <p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan a key</a>
 <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">Enter answers by hand</a></p>
@@ -11,13 +19,7 @@
 <h2>Recent sessions</h2>
 <p class="message">Session history is not shown here yet.</p>
 
-<h2>Waiting on an answer key</h2>
-{% if waiting_on_key %}
-<ul class="pending-list">
-  {% for item in waiting_on_key %}
-  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
-  {% endfor %}
-</ul>
+<h2>Pending review</h2>
 {% if now_gradable_count > 0 %}
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/regrade-pending">
   <p class="message attention">{{ now_gradable_count }} {{ "problem is" if now_gradable_count == 1 else "problems are" }}
@@ -26,70 +28,87 @@
   <button type="submit">Grade now</button>
 </form>
 {% endif %}
-{% else %}
-<p class="message">Nothing waiting on a key right now.</p>
-{% endif %}
-
-<h2>Waiting on page identity</h2>
-<p class="message">A page that could not be matched to a physical page &mdash; usually fixed by
-  re-photographing with the missing marker in frame, or (when only one component is missing)
-  by {{ student.display_name }} picking from a short list on her own results page.</p>
-{% if waiting_on_identity %}
-<ul class="pending-list">
-  {% for item in waiting_on_identity %}
-  <li>&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="message">Nothing waiting on page identity right now.</p>
-{% endif %}
-
-<h2>Transcription could not be read</h2>
-{% if waiting_on_transcription %}
-<ul class="pending-list">
-  {% for item in waiting_on_transcription %}
-  <li>&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="message">Nothing waiting on a clearer photo right now.</p>
-{% endif %}
-
-<h2>Needs a person to judge</h2>
-<p class="message">Not waiting on more data &mdash; this is where the key itself says the answer
-  varies, or nothing was written to compare. Worth looking at the work directly.</p>
-{% if needs_person %}
-<ul class="pending-list">
-  {% for item in needs_person %}
-  <li>{% if item.page_number %}Page {{ item.page_number }}: {% endif %}&ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="message">Nothing needs a look right now.</p>
-{% endif %}
-
-<h2>Answer differs from the key</h2>
-<p class="message">Not marked wrong &mdash; her answer doesn't exactly match the key, but a
-  different valid name for the same right answer is possible (a rhombus is a quadrilateral).
-  Your call becomes the grade.</p>
-{% if answer_differs %}
-<ul class="pending-list">
-  {% for item in answer_differs %}
-  <li>{% if item.page_number %}Page {{ item.page_number }}: {% endif %}&ldquo;{{ item.prompt_text }}&rdquo;<br>
-    {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo; &mdash;
-    key says &ldquo;{{ item.expected_answer }}&rdquo;
-    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
-      <input type="hidden" name="session_id" value="{{ item.session_id }}">
-      <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
-      <input type="hidden" name="problem_id" value="{{ item.problem_id }}">
-      <button type="submit" name="verdict" value="correct">Confirm correct</button>
-      <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
+{% if capture_groups %}
+{% for group in capture_groups %}
+<div class="capture-group" id="cg-{{ group.capture_id }}">
+  <div class="capture-group-header">
+    {% if group.page_number %}<span class="capture-page">Page {{ group.page_number }}</span>
+    {% else %}<span class="capture-page">Page not identified yet</span>{% endif %}
+    {% if group.earlier_attempts > 0 %}
+    <span class="message">({{ group.earlier_attempts }} earlier {{ "attempt" if group.earlier_attempts == 1 else "attempts" }} at this page, not shown)</span>
+    {% endif %}
+    {% if not group.page_number %}
+    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/preview-page-entry" class="page-entry-ask">
+      <input type="hidden" name="capture_id" value="{{ group.capture_id }}">
+      <input type="hidden" name="session_id" value="{{ group.session_id }}">
+      <input type="number" name="page_number" min="1" placeholder="page number" required>
+      <button type="submit">This is page&hellip;</button>
     </form>
-  </li>
+    {% set other_unresolved = capture_groups | selectattr("page_number", "none") | rejectattr("capture_id", "equalto", group.capture_id) | list %}
+    {% if other_unresolved %}
+    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/mark-duplicate" class="page-entry-ask">
+      <input type="hidden" name="capture_id" value="{{ group.capture_id }}">
+      <select name="duplicate_of_capture_id" required>
+        <option value="" disabled selected>same page as&hellip;</option>
+        {% for other in other_unresolved %}
+        <option value="{{ other.capture_id }}">&ldquo;{{ other.items[0].row.prompt_text }}&rdquo;{% if other.items|length > 1 %} (+{{ other.items|length - 1 }} more){% endif %}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Mark as duplicate</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+  <div class="capture-group-images">
+    <img class="capture-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ group.capture_id }}/image" alt="{{ student.display_name }}'s photo">
+    {% if group.has_key_image %}
+    <img class="capture-photo key-photo-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/key-image/{{ group.page_number }}" alt="The answer key for this page">
+    {% endif %}
+  </div>
+  <ul class="pending-list">
+    {% for item in group.items %}
+    <li>
+      <span class="cause-label">{{ item.cause_label }}</span>
+      &ldquo;{{ item.row.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw }}&rdquo;
+      {% if item.row.needs_human_cause == "answer_differs_from_key" %}
+      &mdash; key says &ldquo;{{ item.row.expected_answer }}&rdquo;
+      <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
+        <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
+        <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
+        <input type="hidden" name="problem_id" value="{{ item.row.problem_id }}">
+        <button type="submit" name="verdict" value="correct">Confirm correct</button>
+        <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+{% else %}
+<p class="message">Nothing pending right now.</p>
+{% endif %}
+
+<h2 id="graded-correct">Graded correct</h2>
+{% if correct_items %}
+<ul class="pending-list">
+  {% for item in correct_items %}
+  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
   {% endfor %}
 </ul>
 {% else %}
-<p class="message">Nothing waiting on your judgment right now.</p>
+<p class="message">Nothing graded correct yet.</p>
+{% endif %}
+
+<h2 id="graded-incorrect">Graded incorrect</h2>
+{% if incorrect_items %}
+<ul class="pending-list">
+  {% for item in incorrect_items %}
+  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer }}&rdquo;{% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing graded incorrect yet.</p>
 {% endif %}
 
 {% if show_repeated_attempts %}

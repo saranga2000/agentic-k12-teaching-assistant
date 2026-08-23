@@ -964,17 +964,263 @@ def test_session_results_offers_a_pick_among_real_confirmed_candidates(
     assert f'action="/session/s-marcus/{session_id}/resolve-identity"' in response.text
 
 
-def test_session_results_shows_nothing_to_ask_when_no_candidates_exist(
+def test_session_results_offers_a_free_text_ask_when_no_candidates_exist(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
-    """Nothing confirmed for Day 5 at all -- the honest PARTIAL refusal
-    stands, no pick offered (there's nothing real to offer)."""
+    """Nothing confirmed for Day 5 at all -- no constrained pick to offer, but
+    per the ask-and-proceed principle (2026-08-22) that no longer means a
+    bare refusal: a free-text "what page is this" ask, with her own photo,
+    takes its place."""
     session_id = _seed_partial_identity_session(conn)
 
     response = client.get(f"/session/s-marcus/{session_id}")
 
     assert response.status_code == 200
     assert "resolve-identity" not in response.text
+    assert "preview-page-entry" in response.text
+    assert "What page is this?" in response.text
+    assert "/captures/s-marcus/c-partial/image" in response.text
+
+
+def test_session_results_offers_a_free_text_ask_for_unknown_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """UNKNOWN_PAGE -- nothing legible at all, not even a partial read -- gets
+    the same free-text ask as a PARTIAL with no candidates. No candidates
+    concept applies here; there was never anything to constrain a pick from."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-unknown",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-unknown",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-unknown",
+            assignment_id="a-1",
+            started_at="2026-08-12T08:00:00+00:00",
+            ended_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-unknown",
+            capture_id="c-unknown",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.97,
+            needs_human_cause="unknown_page",
+        ),
+    )
+
+    response = client.get("/session/s-marcus/sess-unknown")
+
+    assert response.status_code == 200
+    assert "preview-page-entry" in response.text
+
+
+def test_capture_image_serves_the_real_file(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(ACCEPTED)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-photo",
+            assignment_id="a-1",
+            captured_at="2026-08-12T08:00:00+00:00",
+            image_path=str(image_path),
+        ),
+    )
+
+    response = client.get("/captures/s-marcus/c-photo/image")
+
+    assert response.status_code == 200
+    assert response.content == ACCEPTED
+
+
+def test_capture_image_for_an_unknown_capture_is_404(client: TestClient) -> None:
+    response = client.get("/captures/s-marcus/no-such-capture/image")
+
+    assert response.status_code == 404
+
+
+def test_preview_page_entry_shows_the_photo_and_key_preview(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/preview-page-entry",
+        data={"capture_id": "c-partial", "page_number": "15"},
+    )
+
+    assert response.status_code == 200
+    assert "Is this page 15?" in response.text
+    assert "/captures/s-marcus/c-partial/image" in response.text
+    assert "Problem 1: 19" in response.text
+
+
+def test_preview_page_entry_with_no_key_yet_says_so_honestly(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/preview-page-entry",
+        data={"capture_id": "c-partial", "page_number": "15"},
+    )
+
+    assert response.status_code == 200
+    assert "I don't have answers for page 15 yet" in response.text
+
+
+def test_preview_page_entry_rejects_a_non_numeric_page_silently(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/preview-page-entry",
+        data={"capture_id": "c-partial", "page_number": "not-a-number"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+
+
+def test_commit_page_entry_grades_and_records_distinct_provenance(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Logged as RESOLVED_BY_STUDENT_ENTRY, never RESOLVED_BY_STUDENT_PICK --
+    a typed, self-confirmed number is a different, weaker claim than a pick
+    among real candidates, and an accuracy count must never conflate them."""
+    session_id = _seed_partial_identity_session(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/commit-page-entry",
+        data={"capture_id": "c-partial", "page_number": "15"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].page_number == 15
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
+    assert counts.get("resolved_by_student_entry") == 1
+    assert counts.get("resolved_by_student_pick") is None
 
 
 def test_session_results_auto_resolves_when_only_one_candidate_ever_confirmed(

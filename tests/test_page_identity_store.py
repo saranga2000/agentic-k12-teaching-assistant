@@ -11,6 +11,7 @@ import sqlite3
 from k12ta.store import (
     content,
     db,
+    key_page_images,
     migrate,
     page_identities,
     page_identity_resolutions,
@@ -571,4 +572,237 @@ def test_counts_are_scoped_to_student_and_source() -> None:
 
     assert (
         page_identity_resolutions.count_outcomes_for_source(conn, "s-other", "summer_bridge") == {}
+    )
+
+
+# --- get_schema_at_version --------------------------------------------------------
+
+
+def test_get_schema_at_version_returns_an_older_version_unchanged_by_later_edits() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("page_number", "Page number", "15")]
+    )
+
+    v1 = page_identity_schemas.get_schema_at_version(conn, "s-marcus", "summer_bridge", 1)
+    v2 = page_identity_schemas.get_schema_at_version(conn, "s-marcus", "summer_bridge", 2)
+
+    assert [c.component_name for c in v1] == ["day"]
+    assert [c.component_name for c in v2] == ["page_number"]
+
+
+def test_get_schema_at_version_is_empty_for_a_version_never_saved() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert page_identity_schemas.get_schema_at_version(conn, "s-marcus", "summer_bridge", 5) == ()
+
+
+# --- backfill_page_number_schema --------------------------------------------------
+
+
+def test_backfill_derives_page_number_composites_from_an_older_schema() -> None:
+    """The whole point: no re-scanning, no re-typing -- every confirmed page's
+    own page_number becomes the new schema's one-component composite key."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    v1 = page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("section", "Section", "Section 1"), ("day", "Day", "Day 5")],
+    )
+    for composite, page in (
+        ("Section 1\x1fDay 1", 13),
+        ("Section 1\x1fDay 2", 15),
+        ("Section 2\x1fDay 1", 61),
+    ):
+        page_identities.upsert_identity(
+            conn,
+            page_identities.PageIdentityRow(
+                student_id="s-marcus",
+                source_id="summer_bridge",
+                page_number=page,
+                composite_key=composite,
+                schema_version=v1,
+                confirmed_at="2026-08-15T00:00:00+00:00",
+            ),
+        )
+    v2 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("page_number", "Page number", "15")]
+    )
+
+    backfilled = page_identities.backfill_page_number_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        new_schema_version=v2,
+        from_schema_version=v1,
+        confirmed_at="2026-08-22T00:00:00+00:00",
+    )
+
+    assert backfilled == 3
+    rows = {
+        row.composite_key: row.page_number
+        for row in page_identities.list_for_source_at_version(conn, "s-marcus", "summer_bridge", v2)
+    }
+    assert rows == {"13": 13, "15": 15, "61": 61}
+    assert all(
+        row.source == "backfill"
+        for row in page_identities.list_for_source_at_version(conn, "s-marcus", "summer_bridge", v2)
+    )
+
+
+def test_backfill_is_idempotent() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    v1 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=13,
+            composite_key="Day 1",
+            schema_version=v1,
+            confirmed_at="2026-08-15T00:00:00+00:00",
+        ),
+    )
+    v2 = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("page_number", "Page number", "15")]
+    )
+
+    page_identities.backfill_page_number_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        new_schema_version=v2,
+        from_schema_version=v1,
+        confirmed_at="2026-08-22T00:00:00+00:00",
+    )
+    second_run_count = page_identities.backfill_page_number_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        new_schema_version=v2,
+        from_schema_version=v1,
+        confirmed_at="2026-08-22T01:00:00+00:00",
+    )
+
+    assert second_run_count == 1
+    rows = page_identities.list_for_source_at_version(conn, "s-marcus", "summer_bridge", v2)
+    assert len(rows) == 1
+
+
+# --- get_schema_version_for_capture -----------------------------------------------
+
+
+def test_get_schema_version_for_capture_round_trips() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-1",
+            outcome="partial",
+            resolved_page_number=None,
+            created_at="2026-08-22T00:00:00+00:00",
+            seen_values_json='{"day": "Day 2"}',
+            schema_version=1,
+        ),
+    )
+
+    assert page_identity_resolutions.get_schema_version_for_capture(conn, "s-marcus", "c-1") == 1
+
+
+def test_get_schema_version_for_capture_is_none_for_a_row_without_one() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-1",
+            outcome="partial",
+            resolved_page_number=None,
+            created_at="2026-08-22T00:00:00+00:00",
+        ),
+    )
+
+    assert page_identity_resolutions.get_schema_version_for_capture(conn, "s-marcus", "c-1") is None
+
+
+def test_get_schema_version_for_capture_is_none_when_never_resolved() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert (
+        page_identity_resolutions.get_schema_version_for_capture(conn, "s-marcus", "no-such")
+        is None
+    )
+
+
+# --- key_page_images ---------------------------------------------------------
+
+
+def test_key_page_image_round_trips() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert key_page_images.get_image_path(conn, "s-marcus", "summer_bridge", 15) is None
+
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            image_path="/data/key_captures/abc.jpg",
+            confirmed_at="2026-08-22T00:00:00+00:00",
+        ),
+    )
+
+    assert (
+        key_page_images.get_image_path(conn, "s-marcus", "summer_bridge", 15)
+        == "/data/key_captures/abc.jpg"
+    )
+
+
+def test_key_page_image_re_scan_replaces_the_stored_path() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            image_path="/data/key_captures/old.jpg",
+            confirmed_at="2026-08-22T00:00:00+00:00",
+        ),
+    )
+
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            image_path="/data/key_captures/new.jpg",
+            confirmed_at="2026-08-22T01:00:00+00:00",
+        ),
+    )
+
+    assert (
+        key_page_images.get_image_path(conn, "s-marcus", "summer_bridge", 15)
+        == "/data/key_captures/new.jpg"
     )

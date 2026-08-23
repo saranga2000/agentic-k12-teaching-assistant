@@ -168,8 +168,25 @@ def process_capture(
 
     assignment = content.get_assignment(conn, student_id, assignment_id)
     assert assignment is not None, f"assignment {assignment_id} vanished after ingest"
+    schema_version = page_identity_schemas.get_current_version(
+        conn, student_id, assignment.source_id
+    )
     schema = page_identity_schemas.get_current_schema(conn, student_id, assignment.source_id)
-    identity_schema = tuple((c.component_name, c.example) for c in schema)
+    # The union of the current schema's components and the immediately
+    # preceding version's -- so one photo can carry markers for both, and
+    # page_identity.resolve_with_schema_history's one-version-back fallback
+    # (e.g. Summer Bridge's page-number-primary schema falling back to its
+    # old Day+Section pair, docs/ROADMAP.md's M3.7) has something to read.
+    # Ordinary sources with only one schema version ever saved get exactly
+    # today's behaviour: fallback_schema is empty, identity_schema is schema.
+    fallback_schema = (
+        page_identity_schemas.get_schema_at_version(
+            conn, student_id, assignment.source_id, schema_version - 1
+        )
+        if schema_version > 1
+        else ()
+    )
+    identity_schema = tuple((c.component_name, c.example) for c in (*schema, *fallback_schema))
 
     try:
         transcriber = get_transcriber()
@@ -230,7 +247,7 @@ def process_capture(
         # Only auto-resolve when the caller didn't already supply a page number --
         # a manual override (tests, the Scope A demo path) always wins and is never
         # second-guessed by this photo's own identity extraction.
-        resolution = page_identity.resolve(
+        resolution, resolved_schema_version = page_identity.resolve_with_schema_history(
             conn,
             student_id,
             assignment.source_id,
@@ -250,8 +267,17 @@ def process_capture(
             # produces PARTIAL_PAGE_MARKERS either. Which components were seen and
             # missing is decided here, once, and stored as a fact for the renderer
             # to interpolate, never re-derived from the schema at render time.
+            # resolved_schema_version, not "current": PARTIAL can only have come
+            # from resolve_with_schema_history's fallback attempt here (a
+            # single-component current schema can never itself produce PARTIAL --
+            # see resolve()'s NO_MARKERS-before-missing check), so resolve_partial
+            # must look at the same older schema resolve() just did.
             partial = page_identity.resolve_partial(
-                conn, student_id, assignment.source_id, result.page_identity.candidates
+                conn,
+                student_id,
+                assignment.source_id,
+                result.page_identity.candidates,
+                schema_version=resolved_schema_version,
             )
             if partial.auto_resolved_page_number is not None:
                 # Deduction from what a parent has already confirmed against the
@@ -288,6 +314,7 @@ def process_capture(
                 resolved_page_number=resolution.page_number,
                 created_at=now,
                 seen_values_json=seen_values_json,
+                schema_version=resolved_schema_version,
             ),
         )
 

@@ -1,6 +1,6 @@
 ---
 id: transcribe_key_page
-version: 5
+version: 6
 covered_by: tests/test_key_page_transcriber.py
 ---
 
@@ -56,7 +56,9 @@ For every answer on the page, emit one object with:
   "1", "4a")
 - `answer_text`: the answer exactly as printed, including units and fractions. `null`
   if this entry is ungradeable (see below) — never a description or paraphrase of an
-  ungradeable answer.
+  ungradeable answer. Plain text, never LaTeX or any other typesetting markup, even for
+  a fraction, exponent, or unit -- write "5 ft", never "$5\text{ ft}$"; write "3/4",
+  never "\frac{3}{4}". A parent reading this needs a plain word, not typeset math.
 - `ungradeable_reason`: `null` for a normal answer. Otherwise exactly one of:
   - `"answers_vary"` — the key itself declines to give one answer (e.g. "Answers will
     vary", "Students' writing will vary")

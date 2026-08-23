@@ -28,6 +28,19 @@
   </div>
   {% endfor %}
   {% endif %}
+  {% if page_number_asks %}
+  {% for ask in page_number_asks %}
+  <div class="identity-ask page-number-ask">
+    <p class="message">What page is this?</p>
+    <img class="page-number-ask-photo" src="/captures/{{ student.student_id }}/{{ ask.capture_id }}/image" alt="Your photo">
+    <form method="post" action="/session/{{ student.student_id }}/{{ session_id }}/preview-page-entry">
+      <input type="hidden" name="capture_id" value="{{ ask.capture_id }}">
+      <input type="number" name="page_number" min="1" inputmode="numeric" placeholder="page number" required>
+      <button type="submit" class="identity-ask-option">Next</button>
+    </form>
+  </div>
+  {% endfor %}
+  {% endif %}
   {% if items %}
   <div class="results-summary">
     <div class="summary-counts">
@@ -120,6 +133,15 @@
   .identity-ask-not-sure {
     margin-top: 0.7rem; font-size: 0.9rem; padding: 0.2rem 0; border: none; background: none;
     color: var(--text-dim); text-decoration: underline; cursor: pointer;
+  }
+  .page-number-ask-photo {
+    display: block; max-width: 100%; max-height: 35vh; border-radius: 12px;
+    object-fit: contain; margin: 0.6rem 0 0.9rem;
+  }
+  .page-number-ask form { display: flex; gap: 0.6rem; margin: 0; }
+  .page-number-ask input[type="number"] {
+    flex: 1; font-size: 1.05rem; padding: 0.55rem 0.8rem; border-radius: 10px;
+    border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
   }
 </style>
 {% endblock %}

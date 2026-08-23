@@ -39,6 +39,8 @@ _EXPECTED_TABLES = {
     "page_identities",
     "page_identity_resolutions",
     "page_identity_schemas",
+    "key_page_images",
+    "capture_duplicates",
 }
 
 

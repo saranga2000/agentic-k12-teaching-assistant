@@ -263,6 +263,78 @@ def list_pending_for_source(
     return [PendingProblemRow(**dict(row)) for row in cur.fetchall()]
 
 
+@dataclass(frozen=True)
+class ResolvedProblemRow:
+    """One graded_problems row with a real verdict -- twin of
+    PendingProblemRow, same widening, same reasoning, for the parent
+    enrollment page's graded-correct/graded-incorrect sections (M3.9): there
+    is no way to see a real grade on that page today, only what's still
+    pending. `outcome` is "correct" or "incorrect", never anything else --
+    `list_resolved_for_source` is the only caller of this shape and filters
+    to exactly those two."""
+
+    session_id: str
+    capture_id: str
+    problem_id: str
+    prompt_text: str
+    student_answer_raw: str
+    page_number: int
+    outcome: str
+    captured_at: str
+    expected_answer: str | None = None
+
+
+def list_resolved_for_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> list[ResolvedProblemRow]:
+    """Every graded_problems row for this source with a real verdict (correct
+    or incorrect), across every session and capture, in capture order --
+    twin of list_pending_for_source above, same query shape, for the
+    "graded correct" / "graded incorrect" sections the parent-facing summary
+    (2026-08-22 M3.9) links to."""
+    cur = conn.execute(
+        """
+        SELECT gp.session_id AS session_id, gp.capture_id AS capture_id,
+               gp.problem_id AS problem_id, p.prompt_text AS prompt_text,
+               p.student_answer_raw AS student_answer_raw, gp.page_number AS page_number,
+               gp.outcome AS outcome, pc.captured_at AS captured_at,
+               gp.expected_answer AS expected_answer
+        FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        JOIN problems p ON p.student_id = gp.student_id AND p.capture_id = gp.capture_id
+            AND p.problem_id = gp.problem_id
+        WHERE gp.student_id = ? AND a.source_id = ? AND gp.outcome IN ('correct', 'incorrect')
+        ORDER BY pc.captured_at, gp.capture_id, gp.problem_id
+        """,
+        (student_id, source_id),
+    )
+    return [ResolvedProblemRow(**dict(row)) for row in cur.fetchall()]
+
+
+def capture_has_decisive_outcome(
+    conn: sqlite3.Connection, student_id: str, capture_id: str
+) -> bool:
+    """Whether any item this capture ever produced landed on `correct` or
+    `incorrect` -- never scoped to `needs_human` rows the way `list_pending_
+    for_source` is, since the question here is "did this capture's own
+    identity and transcription ever actually earn a real verdict on
+    anything," not "is something from it still waiting." For k12ta.keys.app's
+    pending-list dedup: when several captures resolve to the same page, the
+    one with a real verdict somewhere in it is a stronger representative of
+    that page than one that never produced anything but needs_human, however
+    recently it was taken -- recency alone is not a proxy for quality."""
+    cur = conn.execute(
+        """
+        SELECT 1 FROM graded_problems
+        WHERE student_id = ? AND capture_id = ? AND outcome IN ('correct', 'incorrect')
+        LIMIT 1
+        """,
+        (student_id, capture_id),
+    )
+    return cur.fetchone() is not None
+
+
 def list_graded_attempts_for_source(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> list[GradedAttemptRow]:

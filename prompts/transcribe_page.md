@@ -1,6 +1,6 @@
 ---
 id: transcribe_page
-version: 5
+version: 6
 covered_by: evals/run_transcription_eval.py
 ---
 
@@ -15,7 +15,11 @@ For every problem visible on the page, emit one object with:
   "3/4", an exponent as "x^2" or "x squared" (whichever the page's own style implies),
   a square root as "the square root of 16", never as LaTeX or any other markup
 - `student_answer_raw`: exactly what the student wrote as their final answer, character
-  for character, including errors. Do not correct it. Do not complete it.
+  for character, including errors. Do not correct it. Do not complete it. Still plain
+  text, never LaTeX or any other typesetting markup, even for a fraction, exponent, or
+  unit -- write "5 ft", never "$5\text{ ft}$"; write "3/4", never "\frac{3}{4}". A
+  student wrote this by hand; render what she wrote the way she'd read it back, not the
+  way a textbook would typeset it.
 - `confidence`: 0.0 to 1.0, your probability that `student_answer_raw`, as you
   transcribed it, is exactly what is on the page. This is a claim about your reading
   of a mark that is there. When `student_answer_raw` is empty, there is nothing to

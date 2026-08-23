@@ -21,7 +21,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
@@ -41,6 +41,7 @@ from k12ta.pipeline.process import (
 )
 from k12ta.respond.render import render_student_result, summarize_results
 from k12ta.store import (
+    answer_keys,
     captures,
     content,
     db,
@@ -382,40 +383,84 @@ class IdentityAsk:
     options: tuple[IdentityAskOption, ...]
 
 
+@dataclass(frozen=True)
+class PageNumberAsk:
+    """The "ask the human and proceed" fallback (docs/ROADMAP.md's M3.8):
+    shown for a capture whose identity is missing outright -- UNKNOWN_PAGE
+    (nothing legible at all), or PARTIAL_PAGE_MARKERS with nothing real to
+    offer as a constrained pick (IdentityAsk still wins whenever it has real
+    candidates; this is only the case where refusing was the only option
+    before). Never CONFLICTING_PAGE_MARKERS -- two markers on one photo is
+    contradictory data, not missing data, and the fix is re-photographing
+    one page, not asking a question nobody photographing a two-page spread
+    could answer correctly either. Carries nothing but the capture_id: the
+    template builds the photo URL from it, and the two-step confirm flow
+    (preview_page_entry / commit_page_entry below) re-derives everything
+    else fresh at submit time, same "never trust anything computed at
+    render time" discipline IdentityAsk already follows."""
+
+    capture_id: str
+
+
 def _resolve_pending_identities(
     conn: sqlite3.Connection,
     student_id: str,
     session_id: str,
     source_id: str,
     graded: list[sessions.GradedProblemRow],
-) -> list[IdentityAsk]:
-    """For every distinct capture in this session still needing a pick
-    (PARTIAL_PAGE_MARKERS with real candidates to offer, per
-    k12ta.grading.page_identity.resolve_partial), returns what to ask --
-    after opportunistically applying anything that's become auto-resolvable
-    since capture time (e.g. a parent has since scanned enough pages that
-    only one candidate remains for this photo's known components). Always
-    re-derives fresh from the current page_identities table on every call;
-    nothing computed at capture time is trusted here."""
-    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
-    asks: list[IdentityAsk] = []
+) -> tuple[list[IdentityAsk], list[PageNumberAsk]]:
+    """For every distinct capture in this session still needing a pick or an
+    ask (PARTIAL_PAGE_MARKERS or UNKNOWN_PAGE), returns what to show --
+    constrained picks with real candidates as IdentityAsk, everything else
+    missing (not contradictory) as PageNumberAsk -- after opportunistically
+    applying anything that's become auto-resolvable since capture time (e.g.
+    a parent has since scanned enough pages that only one candidate remains
+    for this photo's known components). Always re-derives fresh from the
+    current page_identities table on every call; nothing computed at
+    capture time is trusted here."""
+    identity_asks: list[IdentityAsk] = []
+    page_number_asks: list[PageNumberAsk] = []
     seen_captures: set[str] = set()
     for row in graded:
-        if row.needs_human_cause != NeedsHumanCause.PARTIAL_PAGE_MARKERS.value:
+        if row.needs_human_cause not in (
+            NeedsHumanCause.PARTIAL_PAGE_MARKERS.value,
+            NeedsHumanCause.UNKNOWN_PAGE.value,
+        ):
             continue
         if row.capture_id in seen_captures:
             continue
         seen_captures.add(row.capture_id)
+
+        if row.needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value:
+            # Nothing was extracted at all -- there is no candidates concept
+            # to even attempt here, ask directly.
+            page_number_asks.append(PageNumberAsk(capture_id=row.capture_id))
+            continue
+
         seen_json = page_identity_resolutions.get_seen_values_for_capture(
             conn, student_id, row.capture_id
         )
         if seen_json is None:
+            page_number_asks.append(PageNumberAsk(capture_id=row.capture_id))
             continue
         seen_values: dict[str, str] = json.loads(seen_json)
         photo_candidates: dict[str, tuple[str, ...]] = {
             name: (value,) for name, value in seen_values.items()
         }
-        partial = page_identity.resolve_partial(conn, student_id, source_id, photo_candidates)
+        # Not necessarily "current": this row's PARTIAL may have come from
+        # resolve_with_schema_history's older-schema fallback (a page-number
+        # schema can never itself produce PARTIAL -- see resolve()'s
+        # NO_MARKERS-before-missing check), so resolve_partial has to be
+        # asked at whichever version actually produced it.
+        stored_version = page_identity_resolutions.get_schema_version_for_capture(
+            conn, student_id, row.capture_id
+        )
+        resolved_version = page_identity.schema_version_for_seen_component_names(
+            conn, student_id, source_id, tuple(seen_values), stored_version
+        )
+        partial = page_identity.resolve_partial(
+            conn, student_id, source_id, photo_candidates, schema_version=resolved_version
+        )
         if partial.auto_resolved_page_number is not None:
             # No longer ambiguous -- apply it now rather than show a stale ask
             # for a question the household has already, unknowingly, answered.
@@ -429,11 +474,21 @@ def _resolve_pending_identities(
             )
             continue
         if not partial.matches:
+            # A real component was read, but nothing already confirmed
+            # agrees with it -- there is genuinely nothing to constrain a
+            # pick from. This is exactly the case the ask-and-proceed
+            # principle replaces "refuse honestly" with.
+            page_number_asks.append(PageNumberAsk(capture_id=row.capture_id))
             continue
-        missing_component = next((c for c in schema if c.component_name not in seen_values), None)
+        resolved_schema = page_identity_schemas.get_schema_at_version(
+            conn, student_id, source_id, resolved_version
+        )
+        missing_component = next(
+            (c for c in resolved_schema if c.component_name not in seen_values), None
+        )
         if missing_component is None:
             continue
-        asks.append(
+        identity_asks.append(
             IdentityAsk(
                 capture_id=row.capture_id,
                 missing_label=missing_component.label,
@@ -443,7 +498,7 @@ def _resolve_pending_identities(
                 ),
             )
         )
-    return asks
+    return identity_asks, page_number_asks
 
 
 @app.post("/session/{student_id}/{session_id}/resolve-identity")
@@ -483,8 +538,15 @@ def submit_identity_pick(
         photo_candidates: dict[str, tuple[str, ...]] = {
             name: (value,) for name, value in seen_values.items()
         }
+        # Same "not necessarily current" reasoning as _resolve_pending_identities.
+        stored_version = page_identity_resolutions.get_schema_version_for_capture(
+            conn, student_id, capture_id
+        )
+        resolved_version = page_identity.schema_version_for_seen_component_names(
+            conn, student_id, source.source_id, tuple(seen_values), stored_version
+        )
         partial = page_identity.resolve_partial(
-            conn, student_id, source.source_id, photo_candidates
+            conn, student_id, source.source_id, photo_candidates, schema_version=resolved_version
         )
         valid_page_numbers = (
             {partial.auto_resolved_page_number}
@@ -508,6 +570,118 @@ def submit_identity_pick(
             )
         # else: a stale or tampered submission -- silently ignored, nothing
         # resolved, the honest refusal keeps rendering.
+    return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
+
+
+_PAGE_ENTRY_PREVIEW_COUNT = 3
+"""How many of the typed page's own confirmed answers the confirm step shows
+-- "the first two or three answers the system is about to grade against,"
+per the ask-and-proceed principle's confirmation requirement. Enough to
+recognise the page by its actual content, not so many the confirm screen
+stops being a quick check."""
+
+
+@app.post(
+    "/session/{student_id}/{session_id}/preview-page-entry",
+    response_class=HTMLResponse,
+    response_model=None,
+)
+def preview_page_entry(
+    request: Request,
+    student_id: str,
+    session_id: str,
+    capture_id: str = Form(...),
+    page_number: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse | RedirectResponse:
+    """Step one of two for the free-text page-ask (PageNumberAsk): she typed a
+    number, this renders what she's about to confirm -- her own photo again,
+    the number, and this page's own first few confirmed answers, if any
+    exist yet -- and commits nothing. "A second tap alone is not enough; she
+    must be shown what she is confirming" is the whole reason this is a
+    separate step from commit_page_entry rather than one route that both
+    previews and commits.
+
+    A non-digit or non-positive submission redirects back to the results
+    page unchanged -- same honest "nothing happened" as a stale pick,
+    never a 500 for a plainly mistyped number."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    session = sessions.get_session(conn, student_id, session_id)
+    if session is None:
+        raise HTTPException(404, "no such session")
+    assignment = content.get_assignment(conn, student_id, session.assignment_id)
+    assert assignment is not None  # a session's assignment can't vanish once created
+    source = content.get_content_source(conn, student_id, assignment.source_id)
+    assert source is not None  # an assignment's source can't vanish once created
+
+    if not page_number.isdigit() or int(page_number) <= 0:
+        return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
+    parsed_page_number = int(page_number)
+
+    entries = answer_keys.get_entries_for_page(
+        conn, student_id, source.source_id, parsed_page_number
+    )
+    preview = sorted(entries, key=lambda e: _problem_sort_key(e.problem_number))[
+        :_PAGE_ENTRY_PREVIEW_COUNT
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "confirm_page_entry.html",
+        {
+            "student": student,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "page_number": parsed_page_number,
+            "preview": preview,
+        },
+    )
+
+
+@app.post("/session/{student_id}/{session_id}/commit-page-entry")
+def commit_page_entry(
+    student_id: str,
+    session_id: str,
+    capture_id: str = Form(...),
+    page_number: int = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Step two: her real, informed confirmation, after seeing her photo and
+    this page's own answers on the preview step. Nothing here is re-validated
+    against a candidate list the way submit_identity_pick's pick is -- there
+    is no list, that is the whole point of this path -- so the safety this
+    route relies on is entirely the preview step actually having been shown,
+    never a server-side check of her claim's correctness. Logged as
+    RESOLVED_BY_STUDENT_ENTRY, never RESOLVED_BY_STUDENT_PICK: a typed,
+    self-confirmed number is a different, weaker claim than a pick among
+    real candidates, and an accuracy count must never conflate the two."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    session = sessions.get_session(conn, student_id, session_id)
+    if session is None:
+        raise HTTPException(404, "no such session")
+    assignment = content.get_assignment(conn, student_id, session.assignment_id)
+    assert assignment is not None  # a session's assignment can't vanish once created
+    source = content.get_content_source(conn, student_id, assignment.source_id)
+    assert source is not None  # an assignment's source can't vanish once created
+
+    regrade_capture_for_resolved_identity(
+        conn, student_id, session_id, capture_id, source.source_id, page_number
+    )
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id=student_id,
+            source_id=source.source_id,
+            capture_id=capture_id,
+            outcome=page_identity.RESOLVED_BY_STUDENT_ENTRY,
+            resolved_page_number=page_number,
+            created_at=datetime.now(UTC).isoformat(),
+        ),
+    )
     return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
 
 
@@ -536,6 +710,21 @@ def _group_by_problem(
     for row in rows:
         grouped.setdefault((row.page_number, row.problem_id), []).append(row)
     return grouped
+
+
+@app.get("/captures/{student_id}/{capture_id}/image")
+def capture_image(
+    student_id: str, capture_id: str, conn: sqlite3.Connection = Depends(get_conn)
+) -> FileResponse:
+    """The photo behind one capture, for the free-text page-ask/confirm flow
+    (session_result.html) to show alongside the question -- a student reading
+    her own page number off her own photo, not off a description of it. Path
+    comes from `page_captures.image_path`, never from the request, so nothing
+    here lets a caller point at an arbitrary file on disk."""
+    capture = captures.get_page_capture(conn, student_id, capture_id)
+    if capture is None:
+        raise HTTPException(404, "no such capture")
+    return FileResponse(capture.image_path, media_type="image/jpeg")
 
 
 @app.get("/session/{student_id}/{session_id}", response_class=HTMLResponse)
@@ -567,7 +756,7 @@ def session_results(
     had_partial = any(
         g.needs_human_cause == NeedsHumanCause.PARTIAL_PAGE_MARKERS.value for g in graded
     )
-    identity_asks = _resolve_pending_identities(
+    identity_asks, page_number_asks = _resolve_pending_identities(
         conn, student_id, session_id, source.source_id, graded
     )
     if had_partial:
@@ -630,5 +819,6 @@ def session_results(
             "summary": summary,
             "no_problems_message": NO_PROBLEMS_FOUND_MESSAGE,
             "identity_asks": identity_asks,
+            "page_number_asks": page_number_asks,
         },
     )

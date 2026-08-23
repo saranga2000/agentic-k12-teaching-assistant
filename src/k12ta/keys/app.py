@@ -15,33 +15,38 @@ import queue
 import re
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
 from k12ta.domain.attempts import PastAttempt, attempt_number
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
+from k12ta.grading import page_identity
 from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm import build_vision_model
 from k12ta.pipeline.key_ingestion import (
     KeyIngestionOutcome,
     KeyIngestionStatus,
+    save_key_page_image,
     transcribe_key_page,
 )
 from k12ta.pipeline.process import regrade_capture_for_resolved_identity
 from k12ta.store import (
     answer_key_audit,
     answer_keys,
+    capture_duplicates,
+    captures,
     content,
     db,
+    key_page_images,
     migrate,
     page_identities,
     page_identity_resolutions,
@@ -336,59 +341,259 @@ _WAITING_ON_TRANSCRIPTION_CAUSE = "low_confidence"
 _NEEDS_PERSON_CAUSE = "needs_person"
 _ANSWER_DIFFERS_CAUSE = "answer_differs_from_key"
 
+_CAUSE_LABELS: dict[str, str] = {
+    _WAITING_ON_KEY_CAUSE: "Waiting on an answer key",
+    "unknown_page": "Waiting on page identity",
+    "partial_page_markers": "Waiting on page identity",
+    "conflicting_page_markers": "Waiting on page identity",
+    _WAITING_ON_TRANSCRIPTION_CAUSE: "Transcription could not be read",
+    _NEEDS_PERSON_CAUSE: "Needs a person to judge",
+    _ANSWER_DIFFERS_CAUSE: "Answer differs from the key",
+}
+_UNKNOWN_CAUSE_LABEL = "Needs a look"
+"""A legacy row with no cause at all (predates the needs_human_cause column)
+-- genuinely unknown, not a guess dressed up as a specific one."""
 
-def _bucket_pending(
+
+@dataclass(frozen=True)
+class PendingItemDisplay:
+    """One pending problem within a CaptureGroup, its cause spelled out as a
+    label rather than left for a parent to infer from a section heading --
+    "group by capture, not flat by cause" (2026-08-22) still needs the cause
+    said somewhere, it just stops being the thing rows are sorted into."""
+
+    row: sessions.PendingProblemRow
+    cause_label: str
+
+
+@dataclass(frozen=True)
+class CaptureGroup:
+    """One photograph, its image, its still-pending items beneath it -- the
+    parent-facing pending list's real unit of display (2026-08-22, replacing
+    the flat-by-cause list). `earlier_attempts` folds in every capture this
+    one's resolved page_number superseded, per `_group_pending_by_capture`'s
+    tiebreak; `has_key_image` is a plain existence check against
+    `k12ta.store.key_page_images`, real only for a key confirmed after that
+    table started being written to."""
+
+    capture_id: str
+    session_id: str
+    """Every graded_problems row a capture ever produces shares one session_id
+    (k12ta.pipeline.process mints exactly one per capture) -- carried here so
+    the ask-and-confirm flow's commit step (regrade_capture_for_resolved_
+    identity) has it without a second query."""
+    page_number: int | None
+    captured_at: str
+    items: tuple[PendingItemDisplay, ...]
+    earlier_attempts: int
+    has_key_image: bool
+
+
+def _pick_capture_for_page(
+    conn: sqlite3.Connection,
+    student_id: str,
+    capture_ids: Sequence[str],
+    captured_at_by_capture: dict[str, str],
+) -> str:
+    """Which of several captures resolving to the same page represents it on
+    screen. Prefers the most recent capture with a real (correct/incorrect)
+    verdict *anywhere* among its own items -- checked across the capture's
+    whole graded_problems, not just what's still pending, since a capture
+    with a clean verdict on some items has nothing pending for those at all.
+    Falls back to plain most-recent only when none of the candidates ever
+    produced one. Recency alone is not a proxy for quality (found 2026-08-22:
+    the newest of three page-15 captures had the worst transcription of the
+    three) -- but a real verdict is a genuine quality signal recency isn't."""
+    with_verdict = [
+        c for c in capture_ids if sessions.capture_has_decisive_outcome(conn, student_id, c)
+    ]
+    pool = with_verdict if with_verdict else capture_ids
+    return max(pool, key=lambda c: captured_at_by_capture[c])
+
+
+_NEEDS_REVIEW_CAUSES = frozenset({_NEEDS_PERSON_CAUSE, _ANSWER_DIFFERS_CAUSE})
+
+
+@dataclass(frozen=True)
+class EnrollmentSummary:
+    """The parent enrollment page's two-second read (2026-08-22 M3.9): a
+    count for each of five states, and, for the three that live inside
+    "Pending review," which capture-group is the first to contain a
+    matching item -- that section is grouped by capture, not by cause
+    (M3.8), so there is no separate cause-labelled section left to link to;
+    the summary jumps to the first block that has one instead. `None` when
+    a state has nothing pending -- the template renders that count as plain
+    text, never a dead link."""
+
+    needs_review_count: int
+    waiting_on_identity_count: int
+    waiting_on_key_count: int
+    correct_count: int
+    incorrect_count: int
+    first_needs_review_capture_id: str | None
+    first_waiting_on_identity_capture_id: str | None
+    first_waiting_on_key_capture_id: str | None
+
+
+def _summarize_enrollment(
+    pending: Sequence[sessions.PendingProblemRow],
+    capture_groups: Sequence[CaptureGroup],
+    resolved: Sequence[sessions.ResolvedProblemRow],
+) -> EnrollmentSummary:
+    first_needs_review: str | None = None
+    first_identity: str | None = None
+    first_key: str | None = None
+    for group in capture_groups:
+        causes = {item.row.needs_human_cause for item in group.items}
+        if first_needs_review is None and causes & _NEEDS_REVIEW_CAUSES:
+            first_needs_review = group.capture_id
+        if first_identity is None and causes & _WAITING_ON_IDENTITY_CAUSES:
+            first_identity = group.capture_id
+        if first_key is None and _WAITING_ON_KEY_CAUSE in causes:
+            first_key = group.capture_id
+
+    return EnrollmentSummary(
+        needs_review_count=sum(
+            1 for row in pending if row.needs_human_cause in _NEEDS_REVIEW_CAUSES
+        ),
+        waiting_on_identity_count=sum(
+            1 for row in pending if row.needs_human_cause in _WAITING_ON_IDENTITY_CAUSES
+        ),
+        waiting_on_key_count=sum(
+            1 for row in pending if row.needs_human_cause == _WAITING_ON_KEY_CAUSE
+        ),
+        correct_count=sum(1 for row in resolved if row.outcome == "correct"),
+        incorrect_count=sum(1 for row in resolved if row.outcome == "incorrect"),
+        first_needs_review_capture_id=first_needs_review,
+        first_waiting_on_identity_capture_id=first_identity,
+        first_waiting_on_key_capture_id=first_key,
+    )
+
+
+def _resolve_duplicate_root(capture_id: str, duplicate_of: dict[str, str]) -> str:
+    """Follows capture_duplicates' one-hop mapping to its end -- a parent
+    marking B a duplicate of A, then later C a duplicate of B, means C's
+    items belong with A's group, not their own separate one. Stops the
+    moment following the chain would revisit a capture already seen, so a
+    cycle (A duplicate of B, B duplicate of A) can never loop forever; it
+    just returns wherever the walk got to."""
+    seen = {capture_id}
+    current = capture_id
+    while current in duplicate_of and duplicate_of[current] not in seen:
+        current = duplicate_of[current]
+        seen.add(current)
+    return current
+
+
+def _group_pending_by_capture(
     conn: sqlite3.Connection,
     student_id: str,
     source_id: str,
-    pending: list[sessions.PendingProblemRow],
-) -> dict[str, object]:
-    """Groups the waiting list by cause, per the M2 roadmap entry this
-    subsumes -- a parent needs to know what to do, not just that something is
-    pending, and the fix differs by cause (scan a key page vs. re-photograph
-    vs. wait). needs_person and answer_differs are deliberately excluded from
-    every "waiting" bucket and returned on their own: neither is waiting on
-    more data arriving, both are actionable right now -- needs_person because
-    the key itself says the answer varies, answer_differs because only a
-    person can tell a valid alternate name from a real mistake (see
-    k12ta.grading.needs_human.NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY). A
-    legacy row with no cause at all (predates the needs_human_cause column)
-    is left out of every bucket rather than folded into one that would
-    misstate why it's here -- genuinely unknown, not a guess dressed up as
-    one."""
-    waiting_on_key = []
-    waiting_on_identity = []
-    waiting_on_transcription = []
-    needs_person = []
-    answer_differs = []
-    now_gradable_captures: set[str] = set()
+    pending: Sequence[sessions.PendingProblemRow],
+) -> tuple[list[CaptureGroup], int]:
+    """Display-layer only -- deletes and regrades nothing;
+    `k12ta.store.sessions.list_pending_for_source` itself, and
+    `submit_regrade_pending`'s actual regrading, see every row underneath
+    regardless of what this collapses on screen.
+
+    Groups by capture first (2026-08-22: "group by capture, not flat by
+    cause" -- one photograph, its image, its items beneath), then, among
+    captures sharing the same *resolved* page_number, keeps only one per
+    page via `_pick_capture_for_page`, folding the rest into that
+    survivor's `earlier_attempts` count. A capture with no resolved page_number
+    yet is never grouped against another -- there's nothing to dedupe until
+    it resolves, every such capture is its own group.
+
+    Returns (groups in capture order, how many problems are now gradable
+    because a key has since been added for their page -- unchanged from the
+    old _bucket_pending, just no longer nested under a "waiting on a key"
+    bucket key)."""
+    by_capture: dict[str, list[sessions.PendingProblemRow]] = {}
     for row in pending:
-        if row.needs_human_cause == _WAITING_ON_KEY_CAUSE:
-            waiting_on_key.append(row)
-            if row.page_number is not None and (
-                find_key_entry(
+        by_capture.setdefault(row.capture_id, []).append(row)
+
+    now_gradable_captures: set[str] = set()
+    for capture_id, rows in by_capture.items():
+        for row in rows:
+            if row.needs_human_cause == _WAITING_ON_KEY_CAUSE and row.page_number is not None:
+                key_entry = find_key_entry(
                     answer_keys.get_entries_for_page(conn, student_id, source_id, row.page_number),
                     row.problem_id,
                 )
-                is not None
-            ):
-                now_gradable_captures.add(row.capture_id)
-        elif row.needs_human_cause in _WAITING_ON_IDENTITY_CAUSES:
-            waiting_on_identity.append(row)
-        elif row.needs_human_cause == _WAITING_ON_TRANSCRIPTION_CAUSE:
-            waiting_on_transcription.append(row)
-        elif row.needs_human_cause == _NEEDS_PERSON_CAUSE:
-            needs_person.append(row)
-        elif row.needs_human_cause == _ANSWER_DIFFERS_CAUSE:
-            answer_differs.append(row)
-    return {
-        "waiting_on_key": waiting_on_key,
-        "waiting_on_identity": waiting_on_identity,
-        "waiting_on_transcription": waiting_on_transcription,
-        "needs_person": needs_person,
-        "answer_differs": answer_differs,
-        "now_gradable_count": len(now_gradable_captures),
+                if key_entry is not None:
+                    now_gradable_captures.add(capture_id)
+
+    captured_at_by_capture = {
+        capture_id: rows[0].captured_at for capture_id, rows in by_capture.items()
     }
+
+    # Manual duplicates (2026-08-22 M3.9) -- the fallback for unresolved
+    # captures, which have no page_number to auto-dedupe by at all. Only
+    # applied among still-unresolved captures (a resolved page's own dedup,
+    # above/below, is automatic and never needs a parent's say-so).
+    # _resolve_duplicate_root follows a chain and guards against a cycle;
+    # a target that isn't itself in this source's pending set (already
+    # cleared, or never here) is treated as no mark at all -- the marked
+    # capture keeps its own group rather than vanishing.
+    duplicate_of = capture_duplicates.get_duplicate_map(conn, student_id)
+    manual_extra_attempts: dict[str, int] = {}
+    folded_into_duplicate: set[str] = set()
+    for capture_id, rows in by_capture.items():
+        if rows[0].page_number is not None:
+            continue
+        root = _resolve_duplicate_root(capture_id, duplicate_of)
+        if root != capture_id and root in by_capture and by_capture[root][0].page_number is None:
+            manual_extra_attempts[root] = manual_extra_attempts.get(root, 0) + 1
+            folded_into_duplicate.add(capture_id)
+
+    by_page: dict[int, list[str]] = {}
+    surviving_capture_ids: dict[str, int] = {}
+    for capture_id, rows in by_capture.items():
+        if capture_id in folded_into_duplicate:
+            continue
+        page_number = rows[0].page_number  # every row from one capture shares it
+        if page_number is None:
+            surviving_capture_ids[capture_id] = manual_extra_attempts.get(capture_id, 0)
+        else:
+            by_page.setdefault(page_number, []).append(capture_id)
+    for capture_ids in by_page.values():
+        chosen = _pick_capture_for_page(conn, student_id, capture_ids, captured_at_by_capture)
+        surviving_capture_ids[chosen] = len(capture_ids) - 1
+
+    key_image_pages: dict[int, bool] = {}
+    groups: list[CaptureGroup] = []
+    for capture_id, earlier_attempts in surviving_capture_ids.items():
+        rows = by_capture[capture_id]
+        page_number = rows[0].page_number
+        if page_number is not None and page_number not in key_image_pages:
+            key_image_pages[page_number] = (
+                key_page_images.get_image_path(conn, student_id, source_id, page_number) is not None
+            )
+        groups.append(
+            CaptureGroup(
+                capture_id=capture_id,
+                session_id=rows[0].session_id,
+                page_number=page_number,
+                captured_at=rows[0].captured_at,
+                items=tuple(
+                    PendingItemDisplay(
+                        row=row,
+                        cause_label=(
+                            _CAUSE_LABELS.get(row.needs_human_cause, _UNKNOWN_CAUSE_LABEL)
+                            if row.needs_human_cause is not None
+                            else _UNKNOWN_CAUSE_LABEL
+                        ),
+                    )
+                    for row in rows
+                ),
+                earlier_attempts=earlier_attempts,
+                has_key_image=key_image_pages.get(page_number, False)
+                if page_number is not None
+                else False,
+            )
+        )
+    groups.sort(key=lambda g: g.captured_at)
+    return groups, len(now_gradable_captures)
 
 
 @app.post("/keys/{student_id}/{source_id}/regrade-pending")
@@ -457,6 +662,41 @@ def submit_answer_verdict(
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
+@app.get("/keys/{student_id}/{source_id}/captures/{capture_id}/image")
+def pending_capture_image(
+    student_id: str,
+    source_id: str,
+    capture_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> FileResponse:
+    """A student capture's own photo, for the parent-facing pending list --
+    reads the same page_captures row and the same file k12ta.web.app's own
+    image route does; separate route because k12ta.keys is its own app, own
+    process, and cannot reach into k12ta.web's routes (docs/ARCHITECTURE.md)."""
+    _require_student_and_source(conn, student_id, source_id)
+    capture = captures.get_page_capture(conn, student_id, capture_id)
+    if capture is None:
+        raise HTTPException(404, "no such capture")
+    return FileResponse(capture.image_path, media_type="image/jpeg")
+
+
+@app.get("/keys/{student_id}/{source_id}/key-image/{page_number}")
+def key_page_image(
+    student_id: str,
+    source_id: str,
+    page_number: int,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> FileResponse:
+    """The key scan behind one page's confirmed answers, if one was saved
+    (k12ta.store.key_page_images -- persisted going forward only, 2026-08-22;
+    a page confirmed before this exists has no row and 404s honestly)."""
+    _require_student_and_source(conn, student_id, source_id)
+    image_path = key_page_images.get_image_path(conn, student_id, source_id, page_number)
+    if image_path is None:
+        raise HTTPException(404, "no key image on file for this page")
+    return FileResponse(image_path, media_type="image/jpeg")
+
+
 @app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
 def enrollment_detail(
     request: Request,
@@ -512,7 +752,11 @@ def enrollment_detail(
                 )
 
     pending = sessions.list_pending_for_source(conn, student_id, source_id)
-    pending_buckets = _bucket_pending(conn, student_id, source_id, pending)
+    capture_groups, now_gradable_count = _group_pending_by_capture(
+        conn, student_id, source_id, pending
+    )
+    resolved = sessions.list_resolved_for_source(conn, student_id, source_id)
+    summary = _summarize_enrollment(pending, capture_groups, resolved)
 
     return templates.TemplateResponse(
         request,
@@ -525,14 +769,135 @@ def enrollment_detail(
             "stale_mapping_count": stale_mapping_count,
             "show_repeated_attempts": not rules.reveal_final_answer,
             "repeated_problems": repeated_problems,
-            "waiting_on_key": pending_buckets["waiting_on_key"],
-            "waiting_on_identity": pending_buckets["waiting_on_identity"],
-            "waiting_on_transcription": pending_buckets["waiting_on_transcription"],
-            "needs_person": pending_buckets["needs_person"],
-            "answer_differs": pending_buckets["answer_differs"],
-            "now_gradable_count": pending_buckets["now_gradable_count"],
+            "capture_groups": capture_groups,
+            "now_gradable_count": now_gradable_count,
+            "summary": summary,
+            "correct_items": [r for r in resolved if r.outcome == "correct"],
+            "incorrect_items": [r for r in resolved if r.outcome == "incorrect"],
         },
     )
+
+
+_PAGE_ENTRY_PREVIEW_COUNT = 3
+"""How many of the typed page's own confirmed answers the confirm step shows
+-- same constant, same reasoning, as k12ta.web.app's student-side version:
+enough to recognise the page by its actual content, not so many the confirm
+screen stops being a quick check."""
+
+
+@app.post(
+    "/keys/{student_id}/{source_id}/preview-page-entry",
+    response_class=HTMLResponse,
+    response_model=None,
+)
+def preview_page_entry(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    capture_id: str = Form(...),
+    session_id: str = Form(...),
+    page_number: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse | RedirectResponse:
+    """Parent-side twin of k12ta.web.app's preview_page_entry -- same shape,
+    same reasoning, a separate route because k12ta.keys is its own app and
+    cannot import a route from k12ta.web (docs/ARCHITECTURE.md). She reads a
+    page number off the photo herself, this shows what she's about to
+    confirm (the photo again, plus the page's own first few answers), and
+    commits nothing yet. A non-digit or non-positive submission redirects
+    back unchanged, same honest no-op as a stale pick."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+
+    if not page_number.isdigit() or int(page_number) <= 0:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    parsed_page_number = int(page_number)
+
+    entries = answer_keys.get_entries_for_page(conn, student_id, source_id, parsed_page_number)
+    preview = sorted(entries, key=lambda e: _problem_number_sort_key(e.problem_number))[
+        :_PAGE_ENTRY_PREVIEW_COUNT
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "confirm_page_entry.html",
+        {
+            "student": student,
+            "source": source,
+            "capture_id": capture_id,
+            "session_id": session_id,
+            "page_number": parsed_page_number,
+            "preview": preview,
+        },
+    )
+
+
+@app.post("/keys/{student_id}/{source_id}/commit-page-entry")
+def commit_page_entry(
+    student_id: str,
+    source_id: str,
+    capture_id: str = Form(...),
+    session_id: str = Form(...),
+    page_number: int = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Her real, informed confirmation, after seeing the photo and this
+    page's own answers on the preview step. Logged as RESOLVED_BY_PARENT_
+    ENTRY, distinct from every other resolution path -- see its own
+    docstring in k12ta.grading.page_identity."""
+    _require_student_and_source(conn, student_id, source_id)
+
+    regrade_capture_for_resolved_identity(
+        conn, student_id, session_id, capture_id, source_id, page_number
+    )
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id=student_id,
+            source_id=source_id,
+            capture_id=capture_id,
+            outcome=page_identity.RESOLVED_BY_PARENT_ENTRY,
+            resolved_page_number=page_number,
+            created_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+
+
+@app.post("/keys/{student_id}/{source_id}/mark-duplicate")
+def submit_mark_duplicate(
+    student_id: str,
+    source_id: str,
+    capture_id: str = Form(...),
+    duplicate_of_capture_id: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """The manual fallback for unresolved captures (2026-08-22 M3.9): a
+    parent's own "this photo is the same page as that one," for the case
+    automatic dedup can't reach at all -- an unresolved capture has no
+    page_number to group by. Deletes and regrades nothing; only changes
+    which block `_group_pending_by_capture` folds this capture's items
+    into. A self-reference or a capture_id that doesn't actually belong to
+    this student is silently ignored -- same "stale submission, nothing
+    happens" honesty as submit_identity_pick, not a 500 for a tampered or
+    stale form."""
+    _require_student_and_source(conn, student_id, source_id)
+    if capture_id == duplicate_of_capture_id:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    if captures.get_page_capture(conn, student_id, capture_id) is None:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    if captures.get_page_capture(conn, student_id, duplicate_of_capture_id) is None:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+
+    capture_duplicates.mark_duplicate(
+        conn,
+        capture_duplicates.CaptureDuplicateRow(
+            student_id=student_id,
+            capture_id=capture_id,
+            duplicate_of_capture_id=duplicate_of_capture_id,
+            marked_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
 _BLANK_SCHEMA_ROWS = 3
@@ -857,6 +1222,7 @@ def _render_upload_result(
     source: content.ContentSourceRow,
     outcome: KeyIngestionOutcome,
     conn: sqlite3.Connection,
+    settings: Settings,
 ) -> str:
     """The same three outcomes submit_upload has always rendered, as a raw HTML
     string rather than a Response -- called from inside the streaming generator
@@ -882,6 +1248,11 @@ def _render_upload_result(
     photo_data_uri = "data:image/jpeg;base64," + base64.b64encode(
         outcome.normalized_image_bytes
     ).decode("ascii")
+    # Saved here, not at raw upload -- see save_key_page_image's docstring.
+    # submit_confirm links whichever page numbers actually get saved to this
+    # path in k12ta.store.key_page_images; a parent who abandons this screen
+    # leaves an unreferenced file on disk, harmless at this volume.
+    image_path = save_key_page_image(settings, outcome.normalized_image_bytes)
     schema = page_identity_schemas.get_current_schema(conn, student.student_id, source.source_id)
     # A schema's own components when one exists, read by stable component_name.
     # Otherwise (first scan for this source) a discovery panel offering whatever
@@ -899,6 +1270,7 @@ def _render_upload_result(
         source=source,
         entries=_sorted_for_confirm(outcome.entries),
         photo_data_uri=photo_data_uri,
+        image_path=image_path,
         ungradeable_reasons=UNGRADEABLE_REASONS,
         identifier_confidence_floor=CONFIDENCE_FLOOR,
         schema=schema,
@@ -954,7 +1326,7 @@ def _stream_upload_response(
             continue
         outcome = payload
         assert isinstance(outcome, KeyIngestionOutcome)
-        html = _render_upload_result(request, student, source, outcome, conn)
+        html = _render_upload_result(request, student, source, outcome, conn, settings)
         yield json.dumps({"type": "final", "html": html}) + "\n"
         break
     thread.join()
@@ -1189,12 +1561,16 @@ async def submit_confirm(
         field_keys = [c.component_name for c in schema]
     schema_version = page_identity_schemas.get_current_version(conn, student_id, source_id)
 
+    image_path = _get(data, "image_path")
+    pages_scanned: set[int] = set()
+
     saved = 0
     conflicts = []
     for i in range(row_count):
         problem_number, page_number, answer_text, ungradeable_reason = _confirm_answer_row(data, i)
         if not problem_number or page_number is None:
             continue
+        pages_scanned.add(page_number)
 
         if schema:
             composite_key, identity_source = _confirm_identity_composite(data, i, field_keys)
@@ -1233,6 +1609,25 @@ async def submit_confirm(
             saved += 1
         else:
             conflicts.append(conflict)
+
+    if image_path:
+        # Linked for every page this scan touched, whether or not each of its
+        # answers landed as a new save or a held-back conflict -- the photo is
+        # honestly "what was scanned for this page" either way. Empty
+        # image_path (no photo behind this submit at all -- the no-photo
+        # manual-entry routes) is the normal, expected no-op case, not an
+        # error.
+        for page_number in pages_scanned:
+            key_page_images.upsert_image(
+                conn,
+                key_page_images.KeyPageImageRow(
+                    student_id=student_id,
+                    source_id=source_id,
+                    page_number=page_number,
+                    image_path=image_path,
+                    confirmed_at=now,
+                ),
+            )
 
     if conflicts:
         return templates.TemplateResponse(

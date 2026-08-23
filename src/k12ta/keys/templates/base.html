@@ -95,6 +95,49 @@
     animation: working-spin 0.8s linear infinite;
   }
   @keyframes working-spin { to { transform: rotate(360deg); } }
+  /* Pending review, grouped by capture (2026-08-22) -- one photograph, its
+     image, its items beneath, replacing a flat list grouped only by cause. */
+  .capture-group {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem 1.2rem; margin-bottom: 1.2rem;
+  }
+  .capture-group-header { margin-bottom: 0.6rem; }
+  .capture-page { font-weight: 600; }
+  .capture-group-images { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+  .capture-photo {
+    max-width: 260px; max-height: 320px; border: 1px solid var(--border);
+    border-radius: 8px; object-fit: contain;
+  }
+  /* A thumbnail next to her full-size photo, not equal billing -- the point is
+     "does this key match what I'm looking at," a quick glance, not a second
+     primary image. */
+  .key-photo-thumb { max-width: 180px; max-height: 220px; }
+  .pending-list { list-style: none; padding: 0; margin: 0; }
+  .pending-list li { padding: 0.4rem 0; border-top: 1px solid var(--border); }
+  .pending-list li:first-child { border-top: none; }
+  .cause-label {
+    display: inline-block; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--text-dim); background: var(--neutral-bg); border-radius: 6px;
+    padding: 0.1rem 0.5rem; margin-right: 0.5rem;
+  }
+  /* The parent-side ask-and-confirm flow (2026-08-22 M3.9) -- same shape as
+     k12ta.web/templates/session_result.html's student-side version. */
+  .page-entry-ask { display: flex; gap: 0.5rem; margin-top: 0.6rem; align-items: center; }
+  .page-entry-ask input[type=number] { width: 8rem; }
+  .entry-preview-list { list-style: none; padding: 0; margin: 0.4rem 0 0; }
+  .entry-preview-list li { padding: 0.15rem 0; }
+  /* The two-second summary (2026-08-22 M3.9): five counts, each a jump to
+     its own real section -- see docs/ROADMAP.md. */
+  .summary-bar {
+    list-style: none; padding: 0; margin: 0 0 1.2rem; display: flex; flex-wrap: wrap; gap: 1rem;
+  }
+  .summary-bar li {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+  }
+  .summary-bar strong { font-size: 1.15rem; }
+  .summary-bar a { color: var(--text); text-decoration: none; }
+  .summary-bar a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>

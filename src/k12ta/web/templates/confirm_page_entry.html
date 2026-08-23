@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Confirm the page{% endblock %}
+{% block content %}
+<div class="screen confirm-page-entry">
+  <p class="message">Is this page {{ page_number }}?</p>
+  <img class="entry-photo" src="/captures/{{ student.student_id }}/{{ capture_id }}/image" alt="Your photo">
+  {% if preview %}
+  <div class="entry-preview">
+    <p class="message">This is what I'll grade your answers against:</p>
+    <ul class="preview-list">
+      {% for entry in preview %}
+      <li>Problem {{ entry.problem_number }}: {{ entry.answer_text if entry.answer_text else "(no single answer -- a person will judge)" }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% else %}
+  <p class="message">I don't have answers for page {{ page_number }} yet -- a grown-up will need to
+    add them before this grades, but I can still remember this is the right page.</p>
+  {% endif %}
+  <form method="post" action="/session/{{ student.student_id }}/{{ session_id }}/commit-page-entry">
+    <input type="hidden" name="capture_id" value="{{ capture_id }}">
+    <input type="hidden" name="page_number" value="{{ page_number }}">
+    <button type="submit" class="big-button">Yes, this is page {{ page_number }}</button>
+  </form>
+  <a class="entry-back" href="/session/{{ student.student_id }}/{{ session_id }}">No, let me try a different page</a>
+</div>
+<style>
+  .confirm-page-entry { gap: 1.2rem; }
+  .entry-photo { max-width: 100%; max-height: 45vh; border-radius: 12px; object-fit: contain; }
+  .entry-preview {
+    width: 100%; max-width: 560px; text-align: left;
+    background: var(--neutral-bg); border-radius: 16px; padding: 1rem 1.3rem;
+  }
+  .preview-list { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+  .preview-list li { padding: 0.2rem 0; }
+  .entry-back {
+    font-size: 0.95rem; color: var(--text-dim); text-decoration: underline;
+  }
+</style>
+{% endblock %}

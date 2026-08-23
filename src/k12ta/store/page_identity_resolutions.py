@@ -34,6 +34,16 @@ class PageIdentityResolutionRow:
     themselves, which are always re-derived fresh from the current
     page_identities table both when the pick screen renders and when a pick
     is submitted, so nothing here can go stale."""
+    schema_version: int | None = None
+    """Which schema version `outcome` actually came from (migration 0016) --
+    the source's current version for almost every row, but a caller using
+    k12ta.grading.page_identity.resolve_with_schema_history's one-version-
+    back fallback logs whichever version actually produced this outcome, so
+    a later query can tell "resolved via the current schema" apart from
+    "resolved via the previous one" instead of only inferring it from the
+    shape of a stored composite key. None for every row written before this
+    column existed, and for any resolve() call outside the fallback path
+    that doesn't bother passing it."""
 
 
 def insert_resolution(conn: sqlite3.Connection, row: PageIdentityResolutionRow) -> None:
@@ -41,10 +51,10 @@ def insert_resolution(conn: sqlite3.Connection, row: PageIdentityResolutionRow) 
         """
         INSERT INTO page_identity_resolutions
             (student_id, source_id, capture_id, outcome, resolved_page_number, created_at,
-             seen_values_json)
+             seen_values_json, schema_version)
         VALUES
             (:student_id, :source_id, :capture_id, :outcome, :resolved_page_number, :created_at,
-             :seen_values_json)
+             :seen_values_json, :schema_version)
         """,
         vars(row),
     )
@@ -60,6 +70,28 @@ def get_seen_values_for_capture(
     cur = conn.execute(
         """
         SELECT seen_values_json FROM page_identity_resolutions
+        WHERE student_id = ? AND capture_id = ?
+        """,
+        (student_id, capture_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else row[0]
+
+
+def get_schema_version_for_capture(
+    conn: sqlite3.Connection, student_id: str, capture_id: str
+) -> int | None:
+    """The schema_version recorded for one capture's resolution attempt
+    (migration 0016), or None if there isn't one -- no resolution row at
+    all, or it predates this column. A caller reconstructing candidates from
+    `get_seen_values_for_capture` needs this to call `k12ta.grading.page_
+    identity.resolve_partial` at the same version the row was actually
+    produced at; see `k12ta.grading.page_identity.
+    schema_version_for_seen_component_names` for what to do when this comes
+    back None."""
+    cur = conn.execute(
+        """
+        SELECT schema_version FROM page_identity_resolutions
         WHERE student_id = ? AND capture_id = ?
         """,
         (student_id, capture_id),

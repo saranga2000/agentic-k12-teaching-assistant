@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Confirm the page — {{ source.label }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>Is this page {{ page_number }}?</h1>
+<img class="key-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ capture_id }}/image" alt="{{ student.display_name }}'s photo">
+
+{% if preview %}
+<div class="message">
+  <p style="margin-top: 0;">This is what I'll grade against:</p>
+  <ul class="entry-preview-list">
+    {% for entry in preview %}
+    <li>Problem {{ entry.problem_number }}: {{ entry.answer_text if entry.answer_text else "(no single answer -- a person judges this one)" }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<p class="message">No answers on file for page {{ page_number }} yet -- I can still remember this
+  is the right page, but nothing will grade until a key is added for it.</p>
+{% endif %}
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/commit-page-entry">
+  <input type="hidden" name="capture_id" value="{{ capture_id }}">
+  <input type="hidden" name="session_id" value="{{ session_id }}">
+  <input type="hidden" name="page_number" value="{{ page_number }}">
+  <div class="actions">
+    <button type="submit">Yes, this is page {{ page_number }}</button>
+    <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}">No, let me try a different page</a>
+  </div>
+</form>
+{% endblock %}

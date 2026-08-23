@@ -58,6 +58,26 @@ def get_current_schema(
     return tuple(SchemaComponent(*row) for row in cur.fetchall())
 
 
+def get_schema_at_version(
+    conn: sqlite3.Connection, student_id: str, source_id: str, schema_version: int
+) -> tuple[SchemaComponent, ...]:
+    """Same shape as `get_current_schema`, but a specific version rather than
+    whichever is highest -- for a caller that deliberately wants to resolve
+    against a source's *older* schema, e.g. as a fallback when the current
+    schema's own markers aren't legible on a given photo but a prior schema's
+    are (see `k12ta.grading.page_identity.resolve_with_schema_history`).
+    Empty if nothing was ever saved at this version."""
+    cur = conn.execute(
+        """
+        SELECT component_name, label, example, position FROM page_identity_schemas
+        WHERE student_id = ? AND source_id = ? AND schema_version = ?
+        ORDER BY position
+        """,
+        (student_id, source_id, schema_version),
+    )
+    return tuple(SchemaComponent(*row) for row in cur.fetchall())
+
+
 def save_new_schema(
     conn: sqlite3.Connection,
     student_id: str,

@@ -17,6 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
+from uuid import uuid4
 
 from k12ta.config import Settings
 from k12ta.ingest.capture import normalize_orientation
@@ -60,6 +61,25 @@ class KeyIngestionOutcome:
             entries=entries,
             normalized_image_bytes=normalized_image_bytes,
         )
+
+
+def save_key_page_image(settings: Settings, image_bytes: bytes) -> str:
+    """Write a transcribed key scan to disk and return its path -- called once a
+    scan has reached the confirm screen (there is something worth keeping a photo
+    of), not at raw upload, so a failed or quota-blocked call never litters
+    `key_captures/` with an image nothing will ever reference. No DB row here:
+    the file exists independent of whether a parent goes on to confirm anything
+    from it; `k12ta.keys.app.submit_confirm` is what links specific page numbers
+    to this path, in `k12ta.store.key_page_images`, once it knows which pages
+    were actually saved. Mirrors `k12ta.ingest.capture.save_capture`'s shape,
+    not shared with it: that function also writes a `page_captures` row, which
+    has no equivalent here -- a key scan's row-level persistence is
+    `answer_key_entries`/`key_page_images`, both written later, by the parent's
+    own confirm."""
+    destination = settings.data_dir / "key_captures" / f"{uuid4()}.jpg"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(image_bytes)
+    return str(destination)
 
 
 def transcribe_key_page(

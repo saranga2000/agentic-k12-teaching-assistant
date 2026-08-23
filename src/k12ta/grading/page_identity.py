@@ -92,6 +92,31 @@ conflate a student's pick with the model's own composite lookup succeeding
 -- see docs/ARCHITECTURE.md's "asking when exactly one component is
 missing" section for the full reasoning."""
 
+RESOLVED_BY_STUDENT_ENTRY = "resolved_by_student_entry"
+"""Also not a resolve() outcome, and also its own page_identity_resolutions
+row -- but distinct from RESOLVED_BY_STUDENT_PICK, not folded into it: a
+pick chooses among a small set of candidates resolve_partial already
+verified against confirmed data (docs/ARCHITECTURE.md's "asking when
+exactly one component is missing"); this is a student typing a page number
+free-text when there was nothing to constrain a pick from at all (the
+"ask the human and proceed" principle, 2026-08-22 -- see docs/ROADMAP.md's
+M3.8), confirmed only against a preview of that page's own key, never
+against a list of real candidates. Kept as its own value so an accuracy
+count can tell "the model resolved it," "she picked among real options,"
+and "she typed a number and confirmed it herself" apart -- three different
+claims about how confident the result actually is, none of them each
+other."""
+
+RESOLVED_BY_PARENT_ENTRY = "resolved_by_parent_entry"
+"""The same free-text, preview-then-confirm shape as RESOLVED_BY_STUDENT_ENTRY,
+offered on the same still-unresolved captures, but from k12ta.keys.app rather
+than k12ta.web.app -- a parent reading the pending list's photo, not the
+student who took it. Kept distinct from RESOLVED_BY_STUDENT_ENTRY, not
+folded into it, for the same reason that one is kept distinct from
+RESOLVED_BY_STUDENT_PICK: an accuracy count should be able to tell who
+supplied a claim apart, not just that it wasn't the model. See
+docs/ROADMAP.md's M3.9."""
+
 
 @dataclass(frozen=True)
 class PageIdentityResolution:
@@ -113,6 +138,8 @@ def resolve(
     candidates: dict[str, tuple[str, ...]],
     confidence: float,
     confidence_floor: float = CONFIDENCE_FLOOR,
+    *,
+    schema_version: int | None = None,
 ) -> PageIdentityResolution:
     """`candidates` maps component name to every distinct value seen for it on
     this one photo -- more than one value for any of *this source's own schema
@@ -121,13 +148,28 @@ def resolve(
     its identity extraction, separate from any single answer's transcription
     confidence.
 
+    `schema_version`, when given, resolves against that specific version
+    instead of the source's current one -- for a caller deliberately checking
+    an older schema as a fallback (see `resolve_with_schema_history`). Every
+    ordinary caller omits it and gets today's "current schema" behaviour
+    unchanged.
+
     Order matters and is tested: conflicting values are refused unconditionally,
     checked before anything else -- a two-page spread is refused even if the
     model is very confident it read every value correctly. A missing component
     (PARTIAL) is checked before the confidence floor too: there is nothing to be
     confident *about* for a component that was never read at all.
     """
-    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    version = (
+        schema_version
+        if schema_version is not None
+        else page_identity_schemas.get_current_version(conn, student_id, source_id)
+    )
+    schema = (
+        page_identity_schemas.get_schema_at_version(conn, student_id, source_id, version)
+        if schema_version is not None
+        else page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    )
     if not schema:
         return PageIdentityResolution(outcome=PageIdentityOutcome.NO_SCHEMA)
 
@@ -148,7 +190,6 @@ def resolve(
     if confidence < confidence_floor:
         return PageIdentityResolution(outcome=PageIdentityOutcome.BELOW_FLOOR)
 
-    version = page_identity_schemas.get_current_version(conn, student_id, source_id)
     composite_key = build_composite_key([candidates[c.component_name][0] for c in schema])
     page_number = page_identities.get_page_number(
         conn, student_id, source_id, composite_key, version
@@ -203,15 +244,18 @@ def resolve_partial(
     student_id: str,
     source_id: str,
     photo_candidates: dict[str, tuple[str, ...]],
+    *,
+    schema_version: int | None = None,
 ) -> PartialResolution:
     """Only meaningful to call after `resolve()` has already returned PARTIAL
-    for `photo_candidates` -- this repeats none of resolve()'s own checks
-    (CONFLICTING, NO_SCHEMA, NO_MARKERS, confidence) and assumes the caller
-    already made them. Looks among this source's already-confirmed
-    page_identities mappings, decomposed by the current schema's component
-    ordering, for ones that agree with every component `photo_candidates` DID
-    read, to see whether the one missing component is safely inferable
-    rather than a genuine ambiguity.
+    for `photo_candidates` (at the same `schema_version`, if one was passed)
+    -- this repeats none of resolve()'s own checks (CONFLICTING, NO_SCHEMA,
+    NO_MARKERS, confidence) and assumes the caller already made them. Looks
+    among this source's already-confirmed page_identities mappings,
+    decomposed by the current schema's component ordering, for ones that
+    agree with every component `photo_candidates` DID read, to see whether
+    the one missing component is safely inferable rather than a genuine
+    ambiguity.
 
     A no-op (PartialResolution() -- caller's existing refusal stands
     unchanged) whenever: there's no schema; more than one component is
@@ -234,8 +278,20 @@ def resolve_partial(
     inference from how much of the book happens to be confirmed so far.
 
     Otherwise returns whatever real matches exist for the caller to offer as
-    a constrained pick (never free text, never a guess)."""
-    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    a constrained pick (never free text, never a guess).
+
+    `schema_version`, when given, matches `resolve`'s own override: resolve
+    against that specific version instead of the source's current one."""
+    version = (
+        schema_version
+        if schema_version is not None
+        else page_identity_schemas.get_current_version(conn, student_id, source_id)
+    )
+    schema = (
+        page_identity_schemas.get_schema_at_version(conn, student_id, source_id, version)
+        if schema_version is not None
+        else page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    )
     if not schema:
         return PartialResolution()
 
@@ -246,7 +302,6 @@ def resolve_partial(
     missing_component = missing[0]
     seen_values = {c.component_name: photo_candidates[c.component_name][0] for c in seen}
 
-    version = page_identity_schemas.get_current_version(conn, student_id, source_id)
     rows = page_identities.list_for_source_at_version(conn, student_id, source_id, version)
 
     universe: set[str] = set()
@@ -264,3 +319,116 @@ def resolve_partial(
     if len(matches) == 1 and universe == {matches[0].missing_value}:
         return PartialResolution(auto_resolved_page_number=matches[0].page_number)
     return PartialResolution(matches=tuple(matches), seen_values=seen_values)
+
+
+def resolve_with_schema_history(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    candidates: dict[str, tuple[str, ...]],
+    confidence: float,
+    confidence_floor: float = CONFIDENCE_FLOOR,
+) -> tuple[PageIdentityResolution, int]:
+    """Tries the source's current schema first; if that doesn't resolve and an
+    older schema version exists, falls back to trying the *immediately
+    preceding* version too, at the same photo's candidates -- built for
+    Summer Bridge's 2026-08-22 schema change (see docs/ROADMAP.md's M3.7):
+    version 2 is the printed page number alone, version 1 is the Day+Section
+    pair it replaced as the primary signal because Section is not printed on
+    any exercise page. A photo can carry markers for both the current and the
+    previous schema in one photograph (`k12ta.pipeline.process` asks for the
+    union of both components' names), so this lets the day banner keep
+    resolving pages the page number extraction alone doesn't, exactly as it
+    always could, without a source's older confirmed mappings needing to be
+    re-entered under the new schema.
+
+    Returns the resolution AND the schema version it came from -- a caller
+    that gets PARTIAL back needs that version to call `resolve_partial` at
+    the same one, not "current," which would query the wrong schema (and,
+    for a single-component current schema, could never even produce PARTIAL
+    in the first place -- see `resolve`'s NO_MARKERS-before-missing check).
+
+    Only ever looks one version back, not further, and only when the current
+    schema fails to produce something better. This is a deliberate, narrow
+    fallback for one migration, not a general N-version history walk --
+    widening it further should be a decision made when a second such
+    migration actually needs it, not spun up preemptively here (same
+    "keep the scope narrow" spirit docs/ARCHITECTURE.md's page-identity
+    section already asks of `resolve_partial`'s own bounded exception).
+
+    CONFLICTING short-circuits immediately, without trying the previous
+    version at all: two different values for one schema component (a
+    two-page spread, most commonly) is a refusal about *this photo*, not
+    about which schema happened to be current -- rescuing it via an older
+    schema that happens to look less conflicting would be exactly the
+    confident-wrong-grade this whole module exists to refuse."""
+    version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+    resolution = resolve(conn, student_id, source_id, candidates, confidence, confidence_floor)
+    if resolution.outcome in (PageIdentityOutcome.RESOLVED, PageIdentityOutcome.CONFLICTING):
+        return resolution, version
+    if version <= 1:
+        return resolution, version
+
+    previous_version = version - 1
+    previous_resolution = resolve(
+        conn,
+        student_id,
+        source_id,
+        candidates,
+        confidence,
+        confidence_floor,
+        schema_version=previous_version,
+    )
+    if previous_resolution.outcome in (PageIdentityOutcome.RESOLVED, PageIdentityOutcome.PARTIAL):
+        return previous_resolution, previous_version
+    return resolution, version
+
+
+def schema_version_for_seen_component_names(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    seen_component_names: Sequence[str],
+    stored_schema_version: int | None,
+) -> int:
+    """Which schema version a stored PARTIAL resolution's `seen_values` (its
+    component *names*, not values) actually belongs to -- for a caller
+    reconstructing candidates from `page_identity_resolutions.seen_values_json`
+    well after the fact (the ask-flow in `k12ta.web.app`), which must call
+    `resolve_partial` at that same version, never blindly at "current."
+
+    `stored_schema_version` (migration 0016) is trusted outright when present
+    -- every resolution logged going forward carries it. It is None only for
+    a row logged before that column existed, which this function handles by
+    inference instead: find the version, current or the one immediately
+    before it, whose own component names are a superset of what was actually
+    seen. Same one-version-back bound as `resolve_with_schema_history`, for
+    the same reason -- a deliberate, narrow fallback, not a general history
+    walk. Falls back to the current version if inference finds no match,
+    which reproduces today's (imperfect, pre-fix) behaviour rather than
+    raising -- an old row that predates any of this is not this function's
+    problem to solve perfectly."""
+    if stored_schema_version is not None:
+        return stored_schema_version
+
+    current_version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+    seen = set(seen_component_names)
+
+    current_names = {
+        c.component_name
+        for c in page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    }
+    if seen <= current_names:
+        return current_version
+
+    if current_version > 1:
+        previous_names = {
+            c.component_name
+            for c in page_identity_schemas.get_schema_at_version(
+                conn, student_id, source_id, current_version - 1
+            )
+        }
+        if seen <= previous_names:
+            return current_version - 1
+
+    return current_version
