@@ -47,6 +47,18 @@ tab (Chrome or Safari) doesn't hit it: the camera opens correctly. That drops th
 "no browser chrome" requirement from the original M2.2 spec — a live camera that
 sometimes doesn't work is a worse trade than a visible address bar.
 
+Both the capture screen and the key-upload screen also offer an in-page live
+camera (`getUserMedia`) as an enhancement layered on top of the native
+`capture="environment"` input, plus an always-working "Upload a Photo" file
+picker with no `capture` attribute at all. **The in-page camera only works over
+a secure context** — HTTPS or `http://localhost` — which the `http://<mac>
+.local:8080` address above is not, so it silently falls back to the native
+input on every device reachable that way (iPad included, where the native
+input already worked correctly per the paragraph above). It *does* work when
+the MacBook opens the app at `http://localhost:8080` directly. "Upload a
+Photo" has no such restriction and works everywhere — that's the fix for "the
+camera does nothing" on a desktop browser, not the live-camera enhancement.
+
 ### Answer keys (parent-only)
 
 `k12ta.keys` (M2.4) is a second, separate process — its own port, never linked from

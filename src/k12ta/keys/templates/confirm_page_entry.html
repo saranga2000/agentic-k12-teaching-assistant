@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Confirm the page — {{ source.label }}{% endblock %}
 {% block content %}
-<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations">&larr; {{ source.label }}</a></p>
 <h1>Is this page {{ page_number }}?</h1>
 <img class="key-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ capture_id }}/image" alt="{{ student.display_name }}'s photo">
 
@@ -10,7 +10,7 @@
   <p style="margin-top: 0;">This is what I'll grade against:</p>
   <ul class="entry-preview-list">
     {% for entry in preview %}
-    <li>Problem {{ entry.problem_number }}: {{ entry.answer_text if entry.answer_text else "(no single answer -- a person judges this one)" }}</li>
+    <li>Problem {{ entry.problem_number }}: {{ entry.answer_text | humanize_math if entry.answer_text else "(no single answer -- a person judges this one)" }}</li>
     {% endfor %}
   </ul>
 </div>
@@ -25,7 +25,7 @@
   <input type="hidden" name="page_number" value="{{ page_number }}">
   <div class="actions">
     <button type="submit">Yes, this is page {{ page_number }}</button>
-    <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}">No, let me try a different page</a>
+    <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations">No, let me try a different page</a>
   </div>
 </form>
 {% endblock %}

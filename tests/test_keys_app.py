@@ -487,18 +487,22 @@ def test_enrollment_detail_shows_scan_link_and_says_plainly_what_is_not_built_ye
     """Recent sessions is still a real gap (M5); the "waiting on a key" section
     this test used to check for a placeholder on is real now (see the
     pending-item tests) -- checked here only for what's genuinely still
-    unbuilt, and with an honest empty state for what is."""
+    unbuilt, and with an honest empty state for what is. The landing page
+    (parent nav restructure) and the evaluations page it links to split what
+    this test used to check on one response into two."""
     _seed_marcus_with_source(conn)
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    landing = client.get("/keys/s-marcus/summer_bridge")
+    assert landing.status_code == 200
+    assert "Summer bridge workbook" in landing.text
+    assert 'href="/keys/s-marcus/summer_bridge/upload"' in landing.text
 
-    assert response.status_code == 200
-    assert "Summer bridge workbook" in response.text
-    assert 'href="/keys/s-marcus/summer_bridge/upload"' in response.text
+    evaluations = client.get("/keys/s-marcus/summer_bridge/evaluations")
+    assert evaluations.status_code == 200
     # No dashboard, no invented metrics -- a plain line for each thing that has no
     # data behind it yet, not an empty panel.
-    assert "not shown here yet" in response.text.lower()
-    assert "nothing pending right now" in response.text.lower()
+    assert "not shown here yet" in evaluations.text.lower()
+    assert "nothing pending right now" in evaluations.text.lower()
 
 
 def test_enrollment_detail_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -601,7 +605,7 @@ def test_enrollment_detail_shows_repeated_attempts_for_a_restricted_mode_source(
 ) -> None:
     _seed_diagnostic_only_source_with_attempts(conn, second_answer="19")
 
-    response = client.get("/keys/s-marcus/rsm")
+    response = client.get("/keys/s-marcus/rsm/evaluations")
 
     assert response.status_code == 200
     assert "Repeated attempts" in response.text
@@ -627,7 +631,7 @@ def test_enrollment_detail_says_no_repeated_attempts_yet_with_only_one_attempt(
         ),
     )
 
-    response = client.get("/keys/s-marcus/rsm")
+    response = client.get("/keys/s-marcus/rsm/evaluations")
 
     assert response.status_code == 200
     assert "Repeated attempts" in response.text
@@ -642,7 +646,7 @@ def test_enrollment_detail_omits_repeated_attempts_for_a_full_mode_source(
     entirely rather than shown empty."""
     _seed_marcus_with_source(conn)  # default_mode="full", graded_by_someone_else=False
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "Repeated attempts" not in response.text
@@ -653,7 +657,7 @@ def test_enrollment_detail_never_shows_an_unchanged_resubmission_as_repeated(
 ) -> None:
     _seed_diagnostic_only_source_with_attempts(conn, second_answer="18")  # unchanged
 
-    response = client.get("/keys/s-marcus/rsm")
+    response = client.get("/keys/s-marcus/rsm/evaluations")
 
     assert response.status_code == 200
     assert "No repeated attempts yet" in response.text
@@ -1341,20 +1345,26 @@ def test_enrollment_detail_summary_bar_counts_and_links_to_each_section(
         ),
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    # The summary bar and its jump links live on the landing page (parent nav
+    # restructure); the ids they jump to live on the evaluations page it links
+    # into -- checked as two responses now, not one.
+    evaluations = client.get("/keys/s-marcus/summer_bridge/evaluations")
+    assert evaluations.status_code == 200
+    eval_text = evaluations.text
+    assert 'id="cg-c-review"' in eval_text
+    assert 'id="cg-c-identity"' in eval_text
+    assert 'id="cg-c-key"' in eval_text
+    assert 'id="graded-correct"' in eval_text
+    assert 'id="graded-incorrect"' in eval_text
 
-    assert response.status_code == 200
-    text = response.text
-    assert 'id="cg-c-review"' in text
-    assert 'id="cg-c-identity"' in text
-    assert 'id="cg-c-key"' in text
-    assert 'href="#cg-c-review"' in text
-    assert 'href="#cg-c-identity"' in text
-    assert 'href="#cg-c-key"' in text
-    assert 'href="#graded-correct"' in text
-    assert 'href="#graded-incorrect"' in text
-    assert 'id="graded-correct"' in text
-    assert 'id="graded-incorrect"' in text
+    landing = client.get("/keys/s-marcus/summer_bridge")
+    assert landing.status_code == 200
+    text = landing.text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations#cg-c-review"' in text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations#cg-c-identity"' in text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations#cg-c-key"' in text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations#graded-correct"' in text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations#graded-incorrect"' in text
     # Each count is real, not just present -- one of each state was seeded.
     assert text.count("needs my review") == 1
     assert "1</strong> needs my review" in text.replace("\n", "").replace("  ", " ")
@@ -1453,7 +1463,7 @@ def test_enrollment_detail_lists_graded_correct_and_incorrect_items(
         ),
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "a correct problem" in response.text
@@ -1491,7 +1501,7 @@ def test_enrollment_detail_groups_pending_items_by_cause(
         conn, capture_id="c-person", problem_id="1", cause="needs_person", page_number=21
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "Waiting on an answer key" in response.text
@@ -1545,7 +1555,7 @@ def test_enrollment_detail_dedupes_repeated_captures_of_the_same_resolved_page(
         captured_at="2026-08-19T04:59:49+00:00",
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     # Only the most recent capture's row -- the blank answer from c-second,
@@ -1585,7 +1595,7 @@ def test_enrollment_detail_offers_a_duplicate_picker_for_unresolved_captures(
         prompt_text="second unresolved question",
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert '/keys/s-marcus/summer_bridge/mark-duplicate"' in response.text
@@ -1610,7 +1620,7 @@ def test_enrollment_detail_hides_the_duplicate_picker_with_only_one_unresolved_c
         conn, capture_id="c-alone", problem_id="1", cause="unknown_page", page_number=None
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "mark-duplicate" not in response.text
@@ -1653,7 +1663,7 @@ def test_submit_mark_duplicate_folds_items_into_the_target_capture(
     )
     assert submit_response.status_code == 303
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "target question" in response.text
@@ -1703,7 +1713,7 @@ def test_submit_mark_duplicate_follows_a_chain(
         data={"capture_id": "c-c", "duplicate_of_capture_id": "c-b"},
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "root question" in response.text
@@ -1814,7 +1824,7 @@ def test_dedup_tiebreak_prefers_a_real_verdict_over_recency(
         captured_at="2026-08-20T09:00:00+00:00",
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "older captures question" in response.text
@@ -1914,7 +1924,7 @@ def test_enrollment_detail_shows_the_page_entry_ask_for_an_unresolved_capture(
         conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "/keys/s-marcus/summer_bridge/preview-page-entry" in response.text
@@ -2078,7 +2088,7 @@ def test_enrollment_detail_shows_a_trigger_when_a_key_now_covers_a_pending_page(
         conn, capture_id="c-no-key", problem_id="1", cause="no_key_for_page", page_number=15
     )
 
-    response_before = client.get("/keys/s-marcus/summer_bridge")
+    response_before = client.get("/keys/s-marcus/summer_bridge/evaluations")
     assert "now gradable" not in response_before.text.lower()
 
     answer_keys.upsert_entry(
@@ -2094,7 +2104,7 @@ def test_enrollment_detail_shows_a_trigger_when_a_key_now_covers_a_pending_page(
         ),
     )
 
-    response_after = client.get("/keys/s-marcus/summer_bridge")
+    response_after = client.get("/keys/s-marcus/summer_bridge/evaluations")
     assert "now gradable" in response_after.text.lower()
     assert 'action="/keys/s-marcus/summer_bridge/regrade-pending"' in response_after.text
 
@@ -2166,7 +2176,7 @@ def test_enrollment_detail_shows_answer_differs_side_by_side_with_a_verdict_form
         expected_answer="quadrilateral",
     )
 
-    response = client.get("/keys/s-marcus/summer_bridge")
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
     assert "Answer differs from the key" in response.text
@@ -2174,6 +2184,232 @@ def test_enrollment_detail_shows_answer_differs_side_by_side_with_a_verdict_form
     assert "quadrilateral" in response.text
     assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
     assert 'value="c-differs"' in response.text
+
+
+def test_evaluations_screen_shows_the_real_question_number_when_known(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-known", problem_id="4", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "Q4" in response.text
+
+
+def test_evaluations_screen_offers_an_inline_fix_for_an_ambiguous_problem_id(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-ambiguous",
+        problem_id="_ambiguous_0",
+        cause="ambiguous_problem_id",
+        page_number=15,
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "Question number not identified" in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/set-problem-number"' in response.text
+    assert 'value="_ambiguous_0"' in response.text
+
+    # Counted under "needs my review" on the landing page's summary -- it
+    # needs a parent to supply a value, exactly like the other causes in
+    # that bucket.
+    landing = client.get("/keys/s-marcus/summer_bridge")
+    assert "1</strong> needs my review" in landing.text.replace("\n", "").replace("  ", " ")
+
+
+def test_submit_problem_number_relabels_and_regrades_against_the_key(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-ambiguous",
+        problem_id="_ambiguous_0",
+        cause="ambiguous_problem_id",
+        page_number=15,
+        student_answer_raw="19",
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="4",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/set-problem-number",
+        data={
+            "capture_id": "c-ambiguous",
+            "session_id": "sess-c-ambiguous",
+            "old_problem_id": "_ambiguous_0",
+            "problem_id": "4",
+            "page_number": "15",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/evaluations"
+
+    resolved = sessions.list_resolved_for_source(conn, "s-marcus", "summer_bridge")
+    assert [(r.problem_id, r.outcome) for r in resolved] == [("4", "correct")]
+    assert sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge") == []
+
+
+def test_submit_problem_number_ignores_a_collision_with_a_real_problem(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-ambiguous",
+        problem_id="_ambiguous_0",
+        cause="ambiguous_problem_id",
+        page_number=15,
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-ambiguous",
+            problem_id="4",
+            prompt_text="5 + 5",
+            student_answer_raw="10",
+            transcription_confidence=0.9,
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/set-problem-number",
+        data={
+            "capture_id": "c-ambiguous",
+            "session_id": "sess-c-ambiguous",
+            "old_problem_id": "_ambiguous_0",
+            "problem_id": "4",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+    assert {row.problem_id for row in pending} == {"_ambiguous_0"}
+
+
+def test_enrollment_landing_links_to_the_three_enrollment_screens_without_showing_pending_items(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert 'href="/keys/s-marcus/summer_bridge/upload"' in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/answers/manual-entry"' in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/answer-keys"' in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations"' in response.text
+    # Not the pending item itself -- only the count and a link into evaluations.
+    # ("cause-label" alone would false-pass: base.html's shared stylesheet
+    # defines that CSS class on every page regardless of content.)
+    assert "Needs a person to judge" not in response.text
+    assert "12 + 7" not in response.text
+
+
+def test_answer_keys_screen_lists_entries_grouped_by_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="4",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/answer-keys")
+
+    assert response.status_code == 200
+    assert "Page 15" in response.text
+    assert "Q4" in response.text
+    assert "19" in response.text
+
+
+def test_answer_keys_screen_with_nothing_on_file_says_so_plainly(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/answer-keys")
+
+    assert response.status_code == 200
+    assert "no answer keys on file" in response.text.lower()
 
 
 def test_submit_answer_verdict_records_correct_and_clears_the_cause(
@@ -3084,7 +3320,10 @@ def test_upload_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     assert 'id="photo-input"' in text
     assert 'id="upload-button"' in text
 
-    script_block = text.split("<script>")[1].split("</script>")[0]
+    # The last <script> block is upload.html's own -- the page now also
+    # includes _photo_source.html's script earlier (the Take Photo/Upload a
+    # Photo chooser), so the first block is no longer the right one to check.
+    script_block = text.split("<script>")[-1].split("</script>")[0]
     assert "fetch(" in script_block
     disable_index = script_block.index("input.disabled = true")
     fetch_index = script_block.index("fetch(")

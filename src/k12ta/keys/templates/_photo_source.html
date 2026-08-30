@@ -1,0 +1,115 @@
+<!-- Parent-app twin of k12ta.web/templates/_photo_source.html -- same
+     behaviour and same reasoning (see that file's comment), duplicated
+     rather than shared because each app's Jinja2Templates instance only
+     resolves its own templates directory, and this is a self-contained
+     partial with no logic worth factoring out into a third location for.
+     Styled with this app's own `button`/`.button-link` look (keys/templates/
+     base.html) instead of web's `.big-button`, since a plain <button> here
+     already gets that styling for free. -->
+<div id="{{ button_wrapper_id | default('take-photo-button') }}" class="photo-source-picker">
+  {% if not hide_camera %}
+  <button type="button" id="{{ input_id }}-camera-btn">{{ primary_label | default("Take Photo") }}</button>
+  {% endif %}
+  <button type="button" id="{{ input_id }}-upload-btn">{{ "Add Screenshot" if hide_camera else "Upload a Photo" }}</button>
+</div>
+<input id="{{ input_id }}" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
+<input id="{{ input_id }}-upload-proxy" type="file" accept="image/*" style="display:none">
+<p id="{{ input_id }}-camera-error" class="message" hidden>Couldn't reach the camera &mdash; use "Upload a Photo" instead.</p>
+<div id="{{ input_id }}-camera-modal" class="camera-modal" hidden>
+  <video id="{{ input_id }}-camera-video" autoplay playsinline></video>
+  <div class="camera-modal-actions">
+    <button type="button" id="{{ input_id }}-camera-capture">Capture</button>
+    <button type="button" id="{{ input_id }}-camera-cancel">Cancel</button>
+  </div>
+</div>
+<script>
+  (function () {
+    var targetInput = document.getElementById("{{ input_id }}");
+    var uploadProxy = document.getElementById("{{ input_id }}-upload-proxy");
+    var cameraBtn = document.getElementById("{{ input_id }}-camera-btn");
+    var uploadBtn = document.getElementById("{{ input_id }}-upload-btn");
+    var cameraError = document.getElementById("{{ input_id }}-camera-error");
+    var modal = document.getElementById("{{ input_id }}-camera-modal");
+    var video = document.getElementById("{{ input_id }}-camera-video");
+    var captureBtn = document.getElementById("{{ input_id }}-camera-capture");
+    var cancelBtn = document.getElementById("{{ input_id }}-camera-cancel");
+    var stream = null;
+
+    function deliver(file) {
+      var dt = new DataTransfer();
+      dt.items.add(file);
+      targetInput.files = dt.files;
+      targetInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function stopStream() {
+      if (stream) {
+        stream.getTracks().forEach(function (track) { track.stop(); });
+        stream = null;
+      }
+    }
+
+    function closeModal() {
+      stopStream();
+      modal.hidden = true;
+    }
+
+    if (uploadProxy) {
+      uploadProxy.addEventListener("change", function () {
+        if (uploadProxy.files && uploadProxy.files.length) {
+          deliver(uploadProxy.files[0]);
+        }
+      });
+    }
+    if (uploadBtn) {
+      uploadBtn.addEventListener("click", function () { uploadProxy.click(); });
+    }
+
+    if (cameraBtn) {
+      cameraBtn.addEventListener("click", function () {
+        cameraError.hidden = true;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          targetInput.click();
+          return;
+        }
+        navigator.mediaDevices
+          .getUserMedia({ video: { facingMode: { ideal: "environment" } } })
+          .then(function (s) {
+            stream = s;
+            video.srcObject = s;
+            modal.hidden = false;
+          })
+          .catch(function () {
+            targetInput.click();
+          });
+      });
+      captureBtn.addEventListener("click", function () {
+        var canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          function (blob) {
+            if (blob) {
+              deliver(new File([blob], "capture.jpg", { type: "image/jpeg" }));
+            }
+            closeModal();
+          },
+          "image/jpeg",
+          0.92
+        );
+      });
+      cancelBtn.addEventListener("click", closeModal);
+    }
+  })();
+</script>
+<style>
+  .photo-source-picker { display: flex; gap: 0.6rem; }
+  .camera-modal {
+    position: fixed; inset: 0; background: #000; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.2rem;
+  }
+  .camera-modal video { max-width: 100%; max-height: 75vh; }
+  .camera-modal-actions { display: flex; gap: 1rem; }
+</style>

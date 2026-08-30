@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ source.label }}{% endblock %}
+{% block content %}
+<div class="screen">
+  <div class="assignment-chip">{{ source.label }}</div>
+  <a class="big-button" href="/capture/{{ student.student_id }}?source_id={{ source.source_id }}">Add a page</a>
+  <a class="big-button secondary" href="/student/{{ student.student_id }}/{{ source.source_id }}/pages">
+    My pages
+    {% if pending_count > 0 %}<span class="pending-badge">{{ pending_count }} waiting on a grown-up</span>{% endif %}
+  </a>
+</div>
+<style>
+  .assignment-chip {
+    font-size: 1rem; padding: 0.6rem 1.1rem; border-radius: 999px;
+    background: var(--surface); color: var(--text);
+  }
+  .pending-badge { display: block; font-size: 0.95rem; font-weight: 500; margin-top: 0.4rem; }
+</style>
+{% endblock %}

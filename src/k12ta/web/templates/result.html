@@ -6,8 +6,9 @@
   {% if status == "reject" %}
   <form id="retake-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
     <input type="hidden" name="assignment_id" value="{{ assignment_id }}">
-    <label id="take-photo-button" class="big-button secondary" for="retake-input">Retake</label>
-    <input id="retake-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
+    {% with input_id="retake-input", primary_label="Retake" %}
+    {% include "_photo_source.html" %}
+    {% endwith %}
   </form>
   {% with form_id="retake-form", input_id="retake-input" %}
   {% include "_capture_checklist.html" %}

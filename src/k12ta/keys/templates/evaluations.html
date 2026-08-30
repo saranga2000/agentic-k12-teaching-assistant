@@ -1,20 +1,8 @@
 {% extends "base.html" %}
-{% block title %}{{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block title %}Evaluations — {{ source.label }} — {{ student.display_name }}{% endblock %}
 {% block content %}
-<p><a href="/">&larr; {{ student.display_name }}</a></p>
-<h1>{{ source.label }}</h1>
-
-<ul class="summary-bar">
-  <li>{% if summary.needs_review_count > 0 and summary.first_needs_review_capture_id %}<a href="#cg-{{ summary.first_needs_review_capture_id }}"><strong>{{ summary.needs_review_count }}</strong> needs my review</a>{% else %}<strong>{{ summary.needs_review_count }}</strong> needs my review{% endif %}</li>
-  <li>{% if summary.waiting_on_identity_count > 0 and summary.first_waiting_on_identity_capture_id %}<a href="#cg-{{ summary.first_waiting_on_identity_capture_id }}"><strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity</a>{% else %}<strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity{% endif %}</li>
-  <li>{% if summary.waiting_on_key_count > 0 and summary.first_waiting_on_key_capture_id %}<a href="#cg-{{ summary.first_waiting_on_key_capture_id }}"><strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key</a>{% else %}<strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key{% endif %}</li>
-  <li>{% if summary.correct_count > 0 %}<a href="#graded-correct"><strong>{{ summary.correct_count }}</strong> graded correct</a>{% else %}<strong>{{ summary.correct_count }}</strong> graded correct{% endif %}</li>
-  <li>{% if summary.incorrect_count > 0 %}<a href="#graded-incorrect"><strong>{{ summary.incorrect_count }}</strong> graded incorrect</a>{% else %}<strong>{{ summary.incorrect_count }}</strong> graded incorrect{% endif %}</li>
-</ul>
-
-<h2>Answer keys</h2>
-<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan a key</a>
-<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">Enter answers by hand</a></p>
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>{{ source.label }} — Evaluations</h1>
 
 <h2>Recent sessions</h2>
 <p class="message">Session history is not shown here yet.</p>
@@ -51,7 +39,7 @@
       <select name="duplicate_of_capture_id" required>
         <option value="" disabled selected>same page as&hellip;</option>
         {% for other in other_unresolved %}
-        <option value="{{ other.capture_id }}">&ldquo;{{ other.items[0].row.prompt_text }}&rdquo;{% if other.items|length > 1 %} (+{{ other.items|length - 1 }} more){% endif %}</option>
+        <option value="{{ other.capture_id }}">&ldquo;{{ other.items[0].row.prompt_text | humanize_math }}&rdquo;{% if other.items|length > 1 %} (+{{ other.items|length - 1 }} more){% endif %}</option>
         {% endfor %}
       </select>
       <button type="submit">Mark as duplicate</button>
@@ -69,9 +57,23 @@
     {% for item in group.items %}
     <li>
       <span class="cause-label">{{ item.cause_label }}</span>
-      &ldquo;{{ item.row.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw }}&rdquo;
+      {% if item.row.reminder_requested_at %}<span class="cause-label reminder-badge">{{ student.display_name }} asked about this</span>{% endif %}
+      {% if item.row.needs_human_cause == "ambiguous_problem_id" %}
+      <span class="question-number unresolved">Question number not identified</span>
+      <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/set-problem-number" class="page-entry-ask">
+        <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
+        <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
+        <input type="hidden" name="old_problem_id" value="{{ item.row.problem_id }}">
+        {% if group.page_number %}<input type="hidden" name="page_number" value="{{ group.page_number }}">{% endif %}
+        <input type="text" name="problem_id" placeholder="question number" required>
+        <button type="submit">Set</button>
+      </form>
+      {% else %}
+      <span class="question-number">Q{{ item.row.problem_id }}</span>
+      {% endif %}
+      &ldquo;{{ item.row.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw | humanize_math }}&rdquo;
       {% if item.row.needs_human_cause == "answer_differs_from_key" %}
-      &mdash; key says &ldquo;{{ item.row.expected_answer }}&rdquo;
+      &mdash; key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;
       <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
         <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
         <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
@@ -93,7 +95,7 @@
 {% if correct_items %}
 <ul class="pending-list">
   {% for item in correct_items %}
-  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;</li>
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;</li>
   {% endfor %}
 </ul>
 {% else %}
@@ -104,7 +106,7 @@
 {% if incorrect_items %}
 <ul class="pending-list">
   {% for item in incorrect_items %}
-  <li>Page {{ item.page_number }}: &ldquo;{{ item.prompt_text }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer }}&rdquo;{% endif %}</li>
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}</li>
   {% endfor %}
 </ul>
 {% else %}
@@ -125,40 +127,5 @@
 {% else %}
 <p class="message">No repeated attempts yet.</p>
 {% endif %}
-{% endif %}
-
-<h2>Page identity</h2>
-<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">
-  {% if schema %}Edit page-identity setup{% else %}Set up page identity{% endif %}
-</a>
-{% if schema %}
-<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">Enter a page mapping by hand</a>
-{% endif %}
-</p>
-
-{% set total_resolutions = identity_counts.resolved + identity_counts.below_floor
-   + identity_counts.no_mapping + identity_counts.conflicting + identity_counts.partial
-   + identity_counts.no_markers + identity_counts.no_schema %}
-{% if total_resolutions == 0 %}
-<p class="message">No captures have been checked against a page identity yet.</p>
-{% else %}
-<ul class="identity-counts">
-  <li>Resolved: {{ identity_counts.resolved }}</li>
-  <li>Below confidence floor: {{ identity_counts.below_floor }}</li>
-  <li>No mapping yet: {{ identity_counts.no_mapping }}</li>
-  <li>Conflicting markers: {{ identity_counts.conflicting }}</li>
-  <li>Partially identified: {{ identity_counts.partial }}</li>
-  <li>No markers on the page: {{ identity_counts.no_markers }}</li>
-  <li>No identity schema yet: {{ identity_counts.no_schema }}</li>
-</ul>
-{% endif %}
-{% if stale_mapping_count > 0 %}
-<p class="message attention">{{ stale_mapping_count }} confirmed page mapping{{ "s" if stale_mapping_count != 1 else "" }}
-  won't resolve right now &mdash; a photo of one of those pages comes back as an
-  unrecognised page instead of a grade. This follows a real change to
-  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">page-identity setup</a>.
-  Re-confirm the affected pages via
-  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">manual page mapping</a>
-  to fix this.</p>
 {% endif %}
 {% endblock %}

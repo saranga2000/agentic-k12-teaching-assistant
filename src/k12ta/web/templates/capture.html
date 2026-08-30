@@ -40,8 +40,9 @@
   {% if assignment %}
   <form id="capture-form" method="post" action="/capture/{{ student.student_id }}" enctype="multipart/form-data">
     <input type="hidden" name="assignment_id" value="{{ assignment.assignment_id }}">
-    <label id="take-photo-button" class="big-button" for="photo-input">{{ "Add Screenshot" if is_online_exercise else "Take Photo" }}</label>
-    <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
+    {% with input_id="photo-input", hide_camera=is_online_exercise %}
+    {% include "_photo_source.html" %}
+    {% endwith %}
   </form>
   {% with form_id="capture-form", input_id="photo-input" %}
   {% include "_capture_checklist.html" %}

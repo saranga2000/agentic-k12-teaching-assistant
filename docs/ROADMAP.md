@@ -517,6 +517,90 @@ and manual duplicate marking — four fixes from using M3.8 for real, 2026-08-22
   captures stop accumulating in the first place, at which point the grouping problem
   may mostly have disappeared rather than needing a heuristic at all.
 
+**M3.10: camera/upload choice, LaTeX at display time, and a real navigation split
+for both apps — four fixes from a parent using both apps for real, 2026-08-29.**
+
+- **Camera and upload, both apps.** `capture.html`, `result.html` (retake), and
+  `keys/upload.html` relied on a single `input[type=file][capture="environment"]` --
+  reliable on the iPad/iPhone per docs/DEPLOYMENT.md, but on a desktop browser either
+  ignored (opens a plain file dialog) or silently does nothing, which is what a parent
+  hit on a MacBook Air. New shared partial `_photo_source.html` (duplicated once per
+  app, since each has its own `Jinja2Templates` directory) adds a second, always-
+  working **"Upload a Photo"** control with no `capture` attribute at all -- the
+  durable fix, works on every platform -- plus a best-effort in-page live camera
+  (`getUserMedia`) layered on top, feature-detected and falling back to the native
+  input on failure. The live camera only works over a secure context (HTTPS or
+  `localhost`), which the real `http://<mac>.local:8080` deployment is not -- stated
+  plainly in `docs/DEPLOYMENT.md`, not left to be rediscovered as a surprise. Both
+  paths funnel into the existing hidden file input via `DataTransfer` + a dispatched
+  `change`, so neither app's existing submit/streaming logic needed to change.
+- **LaTeX stripped at display time, not just at the prompt.** `transcribe_page.md`/
+  `transcribe_key_page.md` (v6) already stop the model from *emitting* LaTeX, but
+  that does nothing for rows transcribed before that fix -- exactly the
+  `$4\frac{3}{4}$`-in-the-parent-app case reported from real use. New
+  `k12ta.domain.text.humanize_math_text` (zero I/O, tested against the real
+  screenshot's nested-fraction case) is a Jinja filter (`humanize_math`) applied at
+  every *display-only* spot in both apps (`session_result.html`, `evaluations.html`'s
+  pending/graded/incorrect lists) -- never on the editable `value=` fields in
+  `confirm.html`/`manual_answers.html`/`resolve.html`, which must keep showing the
+  exact stored text for a parent to correct. Covers every already-transcribed row
+  without a re-scan or a model call.
+- **Parent nav split: enrollment_landing / evaluations / answer-keys.** Clicking an
+  enrollment used to land directly on the one big pending/graded page
+  (`enrollment_detail` → `enrollment.html`) -- "jumping straight into evaluation
+  results" was the exact complaint. `GET /keys/{student}/{source}` is now a
+  lightweight landing (`enrollment_landing.html`): the summary bar, then plain links
+  to **Add a key** (unchanged scan/manual-entry actions), **View answer keys** (new
+  `GET .../answer-keys`, `answer_keys.html`, from `answer_keys.list_entries_for_
+  source` -- nothing new to query, just the first screen to show that list on its
+  own), **View evaluations** (`GET .../evaluations`, the old pending/graded/repeated-
+  attempts content, renamed `evaluations.html`), and **Page identity setup**
+  (unchanged destination, moved here since it's a settings/diagnostic concern, not an
+  evaluation). The summary bar's per-category jump links now point across pages
+  (`/evaluations#cg-...`) since the ids they jump to no longer live on the same page.
+- **Every pending item shows its real question number, and a parent can supply one
+  when it's missing.** `evaluations.html`'s pending `<li>` never showed `problem_id`
+  at all before, even when it was a real printed number. Now: `Q{{ problem_id }}` when
+  real; "Question number not identified" plus an inline text input when it's the
+  synthesized `AMBIGUOUS_PROBLEM_ID_PREFIX` placeholder (`k12ta.pipeline.process`,
+  `NeedsHumanCause.AMBIGUOUS_PROBLEM_ID`, M3.5) -- a cause that previously had no fix
+  short of re-scanning and wasn't even counted in the pending summary. New
+  `k12ta.store.captures.rename_problem_id` (SQLite's `defer_foreign_keys` handles the
+  `graded_problems → problems` FK both tables share on `problem_id`; refuses a
+  collision with a real problem already on the capture) plus `POST .../set-problem-
+  number`, one-tap like `mark-duplicate` rather than the heavier page-identity
+  preview-then-confirm -- a wrong page grades against a stranger's answers, a wrong
+  question number on an already-known page is a narrower, immediately re-doable
+  mistake. Regrades against the key immediately when the page is already resolved,
+  the same way a page-identity pick already does.
+- **Child app: a program picker and "My pages," where none existed.** Before this,
+  `/` → a student button went straight into `capture.html`, which silently
+  auto-resolved a source -- no way to choose a program explicitly, and no way to see
+  her own past pages at all once `session_result.html`'s single dead-end screen was
+  behind her. New: `GET /student/{student_id}` (skips straight through when there's
+  only one program, matching the existing "two-tap capture" minimalism for the common
+  case; offers a real choice, `program_picker.html`, only when there's more than one)
+  → `GET /student/{student_id}/{source_id}` (`source_home.html`: **"Add a page"** into
+  the unchanged capture flow, or **"My pages"**) → `GET .../pages` (`my_pages.html`):
+  every page this student has ever photographed for this program, split into Waiting
+  on a grown-up / To look at / Graded. Built on `k12ta.respond.render.
+  render_student_result` -- the exact same oracle-safe, never-leak-`expected_answer`
+  machinery `session_result.html` uses for one session -- rather than a second,
+  easier-to-get-wrong copy of that policy for cross-session history; new
+  `k12ta.store.sessions.list_all_graded_for_source` is `list_graded_attempts_for_
+  source`'s twin but without the "page must have resolved" filter, since a still-
+  unidentified capture is exactly what a child needs to see in her own history. A
+  "Remind a grown-up" button on each waiting item sets `graded_problems.
+  reminder_requested_at` (migration 0019) -- honest and local-only, no email/SMS
+  infra exists, so `evaluations.html`'s pending list shows it as a plain badge next
+  time a parent opens the app, not a push notification. "Add a page" / "My pages"
+  chosen over "exercise"/"homework" as the child-facing words, since neither of those
+  fits Kumon/RSM/school-homework/a summer workbook uniformly and "page" is already
+  this codebase's own vocabulary (`page_number`, `page_identity`).
+
+**Deferred, not built now:** per-child PIN entry before any capture or history screen
+is shown to a child -- see the P2 list below.
+
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**
 
@@ -844,6 +928,16 @@ and the exact disclosure.
   image of a child, not carved out under a separate policy. Must not add a tap or a
   load delay to the two-tap capture path: the photo decorates a screen the student is
   already looking at, it is not a new step.
+
+- **Per-child PIN before any capture or history screen.** Requested 2026-08-29
+  alongside the child-app nav restructure (M3.10) but explicitly deferred, not
+  built: after picking a name on `/`, a child would enter a short PIN before
+  `program_picker`/`capture`/`my_pages` become reachable, so one child cannot browse
+  or act as another. Distinct from the existing parent PIN (`k12ta.domain.policy`'s
+  `parent_override`), which gates one thing only -- overriding feedback policy -- and
+  is not a login. AGENTS.md rule 8 already commits to no authentication in v1; this
+  would be the first departure from that, scoped narrowly to "which child," never a
+  password reset flow, account recovery, or anything resembling real auth.
 
 ---
 

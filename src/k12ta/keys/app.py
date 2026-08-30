@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 from k12ta.config import Settings, load_dotenv
 from k12ta.domain.attempts import PastAttempt, attempt_number
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
+from k12ta.domain.text import humanize_math_text
 from k12ta.grading import page_identity
 from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry
 from k12ta.grading.page_identity import build_composite_key
@@ -89,6 +90,7 @@ logging.basicConfig(
 
 app = FastAPI()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: KeyTranscriber | None = None
 
@@ -340,6 +342,7 @@ _WAITING_ON_IDENTITY_CAUSES = frozenset(
 _WAITING_ON_TRANSCRIPTION_CAUSE = "low_confidence"
 _NEEDS_PERSON_CAUSE = "needs_person"
 _ANSWER_DIFFERS_CAUSE = "answer_differs_from_key"
+_AMBIGUOUS_PROBLEM_ID_CAUSE = "ambiguous_problem_id"
 
 _CAUSE_LABELS: dict[str, str] = {
     _WAITING_ON_KEY_CAUSE: "Waiting on an answer key",
@@ -349,6 +352,7 @@ _CAUSE_LABELS: dict[str, str] = {
     _WAITING_ON_TRANSCRIPTION_CAUSE: "Transcription could not be read",
     _NEEDS_PERSON_CAUSE: "Needs a person to judge",
     _ANSWER_DIFFERS_CAUSE: "Answer differs from the key",
+    _AMBIGUOUS_PROBLEM_ID_CAUSE: "Question number not identified",
 }
 _UNKNOWN_CAUSE_LABEL = "Needs a look"
 """A legacy row with no cause at all (predates the needs_human_cause column)
@@ -411,7 +415,9 @@ def _pick_capture_for_page(
     return max(pool, key=lambda c: captured_at_by_capture[c])
 
 
-_NEEDS_REVIEW_CAUSES = frozenset({_NEEDS_PERSON_CAUSE, _ANSWER_DIFFERS_CAUSE})
+_NEEDS_REVIEW_CAUSES = frozenset(
+    {_NEEDS_PERSON_CAUSE, _ANSWER_DIFFERS_CAUSE, _AMBIGUOUS_PROBLEM_ID_CAUSE}
+)
 
 
 @dataclass(frozen=True)
@@ -624,7 +630,7 @@ def submit_regrade_pending(
         regrade_capture_for_resolved_identity(
             conn, student_id, row.session_id, row.capture_id, source_id, row.page_number
         )
-    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
 _VERDICTS = frozenset({"correct", "incorrect"})
@@ -659,7 +665,7 @@ def submit_answer_verdict(
         problem_id=problem_id,
         outcome=verdict,
     )
-    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
 @app.get("/keys/{student_id}/{source_id}/captures/{capture_id}/image")
@@ -697,18 +703,36 @@ def key_page_image(
     return FileResponse(image_path, media_type="image/jpeg")
 
 
+def _enrollment_summary(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> EnrollmentSummary:
+    """The at-a-glance counts both the landing page and the evaluations page
+    need. Recomputed by each caller rather than cached anywhere -- this is a
+    single household's local sqlite file, and a repeated query is far cheaper
+    than a caching layer would be to get right."""
+    pending = sessions.list_pending_for_source(conn, student_id, source_id)
+    capture_groups, _ = _group_pending_by_capture(conn, student_id, source_id, pending)
+    resolved = sessions.list_resolved_for_source(conn, student_id, source_id)
+    return _summarize_enrollment(pending, capture_groups, resolved)
+
+
 @app.get("/keys/{student_id}/{source_id}", response_class=HTMLResponse)
-def enrollment_detail(
+def enrollment_landing(
     request: Request,
     student_id: str,
     source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse:
-    """Scanning a key lives under the enrollment it belongs to, not at the top
-    level -- a key only ever means something in the context of one enrollment.
-    Recent sessions and pages-waiting-on-a-key say plainly they're not built yet
-    rather than showing an empty panel; neither is a feature of this task."""
+    """The first thing a parent sees after picking an enrollment -- a
+    dashboard-style landing, not the pending/graded detail (docs/ROADMAP.md,
+    parent nav restructure): a summary, then "add a key" / "view answer keys"
+    / "view evaluations" / "page identity setup" as plain links to their own
+    screens. Nothing here is itself a pending or graded item, so this route
+    never needs the heavier per-capture image lookups evaluations_screen
+    does beyond what _enrollment_summary already computes for the counts."""
     student, source = _require_student_and_source(conn, student_id, source_id)
+    summary = _enrollment_summary(conn, student_id, source_id)
+
     counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, source_id)
     identity_counts = {
         "resolved": counts.get("resolved", 0),
@@ -724,6 +748,34 @@ def enrollment_detail(
     stale_mapping_count = page_identities.count_stale_for_source(
         conn, student_id, source_id, current_version
     )
+
+    return templates.TemplateResponse(
+        request,
+        "enrollment_landing.html",
+        {
+            "student": student,
+            "source": source,
+            "summary": summary,
+            "identity_counts": identity_counts,
+            "schema": schema,
+            "stale_mapping_count": stale_mapping_count,
+        },
+    )
+
+
+@app.get("/keys/{student_id}/{source_id}/evaluations", response_class=HTMLResponse)
+def evaluations_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """What's pending, what's graded, and repeated attempts -- reached only
+    by a parent choosing "View evaluations" from enrollment_landing, not the
+    first thing shown for an enrollment (docs/ROADMAP.md, parent nav
+    restructure). Was this module's `enrollment_detail`, minus the "add a
+    key" links and the page-identity section, both moved to the landing."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
 
     # Repeated attempts on the same problem are a signal worth a parent seeing
     # only where the coach is withholding the answer -- in FULL mode the answer
@@ -760,13 +812,10 @@ def enrollment_detail(
 
     return templates.TemplateResponse(
         request,
-        "enrollment.html",
+        "evaluations.html",
         {
             "student": student,
             "source": source,
-            "identity_counts": identity_counts,
-            "schema": schema,
-            "stale_mapping_count": stale_mapping_count,
             "show_repeated_attempts": not rules.reveal_final_answer,
             "repeated_problems": repeated_problems,
             "capture_groups": capture_groups,
@@ -775,6 +824,33 @@ def enrollment_detail(
             "correct_items": [r for r in resolved if r.outcome == "correct"],
             "incorrect_items": [r for r in resolved if r.outcome == "incorrect"],
         },
+    )
+
+
+@app.get("/keys/{student_id}/{source_id}/answer-keys", response_class=HTMLResponse)
+def answer_keys_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """What's actually on file, by page -- a parent could previously only see
+    key answers indirectly, quoted back inside a pending or graded row.
+    Reuses answer_keys.list_entries_for_source directly; nothing new to
+    query, this is the first screen to show that list on its own."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    entries = answer_keys.list_entries_for_source(conn, student_id, source_id)
+    by_page: dict[int, list[answer_keys.AnswerKeyEntryRow]] = {}
+    for entry in entries:
+        by_page.setdefault(entry.page_number, []).append(entry)
+    pages = [
+        (page_number, sorted(rows, key=lambda e: _problem_number_sort_key(e.problem_number)))
+        for page_number, rows in sorted(by_page.items())
+    ]
+    return templates.TemplateResponse(
+        request,
+        "answer_keys.html",
+        {"student": student, "source": source, "pages": pages},
     )
 
 
@@ -809,7 +885,7 @@ def preview_page_entry(
     student, source = _require_student_and_source(conn, student_id, source_id)
 
     if not page_number.isdigit() or int(page_number) <= 0:
-        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
     parsed_page_number = int(page_number)
 
     entries = answer_keys.get_entries_for_page(conn, student_id, source_id, parsed_page_number)
@@ -860,7 +936,7 @@ def commit_page_entry(
             created_at=datetime.now(UTC).isoformat(),
         ),
     )
-    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
 @app.post("/keys/{student_id}/{source_id}/mark-duplicate")
@@ -882,11 +958,11 @@ def submit_mark_duplicate(
     stale form."""
     _require_student_and_source(conn, student_id, source_id)
     if capture_id == duplicate_of_capture_id:
-        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
     if captures.get_page_capture(conn, student_id, capture_id) is None:
-        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
     if captures.get_page_capture(conn, student_id, duplicate_of_capture_id) is None:
-        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
     capture_duplicates.mark_duplicate(
         conn,
@@ -897,7 +973,48 @@ def submit_mark_duplicate(
             marked_at=datetime.now(UTC).isoformat(),
         ),
     )
-    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+
+
+@app.post("/keys/{student_id}/{source_id}/set-problem-number")
+def submit_problem_number(
+    student_id: str,
+    source_id: str,
+    capture_id: str = Form(...),
+    session_id: str = Form(...),
+    old_problem_id: str = Form(...),
+    problem_id: str = Form(...),
+    page_number: str = Form(""),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """A parent typing the real printed question number over a synthesized
+    AMBIGUOUS_PROBLEM_ID_PREFIX placeholder (k12ta.pipeline.process,
+    NeedsHumanCause.AMBIGUOUS_PROBLEM_ID) -- one-tap, the same risk profile
+    as submit_mark_duplicate's own one-tap correction just above, not the
+    heavier preview-then-confirm page-identity ask: a wrong *page* grades
+    against a stranger's answers, but a wrong question number on an
+    already-known page is a narrower mistake a parent can see and redo
+    immediately from the same row. A blank submission, or one that collides
+    with a real problem already on this capture (k12ta.store.captures.
+    rename_problem_id raises ValueError for that), is silently ignored --
+    same "stale or malformed submission, nothing happens" honesty as
+    submit_mark_duplicate, not a 500. Regrades only when this capture's page
+    is already resolved -- k12ta.store.captures.rename_problem_id has
+    already run either way, so a still-unresolved page just keeps waiting on
+    identity as before, now under its real question number."""
+    _require_student_and_source(conn, student_id, source_id)
+    new_id = problem_id.strip()
+    if not new_id:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+    try:
+        captures.rename_problem_id(conn, student_id, capture_id, old_problem_id, new_id)
+    except ValueError:
+        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+    if page_number.isdigit():
+        regrade_capture_for_resolved_identity(
+            conn, student_id, session_id, capture_id, source_id, int(page_number)
+        )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
 _BLANK_SCHEMA_ROWS = 3

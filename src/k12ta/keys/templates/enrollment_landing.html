@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/">&larr; {{ student.display_name }}</a></p>
+<h1>{{ source.label }}</h1>
+
+<ul class="summary-bar">
+  <li>{% if summary.needs_review_count > 0 and summary.first_needs_review_capture_id %}<a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations#cg-{{ summary.first_needs_review_capture_id }}"><strong>{{ summary.needs_review_count }}</strong> needs my review</a>{% else %}<strong>{{ summary.needs_review_count }}</strong> needs my review{% endif %}</li>
+  <li>{% if summary.waiting_on_identity_count > 0 and summary.first_waiting_on_identity_capture_id %}<a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations#cg-{{ summary.first_waiting_on_identity_capture_id }}"><strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity</a>{% else %}<strong>{{ summary.waiting_on_identity_count }}</strong> waiting on page identity{% endif %}</li>
+  <li>{% if summary.waiting_on_key_count > 0 and summary.first_waiting_on_key_capture_id %}<a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations#cg-{{ summary.first_waiting_on_key_capture_id }}"><strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key</a>{% else %}<strong>{{ summary.waiting_on_key_count }}</strong> waiting on a key{% endif %}</li>
+  <li>{% if summary.correct_count > 0 %}<a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations#graded-correct"><strong>{{ summary.correct_count }}</strong> graded correct</a>{% else %}<strong>{{ summary.correct_count }}</strong> graded correct{% endif %}</li>
+  <li>{% if summary.incorrect_count > 0 %}<a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations#graded-incorrect"><strong>{{ summary.incorrect_count }}</strong> graded incorrect</a>{% else %}<strong>{{ summary.incorrect_count }}</strong> graded incorrect{% endif %}</li>
+</ul>
+
+<h2>Add a key</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan a key</a>
+<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">Enter answers by hand</a></p>
+
+<h2>Answer keys and evaluations</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-keys">View answer keys</a>
+<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations">View evaluations</a></p>
+
+<h2>Page identity</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">
+  {% if schema %}Edit page-identity setup{% else %}Set up page identity{% endif %}
+</a>
+{% if schema %}
+<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">Enter a page mapping by hand</a>
+{% endif %}
+</p>
+
+{% set total_resolutions = identity_counts.resolved + identity_counts.below_floor
+   + identity_counts.no_mapping + identity_counts.conflicting + identity_counts.partial
+   + identity_counts.no_markers + identity_counts.no_schema %}
+{% if total_resolutions == 0 %}
+<p class="message">No captures have been checked against a page identity yet.</p>
+{% else %}
+<ul class="identity-counts">
+  <li>Resolved: {{ identity_counts.resolved }}</li>
+  <li>Below confidence floor: {{ identity_counts.below_floor }}</li>
+  <li>No mapping yet: {{ identity_counts.no_mapping }}</li>
+  <li>Conflicting markers: {{ identity_counts.conflicting }}</li>
+  <li>Partially identified: {{ identity_counts.partial }}</li>
+  <li>No markers on the page: {{ identity_counts.no_markers }}</li>
+  <li>No identity schema yet: {{ identity_counts.no_schema }}</li>
+</ul>
+{% endif %}
+{% if stale_mapping_count > 0 %}
+<p class="message attention">{{ stale_mapping_count }} confirmed page mapping{{ "s" if stale_mapping_count != 1 else "" }}
+  won't resolve right now &mdash; a photo of one of those pages comes back as an
+  unrecognised page instead of a grade. This follows a real change to
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">page-identity setup</a>.
+  Re-confirm the affected pages via
+  <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">manual page mapping</a>
+  to fix this.</p>
+{% endif %}
+{% endblock %}

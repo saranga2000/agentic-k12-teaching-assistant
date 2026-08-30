@@ -28,6 +28,7 @@ from k12ta.config import Settings, load_dotenv
 from k12ta.content.source import SourceKind
 from k12ta.domain.attempts import PastAttempt
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
+from k12ta.domain.text import humanize_math_text
 from k12ta.grading import page_identity
 from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.ingest import capture as ingest_capture
@@ -39,7 +40,7 @@ from k12ta.pipeline.process import (
     process_capture,
     regrade_capture_for_resolved_identity,
 )
-from k12ta.respond.render import render_student_result, summarize_results
+from k12ta.respond.render import StudentResultView, render_student_result, summarize_results
 from k12ta.store import (
     answer_keys,
     captures,
@@ -71,6 +72,7 @@ REJECT_MESSAGES = {
     "internal_error": "Something went wrong on my end — ask a grown-up if it keeps happening.",
 }
 NO_ASSIGNMENT_MESSAGE = "No assignment is set for today yet."
+NO_PROGRAMS_MESSAGE = "No programs are set up for you yet. Ask a grown-up to add one."
 NO_STUDENTS_MESSAGE = (
     "No students yet. Run `python scripts/seed_dev_data.py` against this server's "
     "K12TA_DATA_DIR (M3.1 will replace this with real setup)."
@@ -95,6 +97,7 @@ fires for a legitimately slow model response."""
 
 app = FastAPI()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: Transcriber | None = None
 
@@ -144,6 +147,189 @@ def student_picker(
             "no_students_message": NO_STUDENTS_MESSAGE,
         },
     )
+
+
+@app.get("/student/{student_id}", response_class=HTMLResponse, response_model=None)
+def program_picker(
+    request: Request,
+    student_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse | RedirectResponse:
+    """Between "who are you" (student_picker) and "what are you doing"
+    (source_home): a program picker, skipped straight through when there is
+    exactly one program -- the common single-program case stays a near-
+    zero-tap path, same reasoning capture.html's own inline source dropdown
+    already applied when switching sources, not choosing among them from a
+    dedicated screen, was the only thing here at all."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    sources = content.list_content_sources(conn, student_id)
+    if len(sources) == 1:
+        return RedirectResponse(f"/student/{student_id}/{sources[0].source_id}", status_code=303)
+    return templates.TemplateResponse(
+        request,
+        "program_picker.html",
+        {"student": student, "sources": sources, "no_programs_message": NO_PROGRAMS_MESSAGE},
+    )
+
+
+@app.get("/student/{student_id}/{source_id}", response_class=HTMLResponse)
+def source_home(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """"Add a page" or "My pages" -- the second half of the choice
+    program_picker starts. The pending count reuses the same query
+    (sessions.list_pending_for_source) the parent-facing pending list is
+    built from, purely so a child can see "3 waiting on a grown-up" before
+    deciding whether My pages is worth a look."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    source = content.get_content_source(conn, student_id, source_id)
+    if source is None:
+        raise HTTPException(404, "no such source")
+    pending_count = len(sessions.list_pending_for_source(conn, student_id, source_id))
+    return templates.TemplateResponse(
+        request,
+        "source_home.html",
+        {"student": student, "source": source, "pending_count": pending_count},
+    )
+
+
+@dataclass(frozen=True)
+class MyPageItem:
+    """One graded_problems row rendered for a student's own "my pages"
+    history, not a live session -- the same StudentResultView every result
+    a student ever sees is built from (never a raw dict of graded_problems
+    fields), so the multi-attempt-oracle suppression and the
+    never-show-expected-answer-on-a-miss policy apply exactly as they do on
+    session_result.html, not a second, easier-to-get-wrong copy of that
+    logic. capture_id/session_id/reminder_requested_at ride alongside only
+    because StudentResultView itself is deliberately silent on them -- a
+    reminder button needs to know what to update, not what to display."""
+
+    view: StudentResultView
+    page_number: int | None
+    capture_id: str
+    session_id: str
+    reminder_requested_at: str | None
+
+
+_WAITING_ON_GROWNUP_BUCKETS = frozenset({"waiting_on_key", "needs_a_person"})
+_TO_LOOK_AT_BUCKETS = frozenset({"could_not_read", "repeat"})
+
+
+@app.get("/student/{student_id}/{source_id}/pages", response_class=HTMLResponse)
+def my_pages(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """Every page this student has ever photographed for this program, and
+    where it stands -- the gap named in docs/ROADMAP.md's child-app
+    restructure: before this, a student's only view of her own work was
+    session_result.html immediately after one capture, a dead end with no
+    history and no way back. "Waiting on a grown-up" is its own section
+    (with a Remind button, see submit_reminder) since that's the one state a
+    student can't resolve herself by retaking a photo."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    source = content.get_content_source(conn, student_id, source_id)
+    if source is None:
+        raise HTTPException(404, "no such source")
+
+    mode = resolve_mode(
+        source_default_mode=FeedbackMode(source.default_mode),
+        work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+    )
+    rules = rules_for(mode)
+
+    all_graded = sessions.list_all_graded_for_source(conn, student_id, source_id)
+    history = _group_by_problem(
+        sessions.list_graded_attempts_for_source(conn, student_id, source_id)
+    )
+
+    problems_by_capture: dict[str, dict[str, captures.ProblemRow]] = {}
+    items: list[MyPageItem] = []
+    for g in all_graded:
+        if g.capture_id not in problems_by_capture:
+            problems_by_capture[g.capture_id] = {
+                p.problem_id: p
+                for p in captures.list_problems_for_capture(conn, student_id, g.capture_id)
+            }
+        problem = problems_by_capture[g.capture_id].get(g.problem_id)
+        prompt_text = problem.prompt_text if problem is not None else ""
+        answer = problem.student_answer_raw if problem is not None else ""
+        identity_attempts = (
+            history.get((g.page_number, g.problem_id), []) if g.page_number is not None else []
+        )
+        prior_attempts = tuple(
+            PastAttempt(outcome=a.outcome, student_answer_raw=a.student_answer_raw)
+            for a in identity_attempts
+            if a.capture_id != g.capture_id
+        )
+        view = render_student_result(
+            g, prompt_text, answer, rules=rules, prior_attempts=prior_attempts
+        )
+        items.append(
+            MyPageItem(
+                view=view,
+                page_number=g.page_number,
+                capture_id=g.capture_id,
+                session_id=g.session_id,
+                reminder_requested_at=g.reminder_requested_at,
+            )
+        )
+
+    items.sort(key=lambda item: _problem_sort_key(item.view.problem_id))
+    graded_items = [i for i in items if i.view.display_bucket in ("correct", "incorrect")]
+    to_look_at_items = [i for i in items if i.view.display_bucket in _TO_LOOK_AT_BUCKETS]
+    waiting_items = [i for i in items if i.view.display_bucket in _WAITING_ON_GROWNUP_BUCKETS]
+
+    return templates.TemplateResponse(
+        request,
+        "my_pages.html",
+        {
+            "student": student,
+            "source": source,
+            "graded_items": graded_items,
+            "to_look_at_items": to_look_at_items,
+            "waiting_items": waiting_items,
+        },
+    )
+
+
+@app.post("/student/{student_id}/{source_id}/remind")
+def submit_reminder(
+    student_id: str,
+    source_id: str,
+    session_id: str = Form(...),
+    capture_id: str = Form(...),
+    problem_id: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """A student's own "remind my grown-up about this" tap -- honest and
+    local-only (see migration 0019): no email/SMS infra exists to page
+    anyone, so this only sets a flag k12ta.keys shows as a badge on its
+    pending list next time a parent opens the app."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    sessions.request_reminder(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        requested_at=datetime.now(UTC).isoformat(),
+    )
+    return RedirectResponse(f"/student/{student_id}/{source_id}/pages", status_code=303)
 
 
 @app.get("/capture/{student_id}", response_class=HTMLResponse)

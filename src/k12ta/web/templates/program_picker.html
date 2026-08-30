@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ student.display_name }}{% endblock %}
+{% block content %}
+<div class="screen">
+  {% for source in sources %}
+  <a class="big-button" href="/student/{{ student.student_id }}/{{ source.source_id }}">{{ source.label }}</a>
+  {% else %}
+  <p class="message">{{ no_programs_message }}</p>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Answer keys — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>{{ source.label }} — Answer keys</h1>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload">Scan a key</a>
+<a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">Enter answers by hand</a></p>
+
+{% if pages %}
+{% for page_number, entries in pages %}
+<h2>Page {{ page_number }}</h2>
+<ul class="pending-list">
+  {% for entry in entries %}
+  <li>Q{{ entry.problem_number }}: {{ entry.answer_text | humanize_math if entry.answer_text else "(no single answer -- a person judges this one)" }}
+    <span class="cause-label">{{ "hand-entered" if entry.source == "manual" else "from a scan" }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endfor %}
+{% else %}
+<p class="message">No answer keys on file for {{ source.label }} yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}My pages — {{ source.label }}{% endblock %}
+{% block content %}
+<div class="screen pages-screen">
+  <p><a href="/student/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+  <h1>My pages</h1>
+
+  <h2>Waiting on a grown-up</h2>
+  {% if waiting_items %}
+  <ul class="pages-list">
+    {% for item in waiting_items %}
+    <li>
+      <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
+      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
+      {% if item.reminder_requested_at %}
+      <span class="pages-reminded">Reminder sent</span>
+      {% else %}
+      <form method="post" action="/student/{{ student.student_id }}/{{ source.source_id }}/remind">
+        <input type="hidden" name="session_id" value="{{ item.session_id }}">
+        <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
+        <input type="hidden" name="problem_id" value="{{ item.view.problem_id }}">
+        <button type="submit">Remind a grown-up</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="message">Nothing waiting on a grown-up right now.</p>
+  {% endif %}
+
+  <h2>To look at</h2>
+  {% if to_look_at_items %}
+  <ul class="pages-list">
+    {% for item in to_look_at_items %}
+    <li>
+      <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
+      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo; &mdash; {{ item.view.message }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="message">Nothing to look at right now.</p>
+  {% endif %}
+
+  <h2>Graded</h2>
+  {% if graded_items %}
+  <ul class="pages-list">
+    {% for item in graded_items %}
+    <li class="outcome-{{ item.view.outcome | replace('_', '-') }}">
+      <span class="pages-page">Page {{ item.page_number }}</span>
+      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
+      <span class="pages-glyph">{{ item.view.glyph }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="message">Nothing graded yet.</p>
+  {% endif %}
+</div>
+<style>
+  .pages-screen { justify-content: flex-start; padding-top: 2.5rem; align-items: stretch; text-align: left; }
+  .pages-screen h1 { text-align: center; }
+  .pages-list { list-style: none; padding: 0; margin: 0 0 1.5rem; }
+  .pages-list li {
+    padding: 0.7rem 0; border-top: 1px solid var(--surface); font-size: 1.05rem;
+  }
+  .pages-list li:first-child { border-top: none; }
+  .pages-page { font-weight: 700; margin-right: 0.5rem; }
+  .pages-glyph { font-weight: 700; margin-left: 0.5rem; }
+  .outcome-correct .pages-glyph { color: var(--affirm); }
+  .outcome-incorrect .pages-glyph { color: var(--attention); }
+  .pages-list form { display: inline; margin-left: 0.6rem; }
+  .pages-list button {
+    font-size: 0.95rem; padding: 0.4rem 0.9rem; border-radius: 8px; border: none;
+    background: var(--accent); color: #12141a; cursor: pointer; font-weight: 600;
+  }
+  .pages-reminded { margin-left: 0.6rem; color: var(--text-dim); font-size: 0.95rem; }
+</style>
+{% endblock %}

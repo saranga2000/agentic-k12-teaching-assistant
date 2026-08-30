@@ -235,6 +235,300 @@ def test_root_with_no_students_shows_a_message_instead_of_a_blank_screen(
     assert 'class="big-button"' not in response.text
 
 
+def test_student_picker_links_into_the_program_picker_not_straight_to_capture(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Child-app nav restructure (docs/ROADMAP.md): choose a child, then a
+    program, then what to do -- not straight from student picker to the
+    camera."""
+    _seed_two_students(conn)
+
+    response = client.get("/")
+
+    assert 'href="/student/s-marcus"' in response.text
+    assert 'href="/capture/s-marcus"' not in response.text
+
+
+def _seed_one_source(conn: sqlite3.Connection, student_id: str = "s-marcus") -> None:
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id=student_id,
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+
+
+def test_program_picker_skips_straight_through_with_only_one_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+
+    response = client.get("/student/s-marcus", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/student/s-marcus/summer_bridge"
+
+
+def test_program_picker_offers_a_choice_with_more_than_one_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="rsm",
+            label="Russian School of Math",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=False,
+            graded_by_someone_else=True,
+            default_mode="diagnostic_only",
+            typical_session_minutes=45,
+        ),
+    )
+
+    response = client.get("/student/s-marcus")
+
+    assert response.status_code == 200
+    assert 'href="/student/s-marcus/summer_bridge"' in response.text
+    assert 'href="/student/s-marcus/rsm"' in response.text
+
+
+def test_program_picker_for_unknown_student_is_404(client: TestClient) -> None:
+    assert client.get("/student/does-not-exist").status_code == 404
+
+
+def test_source_home_offers_add_a_page_and_my_pages(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+
+    response = client.get("/student/s-marcus/summer_bridge")
+
+    assert response.status_code == 200
+    assert 'href="/capture/s-marcus?source_id=summer_bridge"' in response.text
+    assert 'href="/student/s-marcus/summer_bridge/pages"' in response.text
+
+
+def test_source_home_shows_how_many_are_waiting_on_a_grownup(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.9,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            assignment_id="a-1",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-1",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.0,
+            needs_human_cause="no_key_for_page",
+            page_number=15,
+        ),
+    )
+
+    response = client.get("/student/s-marcus/summer_bridge")
+
+    assert "1 waiting on a grown-up" in response.text
+
+
+def test_my_pages_splits_waiting_to_look_at_and_graded(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    for capture_id, problem_id, prompt, answer, outcome, cause, page in [
+        ("c-waiting", "1", "12 + 7", "19", "needs_human", "no_key_for_page", 15),
+        ("c-correct", "1", "3 + 4", "7", "correct", None, 16),
+    ]:
+        store_captures.insert_page_capture(
+            conn,
+            store_captures.PageCaptureRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                assignment_id="a-1",
+                captured_at="2026-08-13T08:00:00+00:00",
+                image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+        store_captures.insert_problem(
+            conn,
+            store_captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                problem_id=problem_id,
+                prompt_text=prompt,
+                student_answer_raw=answer,
+                transcription_confidence=0.9,
+            ),
+        )
+        sessions.insert_session(
+            conn,
+            sessions.SessionRow(
+                student_id="s-marcus",
+                session_id=f"sess-{capture_id}",
+                assignment_id="a-1",
+                started_at="2026-08-13T08:00:00+00:00",
+            ),
+        )
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id=f"sess-{capture_id}",
+                capture_id=capture_id,
+                problem_id=problem_id,
+                outcome=outcome,
+                grader_confidence=0.9,
+                needs_human_cause=cause,
+                page_number=page,
+            ),
+        )
+
+    response = client.get("/student/s-marcus/summer_bridge/pages")
+
+    assert response.status_code == 200
+    assert "12 + 7" in response.text
+    assert "3 + 4" in response.text
+    assert 'action="/student/s-marcus/summer_bridge/remind"' in response.text
+    assert "Nothing to look at right now." in response.text
+
+
+def test_submit_reminder_sets_the_flag_the_parent_app_shows(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.9,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            assignment_id="a-1",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-1",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.0,
+            needs_human_cause="no_key_for_page",
+            page_number=15,
+        ),
+    )
+
+    response = client.post(
+        "/student/s-marcus/summer_bridge/remind",
+        data={"session_id": "sess-1", "capture_id": "c-1", "problem_id": "1"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
+    assert pending[0].reminder_requested_at is not None
+
+
 def test_capture_screen_shows_todays_default_assignment(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -349,7 +643,11 @@ def test_capture_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     assert 'id="take-photo-button"' in text
     assert 'id="photo-input"' in text
 
-    script_block = text.split("<script>")[1].split("</script>")[0]
+    # The last <script> block is _capture_checklist.html's -- capture.html now
+    # also includes _photo_source.html's own script earlier on the page (the
+    # Take Photo/Upload a Photo chooser), so this can no longer assume the
+    # checklist's script is the first one.
+    script_block = text.split("<script>")[-1].split("</script>")[0]
     assert "fetch(" in script_block
     assert ".requestSubmit(" not in script_block
     disable_index = script_block.index("input.disabled = true")
@@ -626,7 +924,7 @@ def test_post_capture_when_transcription_fails_offers_retake_and_keeps_the_photo
     # Same duplicate-request risk as the initial capture: a slow retake with no
     # feedback invites a second tap. Same fix required here.
     assert 'id="checklist" class="checklist" hidden' in final["html"]
-    script_block = final["html"].split("<script>")[1].split("</script>")[0]
+    script_block = final["html"].split("<script>")[-1].split("</script>")[0]
     assert "fetch(" in script_block
     assert ".requestSubmit(" not in script_block
     assert _step_statuses(response, "read") == ["started", "failed"]

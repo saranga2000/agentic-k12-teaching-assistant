@@ -65,8 +65,8 @@
       {% for item in items %}
       <tr class="outcome-{{ item.outcome | replace('_', '-') }} bucket-{{ item.display_bucket | replace('_', '-') }}">
         <td class="col-number">{{ item.display_number }}</td>
-        <td class="col-question">{{ item.prompt_text }}</td>
-        <td class="col-answer">{{ item.student_answer_raw }}</td>
+        <td class="col-question">{{ item.prompt_text | humanize_math }}</td>
+        <td class="col-answer">{{ item.student_answer_raw | humanize_math }}</td>
         <td class="col-result outcome-label">
           <span class="outcome-glyph">{{ item.glyph }}</span>
           <span class="outcome-note">{{ item.message }}</span>

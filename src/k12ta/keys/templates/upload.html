@@ -6,7 +6,10 @@
 <p>Photograph or choose a page of the answer key. One photo can cover several
 workbook pages, so a whole key is usually 6-8 photos.</p>
 <form id="upload-form" method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/upload" enctype="multipart/form-data">
-  <input id="photo-input" type="file" name="photo" accept="image/*" capture="environment" required>
+  {% with input_id="photo-input" %}
+  {% include "_photo_source.html" %}
+  {% endwith %}
+  <p id="no-photo-error" class="message" hidden>Take or choose a photo first.</p>
   <div class="actions">
     <button id="upload-button" type="submit">Upload page</button>
   </div>
@@ -25,6 +28,7 @@ workbook pages, so a whole key is usually 6-8 photos.</p>
     var working = document.getElementById("working-state");
     var workingDetail = document.getElementById("working-detail");
     var submitError = document.getElementById("submit-error");
+    var noPhotoError = document.getElementById("no-photo-error");
     var defaultDetailText = workingDetail.textContent;
 
     // The response is newline-delimited JSON, not one HTML blob: zero or more
@@ -60,6 +64,11 @@ workbook pages, so a whole key is usually 6-8 photos.</p>
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (!input.files || !input.files.length) {
+        noPhotoError.hidden = false;
+        return;
+      }
+      noPhotoError.hidden = true;
       // Built before `input.disabled = true` below: a disabled form control is
       // excluded from FormData entirely (the HTML spec, not a browser quirk), so
       // disabling the file input before reading FormData silently drops the

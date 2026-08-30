@@ -65,6 +65,12 @@ class GradedProblemRow:
     diagnosis_explanation: str | None = None
     diagnosis_error_location: str | None = None
     diagnosis_skill_ids: tuple[str, ...] = ()
+    reminder_requested_at: str | None = None
+    """A student's own "remind my grown-up about this" flag (migration 0019),
+    set only via request_reminder below -- never written by insert_graded_
+    problem or a regrade, and never cleared automatically. Present here so
+    _row_to_graded's `SELECT *` round-trips it; k12ta.web.app is the only
+    writer."""
 
 
 def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> None:
@@ -176,6 +182,38 @@ def apply_human_verdict(
     conn.commit()
 
 
+def request_reminder(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+    requested_at: str,
+) -> None:
+    """A student's own "remind my grown-up about this" tap (k12ta.web.app, the
+    "my pages" view, migration 0019) -- honest and local-only: no email/SMS
+    infra exists to page anyone, so this only sets a flag k12ta.keys shows as
+    a badge next to the item next time a parent opens the app. Re-tapping
+    overwrites the timestamp rather than erroring; there is no "already
+    reminded" state to protect."""
+    conn.execute(
+        """
+        UPDATE graded_problems SET reminder_requested_at = :requested_at
+        WHERE student_id = :student_id AND session_id = :session_id
+            AND capture_id = :capture_id AND problem_id = :problem_id
+        """,
+        {
+            "student_id": student_id,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "problem_id": problem_id,
+            "requested_at": requested_at,
+        },
+    )
+    conn.commit()
+
+
 def list_graded_problems_for_session(
     conn: sqlite3.Connection, student_id: str, session_id: str
 ) -> list[GradedProblemRow]:
@@ -183,6 +221,31 @@ def list_graded_problems_for_session(
         "SELECT * FROM graded_problems WHERE student_id = ? AND session_id = ? "
         "ORDER BY capture_id, problem_id",
         (student_id, session_id),
+    )
+    return [_row_to_graded(row) for row in cur.fetchall()]
+
+
+def list_all_graded_for_source(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> list[GradedProblemRow]:
+    """Every graded_problems row for this student and source, across every
+    session and capture, in chronological order -- unlike list_graded_
+    attempts_for_source, this includes rows with no resolved page_number at
+    all (a capture still waiting on identity has no page to group by, but a
+    student's own "my pages" view, k12ta.web.app, still needs to show it was
+    photographed and where it stands). Returns the full GradedProblemRow, not
+    the narrower GradedAttemptRow, because k12ta.respond.render.
+    render_student_result needs needs_human_detail/unsimplified too, not just
+    outcome/page_number/problem_id."""
+    cur = conn.execute(
+        """
+        SELECT gp.* FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        WHERE gp.student_id = ? AND a.source_id = ?
+        ORDER BY pc.captured_at, gp.capture_id, gp.problem_id
+        """,
+        (student_id, source_id),
     )
     return [_row_to_graded(row) for row in cur.fetchall()]
 
@@ -234,6 +297,10 @@ class PendingProblemRow:
     expected_answer: str | None = None
     """The key's own answer, set only for ANSWER_DIFFERS_FROM_KEY -- what a
     parent needs to see side by side with student_answer_raw to judge it."""
+    reminder_requested_at: str | None = None
+    """A student's own "remind my grown-up" flag (migration 0019, set via
+    request_reminder) -- k12ta.keys shows this as a plain badge next to the
+    cause label. None for the vast majority of rows; no student has asked."""
 
 
 def list_pending_for_source(
@@ -249,7 +316,8 @@ def list_pending_for_source(
                gp.problem_id AS problem_id, p.prompt_text AS prompt_text,
                p.student_answer_raw AS student_answer_raw, gp.page_number AS page_number,
                gp.needs_human_cause AS needs_human_cause, pc.captured_at AS captured_at,
-               gp.expected_answer AS expected_answer
+               gp.expected_answer AS expected_answer,
+               gp.reminder_requested_at AS reminder_requested_at
         FROM graded_problems gp
         JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
         JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id

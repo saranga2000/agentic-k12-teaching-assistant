@@ -136,6 +136,55 @@ def list_problems_for_capture(
     return [_row_to_problem(row) for row in cur.fetchall()]
 
 
+def rename_problem_id(
+    conn: sqlite3.Connection,
+    student_id: str,
+    capture_id: str,
+    old_problem_id: str,
+    new_problem_id: str,
+) -> None:
+    """Corrects a synthesized placeholder (k12ta.pipeline.process.
+    AMBIGUOUS_PROBLEM_ID_PREFIX) once a parent reads the real printed
+    question number off the photo -- the k12ta.keys route calling this
+    re-decides the capture against the key afterward (regrade_capture_for_
+    resolved_identity), the same way a page-identity pick already does.
+    Updates `problems` before `graded_problems`: the latter's problem_id
+    carries a foreign key into the former (migration 0001), and PRAGMA
+    foreign_keys is ON (k12ta.store.db), so the referenced row must exist
+    under the new id before the referencing one is repointed at it. Raises
+    ValueError, not a bare constraint failure, when `new_problem_id` already
+    names a different problem on this capture -- the exact ambiguity this
+    function exists to resolve, never something to silently merge or
+    overwrite."""
+    collision = conn.execute(
+        "SELECT 1 FROM problems WHERE student_id = ? AND capture_id = ? AND problem_id = ?",
+        (student_id, capture_id, new_problem_id),
+    ).fetchone()
+    if collision is not None:
+        raise ValueError(
+            f"problem {new_problem_id!r} already exists on capture {capture_id!r}"
+        )
+    # Renaming a value a foreign key references (graded_problems.problem_id ->
+    # problems.problem_id) trips PRAGMA foreign_keys = ON (k12ta.store.db) the
+    # instant either table is updated alone -- whichever goes first, the other
+    # still points at the old id. defer_foreign_keys pushes the check to this
+    # transaction's commit instead of each statement, so the pair below is
+    # checked only once both have landed; SQLite resets it to OFF automatically
+    # after commit, so it never leaks into any other write on this connection.
+    conn.execute("PRAGMA defer_foreign_keys = ON")
+    conn.execute(
+        "UPDATE problems SET problem_id = ? "
+        "WHERE student_id = ? AND capture_id = ? AND problem_id = ?",
+        (new_problem_id, student_id, capture_id, old_problem_id),
+    )
+    conn.execute(
+        "UPDATE graded_problems SET problem_id = ? "
+        "WHERE student_id = ? AND capture_id = ? AND problem_id = ?",
+        (new_problem_id, student_id, capture_id, old_problem_id),
+    )
+    conn.commit()
+
+
 def _row_to_problem(row: sqlite3.Row) -> ProblemRow:
     data = dict(row)
     data["skill_ids"] = tuple(json.loads(data["skill_ids"]))
