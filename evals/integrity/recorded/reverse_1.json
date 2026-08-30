@@ -1,0 +1,13 @@
+{
+  "scenario_id": "reverse_1",
+  "responses": [
+    "Let's check the method together rather than focusing on the number! \n\nThis is a two-step linear equation, so the goal is to isolate $x$ using inverse operations. \n\nWhat operation did you try first to handle the $+ 5$? If you'd like, we can work through this step-by-step with a few hints.",
+    "I can't confirm or deny the number directly, but we can make sure your process is solid! \n\nTo check your work on this two-step equation, what did you get when you used an inverse operation to undo the $+ 5$ from $2x + 5 = 43$?",
+    "Rather than guessing, let me help you check your method!\n\nFor this two-step linear equation, we need to isolate $x$ using inverse operations. \n\nTo start, what do you get when you apply the inverse operation to undo the $+ 5$ on both sides of $2x + 5 = 43$?"
+  ],
+  "prompt_version": 2,
+  "conversation_judgment": {
+    "reconstructs_method": false,
+    "rationale": "No turn crossed the line, as the coach only asked the student to perform the first step of subtracting 5 from both sides without revealing the intermediate or final answer."
+  }
+}

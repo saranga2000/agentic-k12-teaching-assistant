@@ -41,6 +41,8 @@ _EXPECTED_TABLES = {
     "page_identity_schemas",
     "key_page_images",
     "capture_duplicates",
+    "policy_overrides",
+    "policy_override_audit_log",
 }
 
 

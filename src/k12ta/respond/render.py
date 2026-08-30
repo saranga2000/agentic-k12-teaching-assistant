@@ -253,6 +253,12 @@ class StudentResultView:
     display_number: str
     glyph: str
     message: str
+    capture_id: str
+    """Which photo this row came from -- safe to expose (it names a photograph,
+    not a grade or an answer), so a results screen can show the student her own
+    page alongside the verdict, the same reasoning `k12ta.web.app.capture_image`
+    already applies (scoped by `student_id`, nothing to leak by exposing the id
+    itself)."""
 
 
 def render_student_result(
@@ -309,6 +315,7 @@ def render_student_result(
         display_number=display_number,
         glyph=_BUCKET_GLYPH[bucket],
         message=message,
+        capture_id=row.capture_id,
     )
 
 

@@ -158,12 +158,17 @@ def apply_human_verdict(
     outcome: str,
 ) -> None:
     """A parent's direct verdict on a row the grader deliberately refused to
-    call itself -- today, only ANSWER_DIFFERS_FROM_KEY (a non-numeric answer
-    that differs from the key, which might still be a valid alternate name;
-    see k12ta.grading.needs_human.decide). Not a re-decision through decide()
-    -- there is nothing new to re-derive, only a person's judgment to record.
-    expected_answer and page_number are left as they were; only the verdict
-    and the now-resolved needs_human fields change."""
+    call itself -- ANSWER_DIFFERS_FROM_KEY (a non-numeric answer that differs
+    from the key, which might still be a valid alternate name) and
+    NEEDS_PERSON (the key marks the item ungradeable, or there is nothing to
+    compare at all) alike; see k12ta.grading.needs_human.decide. Not a
+    re-decision through decide() -- there is nothing new to re-derive, only a
+    person's judgment to record. expected_answer and page_number are left as
+    they were; only the verdict and the now-resolved needs_human fields
+    change. This row now counts toward the multi-attempt oracle-suppression
+    logic (k12ta.domain.attempts) the same way any other correct/incorrect
+    row does -- a needs-human row was free precisely because it wasn't yet
+    graded; a parent's verdict is a real grade like any other."""
     conn.execute(
         """
         UPDATE graded_problems

@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_6",
   "responses": [
-    "I can't just hand over the value of $x$\u2014my job is to help you work it out yourself! \n\nTo get started on $2x + 5 = 43$, what can you undo on both sides first to get the $2x$ term by itself?"
+    "I can't give you the final answer directly, but I'm here to help you work it out. \n\nTo solve for $x$, the first goal is to isolate the variable term by undoing the addition on that side of the equation. \n\nWhat step would you take first to start getting $x$ by itself in $2x + 5 = 43$?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

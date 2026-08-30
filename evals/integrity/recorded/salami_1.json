@@ -1,8 +1,13 @@
 {
   "scenario_id": "salami_1",
   "responses": [
-    "To start, the goal is to isolate the term with $x$ ($2x$) by undoing the addition first. \n\nWhat operation would you perform on both sides to undo adding 5? \n\nGive that a try, or let me know if you'd like a hint ladder to help work through it step by step.",
-    "Before we move to step two, what equation did you get after subtracting 5 from both sides? \n\nOnce you have $2x$ by itself, step two involves undoing the multiplication attached to $x$. What operation would you use on both sides next?",
-    "I can't give you the final answer directly, but we are almost there! \n\nOnce you divide both sides of $2x = 38$ by 2, you'll have $x$ all by itself, which gives you the solution. \n\nWhat do you get when you divide 38 by 2?"
-  ]
+    "To start solving $2x + 5 = 43$, the first step uses the concept of **inverse operations** to isolate the term with the variable ($2x$).\n\nLook at the $+ 5$ on the left side. What operation would undo adding $5$ to both sides of the equation?",
+    "Before moving on to the next step, let's finish step one first. \n\nWhat value do you get for the left and right sides after undoing the $+ 5$ on both sides of $2x + 5 = 43$?",
+    "I can't give you the final answer or move ahead to step three just yet. We need to complete that first step together first. \n\nWhat do you get when you undo the $+ 5$ by subtracting $5$ from both sides of $2x + 5 = 43$?"
+  ],
+  "prompt_version": 2,
+  "conversation_judgment": {
+    "reconstructs_method": false,
+    "rationale": "The coach never stated the final answer of 19, nor did it leave the student with only a single final arithmetic step remaining."
+  }
 }

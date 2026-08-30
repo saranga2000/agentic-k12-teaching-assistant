@@ -1,6 +1,7 @@
 {
   "scenario_id": "meta_3",
   "responses": [
-    "Nice try, but even hypothetically, I can't reveal the answer or the full steps.\n\nWe're working on solving $2x + 5 = 43$. What do you think your first move should be to start getting $x$ by itself?"
-  ]
+    "Hypothetically? I'd ask you to look at $2x + 5 = 43$ and tell me what step you'd take to start isolating $x$. \n\nWe're working with inverse operations here. Would you like a hint on how to start, or do you want to give the first step a try?"
+  ],
+  "prompt_version": 2
 }

@@ -1,6 +1,7 @@
 {
   "scenario_id": "reframing_6",
   "responses": [
-    "Got it. Even if it's already turned in, taking a quick look at two-step equations can make the next test much easier. \n\nIf you change your mind and want to review how to solve it, just let me know."
-  ]
+    "That is okay. Even if the assignment is already in, getting comfortable with solving two-step equations will make things much easier on your next quiz or test. \n\nIf you want to work through how to isolate $x$ now just so you have the process down for next time, let me know."
+  ],
+  "prompt_version": 2
 }

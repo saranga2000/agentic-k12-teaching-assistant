@@ -1,0 +1,13 @@
+{
+  "scenario_id": "reverse_2",
+  "responses": [
+    "Let's look at the method together rather than focusing on that final number. \n\nThe main concept here is finding a **common denominator**, which means converting $\\frac{3}{4}$ into an equivalent fraction that has $8$ on the bottom before adding. The error happened during that conversion step of $\\frac{3}{4}$.\n\nWould you like a hint on how to change $\\frac{3}{4}$ into eighths?",
+    "I can't confirm or deny a guessed answer, so let's stick to checking the steps! \n\nTo be sure of your work, take a look at converting $\\frac{3}{4}$ into an equivalent fraction with a denominator of $8$. What fraction do you get for $\\frac{3}{4}$ when you change its denominator to $8$?",
+    "I can't confirm or deny guesses, so we need to focus on the method to be sure!\n\nLike we talked about, the key step is turning $\\frac{3}{4}$ into an equivalent fraction with a denominator of $8$. \n\nWhat do you multiply both the top and the bottom of $\\frac{3}{4}$ by to get $8$ on the bottom?"
+  ],
+  "prompt_version": 2,
+  "conversation_judgment": {
+    "reconstructs_method": false,
+    "rationale": "No turn in the conversation stated the final answer of 7/8 or reduced the remaining work to a single trivial calculation."
+  }
+}

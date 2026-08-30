@@ -277,6 +277,16 @@ with page identity.
   `outside_math_program_hw`'s seeded label, "Outside maths programme homework," should
   read **"Russian School of Math"** — a generic placeholder label sitting in front of a
   parent as if it were real content is worse than an empty list.
+
+  **Closed 2026-08-30.** `k12ta.store.content.update_content_source_label` (always
+  allowed, no data-loss risk) and `delete_content_source` (refuses outright, changing
+  nothing, the moment `source_has_real_activity` finds a real photographed page or a
+  confirmed answer key for that source — an empty `assignments` row alone never blocks
+  it, since one is created every day a student opens the capture screen for a scheduled
+  source whether or not she ever takes a photo). New `GET/POST /keys/{student}/{source}
+  /manage`, `/rename`, `/delete` in `k12ta.keys.app`, linked from `enrollment_landing
+  .html`. Renaming a seeded placeholder like "Outside maths programme homework" to its
+  real name is now a parent action, not a database edit.
 - **A parent must see the page scan and the key scan alongside the evaluation**, not
   just the transcribed text and a verdict. Right now judging whether a grade is right
   means trusting the transcription blind — there is no route that shows the original
@@ -287,6 +297,16 @@ with page identity.
 - **A child must see her own page scan alongside her evaluation** — same gap, student
   side. Right now `session_result.html` shows the transcribed prompt and her answer,
   never the photo she took.
+
+  **Closed 2026-08-30.** `StudentResultView` (`k12ta.respond.render`) gains a
+  `capture_id` field — safe to expose (it names a photograph, not a grade or an
+  answer) — set from `GradedProblemRow.capture_id` at the one place that already
+  builds this view. `session_result.html`'s results table gets a thumbnail column
+  reusing the existing `/captures/{student_id}/{capture_id}/image` route (M3.8),
+  keyed per row rather than once per page, since a session can span more than one
+  capture. `my_pages.html`'s three sections (`MyPageItem` already carried
+  `capture_id`) get the same thumbnail. No new route, no ownership check to add —
+  the image route already scopes by `student_id` in its `WHERE` clause.
 - **Both need a page-by-page evaluation view and a history of past attempts on that
   page** — today a session is a flat list of whatever one capture produced; there is no
   view scoped to "this page, every time it's been photographed," which is exactly the
@@ -298,6 +318,17 @@ with page identity.
   identity" doesn't say "pick which page this is," "needs a person to judge" doesn't say
   "read her answer and mark it right or wrong yourself." Each row needs its own action,
   not just its own category.
+
+  **"Waiting on page identity" closed by M3.8/M3.9** (the ask-and-confirm flow, both
+  apps). **"Needs a person to judge" closed 2026-08-30**: `k12ta.keys.app.
+  submit_answer_verdict` and `k12ta.store.sessions.apply_human_verdict` were already
+  cause-agnostic — the gap was purely `evaluations.html`'s template gate, which only
+  rendered the "Mark correct / Mark incorrect" form for `answer_differs_from_key`.
+  Widened to also cover `needs_person`, with the "key says..." clause made
+  conditional since a `needs_person` row usually has no `expected_answer` to show.
+  A parent verdict on either cause now counts toward the multi-attempt
+  oracle-suppression logic the same way any other graded row does — a needs-human
+  row was free precisely because it wasn't graded yet.
 
 **M3.7: page identity essentially never resolves for Summer Bridge, found 2026-08-22.**
 Requested before ingest began; not done until now. Investigated from the real database
@@ -623,6 +654,73 @@ rather than silently passing until the rest do. Parent override (bullet above) a
 no PIN or audit row yet -- `resolve_mode()`'s `parent_override` parameter exists but
 nothing in `k12ta.keys` or `k12ta.web` calls it from an authenticated action.
 
+**Parent-override PIN and audit row, built 2026-08-30.** `k12ta.store.policy_overrides`
+(current state, one row per student+source) and `k12ta.store.policy_override_audit`
+(append-only, mirroring `answer_key_audit_log`'s own shape) now back
+`resolve_mode()`'s `parent_override` parameter for real, read from both
+`k12ta.web.app` (capture-mode resolution, `my_pages`, `session_results`) and
+`k12ta.keys.app` (`evaluations_screen`). Setting or clearing one is the one PIN-gated
+action `docs/ARCHITECTURE.md` already described before any code backed it —
+`Settings.parent_pin` (new `K12TA_PARENT_PIN` env var, `None` by default, which refuses
+the action outright rather than accepting a blank PIN) checked with
+`secrets.compare_digest` on a single POST, no session or cookie created, so AGENTS.md
+rule 8's "do not build authentication" still holds — this gates one write, not access
+to anything. `k12ta.keys.templates.policy_override.html`, linked from
+`enrollment_landing.html`.
+
+**M3.3 live eval run completed 2026-08-30 — all 32 scenarios now recorded, and it
+found a real leak.** The remaining 22 scenarios (`python -m evals.integrity.run
+--live`, resumed automatically past two mid-run `RateLimitExhaustedError`s from the
+free tier) are recorded for the first time; CI's stale-data failure mode is closed.
+But the conversation-level judge (M3.3's own "salami finding" mechanism) flags three
+of them as real leaks, not stale-data artifacts: **`salami_2`**, **`salami_3`**, and
+**`reverse_3`** each walk the student down to a single mechanical arithmetic step
+("multiply 12 by 7," "use a bottom number of 8") across turns, the exact class of leak
+`coach_voice.md` v2's anti-restatement rule closed for `salami_1` but evidently not for
+every scenario shaped like it. **The eval is doing its job — this is exactly the
+failure mode it exists to catch, not a broken eval.** `docs/ROADMAP.md`'s "done when"
+for this milestone (100 percent, in CI) is still not met, now for a substantive reason
+rather than a data-completeness one. Not fixed in this pass: closing it needs the same
+kind of prompt-rule work `coach_voice.md` v2 already did once, evaluated against all
+three new failures together (a fix for one could easily reopen another), and another
+live run afterward to confirm — deliberately left as its own task rather than rushed
+alongside the two unrelated tasks (parent-override PIN, content-source management)
+done in the same sitting.
+
+**`coach_voice.md` v3 fix written 2026-08-30, verification paused on a quota wall,
+not on the fix itself.** Two rule paragraphs added: naming a concept plus this
+problem's own operands together counts as performing the step even on the first
+mention, not only on repeat; and a digit already in front of the student — from the
+problem itself, a wrong guess, or an unrelated calculation — does not make restating
+it as the *result of a new step* safe, since only whether the student supplied that
+value themselves matters, not whether the digits already appeared somewhere.
+`tests/test_eval_integrity.py` confirms the version bump correctly invalidated all
+32 recordings, so there is no risk of CI quietly replaying stale v2 verdicts against
+a v3 prompt. The live re-verification run then hit `RateLimitExhaustedError` on the
+very first call after a 15-minute wait, with zero progress across two consecutive
+retries — 6 of 32 recordings landed under `prompt_version: 3` and stayed at 6,
+the rest still stale at `prompt_version: 2`. That shape (immediate failure after a
+long wait, not a slow grind) is evidence of the account's daily free-tier quota
+being exhausted, not the per-minute throttle the existing backoff (10/20/40/80s) is
+sized for. Paused here rather than retried into the night, on explicit instruction.
+
+**Reminder for the next session: finish this before treating M3 as done.**
+1. Run `python -m evals.integrity.run --live` (resumes automatically; check
+   progress with
+   `python3 -c "import json,glob; print(sum(1 for f in glob.glob('evals/integrity/recorded/*.json') if json.load(open(f)).get('prompt_version')==3), '/32')"`)
+   until all 32 recordings are stamped `prompt_version: 3`.
+2. Confirm `salami_2`, `salami_3`, and `reverse_3` no longer appear under
+   conversation-level findings in the resulting report, and that nothing else
+   newly regressed.
+3. Run the full sweep: `ruff check src tests`, `mypy --strict src`,
+   `pytest -q --ignore=tests/browser`, `pytest -m browser tests/browser`.
+4. Only then update this note with the confirmed outcome and, if clean, mark M3's
+   "done when" (100 percent, in CI) as met.
+5. Also still open, asked once and not yet answered: whether to commit the
+   accumulated uncommitted work (parent-override PIN system, content-source
+   delete/rename, this `coach_voice.md` v3 fix, and the regenerated
+   `evals/integrity/recorded/*.json` files).
+
 **Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
 the schema linked two captures as attempts at the same underlying homework problem --
 `process_capture` mints a fresh `session_id` and `capture_id` on every photo, and
@@ -713,6 +811,16 @@ submitted value against an `_original` hidden field to detect an on-screen corre
 the scanned path writes `source="model"` unconditionally, so a parent fixing a
 misread answer on the confirm screen before saving still gets counted as a model
 success. Same class of bug the identity side already closed, still open here.
+
+**Closed 2026-08-30.** `confirm.html` now renders `answer_text_original_{i}` and
+`ungradeable_reason_original_{i}` hidden fields (same pattern as the identity
+`_original` fields already had), and `k12ta.keys.app._answer_source` compares the
+submitted answer/reason against them, mirroring `_confirm_identity_composite`
+exactly: `"manual"` if either was edited on screen, `"model"` if the row was saved
+exactly as transcribed. Wired into `submit_confirm`'s call to `_save_answer_entry`
+in place of the old hardcoded `"model"` literal. No store-layer change needed —
+`AnswerKeyEntryRow.source` was already a free parameter end to end; the bug was
+entirely in what the route passed it.
 
 **A second, sharper limitation, found 2026-08-19 while planning M3.4 rather than after
 typing 20 answers into it:** typed answers are reachable from a real capture only if that

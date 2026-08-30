@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Feedback mode — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>{{ source.label }} — Feedback mode</h1>
+
+<p class="message">Automatic mode right now: <strong>{{ mode_labels[default_mode] }}</strong>.
+  This is what applies unless you override it below.</p>
+
+{% if current_override %}
+<p class="message attention">Overridden to <strong>{{ mode_labels[current_override.mode] }}</strong>
+  since {{ current_override.set_at }}. This stays in effect until you clear it.</p>
+{% endif %}
+
+{% if error %}
+<p class="message attention">{{ error }}</p>
+{% endif %}
+
+{% if not pin_configured %}
+<p class="message">No parent PIN is configured for this household -- set
+  <code>K12TA_PARENT_PIN</code> in <code>.env</code> to use this.</p>
+{% else %}
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/policy-override">
+  <input type="hidden" name="action" value="set">
+  <fieldset>
+    <legend>Set an override</legend>
+    {% for value, label in mode_labels.items() %}
+    <label class="schema-component-row">
+      <input type="radio" name="mode" value="{{ value }}" {% if current_override and current_override.mode == value %}checked{% endif %}>
+      {{ label }}
+    </label>
+    {% endfor %}
+    <label class="schema-component-row">PIN <input type="password" name="pin" inputmode="numeric" required></label>
+  </fieldset>
+  <div class="actions"><button type="submit">Set override</button></div>
+</form>
+
+{% if current_override %}
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/policy-override">
+  <input type="hidden" name="action" value="clear">
+  <fieldset>
+    <legend>Clear the override</legend>
+    <label class="schema-component-row">PIN <input type="password" name="pin" inputmode="numeric" required></label>
+  </fieldset>
+  <div class="actions"><button type="submit">Back to automatic</button></div>
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

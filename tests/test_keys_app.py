@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -38,6 +39,8 @@ from k12ta.store import (
     page_identities,
     page_identity_resolutions,
     page_identity_schemas,
+    policy_override_audit,
+    policy_overrides,
     quota,
     sessions,
     students,
@@ -2209,6 +2212,43 @@ def test_evaluations_screen_shows_the_real_question_number_when_known(
     assert "Q4" in response.text
 
 
+def test_evaluations_screen_offers_a_verdict_form_for_needs_person_rows_too(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The 'needs a person to judge' bucket used to only name the problem, with
+    no way to act on it -- a parent reading the child's own written answer is
+    exactly who can settle it, the same one-tap verdict already offered for
+    answer_differs_from_key."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-needs-person",
+        problem_id="4",
+        cause="needs_person",
+        page_number=15,
+        prompt_text="explain your reasoning",
+        student_answer_raw="because it has four equal sides",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'value="c-needs-person"' in response.text
+    # No key answer exists for this cause -- the "key says" clause must not
+    # render a literal "None".
+    assert "key says" not in response.text
+
+
 def test_evaluations_screen_offers_an_inline_fix_for_an_ambiguous_problem_id(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -2454,6 +2494,48 @@ def test_submit_answer_verdict_records_correct_and_clears_the_cause(
     assert graded[0].expected_answer == "quadrilateral"  # untouched, still on the row
 
 
+def test_submit_answer_verdict_works_on_a_needs_person_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """apply_human_verdict is cause-agnostic already -- this locks in that a
+    needs_person row (no key answer to compare against, unlike
+    answer_differs_from_key) is a real, working target for it, not just
+    answer_differs_from_key."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-needs-person",
+        problem_id="4",
+        cause="needs_person",
+        page_number=15,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-needs-person",
+            "capture_id": "c-needs-person",
+            "problem_id": "4",
+            "verdict": "incorrect",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-needs-person")
+    assert graded[0].outcome == "incorrect"
+    assert graded[0].needs_human_cause is None
+
+
 def test_submit_answer_verdict_rejects_a_value_that_is_not_a_verdict(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -2662,6 +2744,56 @@ def test_confirm_persists_exactly_the_submitted_values_not_the_original_transcri
     entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
     assert len(entries) == 1
     assert entries[0].answer_text == "8 meters"
+    assert entries[0].source == "manual"
+
+
+def test_confirm_records_model_source_when_the_answer_is_unchanged(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A parent who saves a scanned answer as-is is a model success, not a
+    manual entry -- the whole reason `answer_text_original_i` exists."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "answer_text_0": "8 m",
+            "answer_text_original_0": "8 m",
+        },
+    )
+
+    assert response.status_code == 200
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert entries[0].source == "model"
+
+
+def test_confirm_records_manual_source_when_the_ungradeable_reason_is_corrected(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Flipping the ungradeable reason on screen is a correction just like
+    editing the answer text -- the model's original guess said one thing,
+    the parent said another."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "17",
+            "problem_number_0": "1",
+            "ungradeable_0": "1",
+            "ungradeable_reason_0": "graph_or_table",
+            "ungradeable_reason_original_0": "answers_vary",
+        },
+    )
+
+    assert response.status_code == 200
+    entries = answer_keys.get_entries_for_page(conn, "s-marcus", "summer_bridge", 17)
+    assert entries[0].source == "manual"
+    assert entries[0].ungradeable_reason == "graph_or_table"
 
 
 def test_confirm_persists_the_scanned_image_for_every_page_it_covers(
@@ -3447,3 +3579,217 @@ def test_keys_app_is_unreachable_from_the_student_web_app() -> None:
     response = student_client.get("/keys/s-marcus/summer_bridge/upload")
 
     assert response.status_code == 404
+
+
+def test_policy_override_screen_says_so_when_no_pin_is_configured(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/policy-override")
+
+    assert response.status_code == 200
+    assert "K12TA_PARENT_PIN" in response.text
+    assert 'name="pin"' not in response.text
+
+
+def _client_with_pin(
+    client: TestClient, settings: Settings, pin: str = "1234"
+) -> TestClient:
+    keys_app.app.dependency_overrides[keys_app.get_settings] = lambda: replace(
+        settings, parent_pin=pin
+    )
+    return client
+
+
+def test_policy_override_screen_shows_the_form_when_a_pin_is_configured(
+    client: TestClient, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    _seed_marcus_with_source(conn)
+    _client_with_pin(client, settings)
+
+    response = client.get("/keys/s-marcus/summer_bridge/policy-override")
+
+    assert response.status_code == 200
+    assert 'name="pin"' in response.text
+    assert 'value="full"' in response.text
+
+
+def test_submit_policy_override_rejects_a_wrong_pin(
+    client: TestClient, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    _seed_marcus_with_source(conn)
+    _client_with_pin(client, settings)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/policy-override",
+        data={"action": "set", "mode": "full", "pin": "0000"},
+    )
+
+    assert response.status_code == 200
+    assert "Wrong PIN" in response.text
+    assert policy_overrides.get_override(conn, "s-marcus", "summer_bridge") is None
+
+
+def test_submit_policy_override_sets_the_override_and_writes_an_audit_row(
+    client: TestClient, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    _seed_marcus_with_source(conn)
+    _client_with_pin(client, settings)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/policy-override",
+        data={"action": "set", "mode": "full", "pin": "1234"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    override = policy_overrides.get_override(conn, "s-marcus", "summer_bridge")
+    assert override is not None
+    assert override.mode == "full"
+    log = policy_override_audit.list_audit_log_for_source(conn, "s-marcus", "summer_bridge")
+    assert [(r.previous_mode, r.new_mode) for r in log] == [(None, "full")]
+
+
+def test_submit_policy_override_clear_removes_it_and_audits_the_change(
+    client: TestClient, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    _seed_marcus_with_source(conn)
+    _client_with_pin(client, settings)
+    client.post(
+        "/keys/s-marcus/summer_bridge/policy-override",
+        data={"action": "set", "mode": "full", "pin": "1234"},
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/policy-override",
+        data={"action": "clear", "pin": "1234"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert policy_overrides.get_override(conn, "s-marcus", "summer_bridge") is None
+    log = policy_override_audit.list_audit_log_for_source(conn, "s-marcus", "summer_bridge")
+    assert [(r.previous_mode, r.new_mode) for r in log] == [(None, "full"), ("full", None)]
+
+
+def test_evaluations_screen_honours_a_parent_override(
+    client: TestClient, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """The whole point: an override actually changes what resolve_mode
+    returns for this enrollment, not just what the settings screen shows."""
+    _seed_marcus_with_source(conn)  # default_mode="full"
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _client_with_pin(client, settings)
+    client.post(
+        "/keys/s-marcus/summer_bridge/policy-override",
+        data={"action": "set", "mode": "fluency", "pin": "1234"},
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-repeat", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "Repeated attempts" in response.text
+
+
+def test_manage_source_screen_offers_delete_for_an_untouched_source(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/manage")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/delete"' in response.text
+
+
+def test_manage_source_screen_refuses_delete_once_a_key_exists(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/manage")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/delete"' not in response.text
+    assert "can't be deleted" in response.text
+
+
+def test_submit_rename_source_updates_the_label(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/rename",
+        data={"label": "Summer Bridge (renamed)"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    source = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert source is not None
+    assert source.label == "Summer Bridge (renamed)"
+
+
+def test_submit_delete_source_removes_an_untouched_source(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert content.get_content_source(conn, "s-marcus", "summer_bridge") is None
+
+
+def test_submit_delete_source_refuses_once_a_key_exists(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/manage"
+    assert content.get_content_source(conn, "s-marcus", "summer_bridge") is not None

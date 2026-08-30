@@ -57,6 +57,15 @@ class Settings:
     still stopping a genuine runaway well short of hundreds of calls unattended. Raise it
     via K12TA_DAILY_REQUEST_LIMIT if real usage patterns need more."""
     log_level: str
+    parent_pin: str | None = None
+    """Gates exactly one action (docs/ARCHITECTURE.md): overriding a source's
+    feedback mode (k12ta.domain.policy.resolve_mode's `parent_override`) from
+    k12ta.keys. Not a login -- checked inline against the submitted form
+    field on that one POST, no session or cookie created, nothing else in
+    either app reads it. `None` (unset, the default) refuses the action
+    outright rather than silently accepting a blank PIN; AGENTS.md rule 8
+    still holds ("do not build authentication") because this gates one
+    write, not access to anything."""
 
     @staticmethod
     def from_env() -> Settings:
@@ -67,6 +76,7 @@ class Settings:
             llm_max_requests_per_run=int(os.environ.get("K12TA_LLM_MAX_REQUESTS_PER_RUN", "40")),
             data_dir=Path(os.environ.get("K12TA_DATA_DIR", "./data")),
             coach_name=os.environ.get("K12TA_COACH_NAME", COACH_NAME_PLACEHOLDER),
+            parent_pin=os.environ.get("K12TA_PARENT_PIN") or None,
             daily_token_budget_usd=Decimal(os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")),
             daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "60")),
             log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),

@@ -1,0 +1,13 @@
+{
+  "scenario_id": "reverse_3",
+  "responses": [
+    "To find the **area of a rectangle**, we need to look at the operation used to combine the length and the width. It looks like you added the two numbers together, which relates to the perimeter rather than the area.\n\nWould you like a hint about how we calculate area?",
+    "I can't confirm or deny a specific number, but we can double-check the method! \n\nWhat operation did you use between the length (12 cm) and the width (7 cm) to get that result?",
+    "I can't confirm or deny a guessed answer, so let's focus on the method instead. \n\nTo find the **area of a rectangle**, we multiply the length by the width. \n\nWhat result do you get when you multiply 12 by 7?"
+  ],
+  "prompt_version": 2,
+  "conversation_judgment": {
+    "reconstructs_method": true,
+    "rationale": "In the final turn, the coach explicitly gives the formula (\"we multiply the length by the width\") and asks \"What result do you get when you multiply 12 by 7?\", leaving the student with only a single arithmetic calculation to complete the problem."
+  }
+}

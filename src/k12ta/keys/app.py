@@ -13,6 +13,7 @@ import json
 import logging
 import queue
 import re
+import secrets
 import sqlite3
 import threading
 from collections.abc import Iterator, Sequence
@@ -52,6 +53,8 @@ from k12ta.store import (
     page_identities,
     page_identity_resolutions,
     page_identity_schemas,
+    policy_override_audit,
+    policy_overrides,
     sessions,
     students,
 )
@@ -646,10 +649,13 @@ def submit_answer_verdict(
     verdict: str = Form(...),
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> RedirectResponse:
-    """A parent's one-tap verdict on an ANSWER_DIFFERS_FROM_KEY row -- the
-    grader deliberately would not call this right or wrong itself (see
-    k12ta.grading.needs_human.decide), so this is a direct write of a
-    person's judgment, not another pass through decide(). A malformed verdict
+    """A parent's one-tap verdict on any NEEDS_HUMAN row the grader deliberately
+    would not call right or wrong itself (see k12ta.grading.needs_human.decide)
+    -- ANSWER_DIFFERS_FROM_KEY, where a key answer exists to disagree with, and
+    NEEDS_PERSON, where none does and a parent reads the child's own written
+    answer instead. Cause-agnostic on purpose: this is a direct write of a
+    person's judgment, not another pass through decide(), and decide() is the
+    one place that already knows which causes exist. A malformed verdict
     value is rejected rather than silently ignored: unlike a stale identity
     pick (k12ta.web.app.submit_identity_pick), there is no "current candidate
     set" to re-validate against here, so there is nothing to check but the
@@ -782,9 +788,11 @@ def evaluations_screen(
     # is disclosed on attempt one, so a repeat count there means nothing. See
     # k12ta.domain.attempts: a plain count, not the guesses themselves, and
     # never shown to the student (k12ta.web never touches this data).
+    override = policy_overrides.get_override(conn, student_id, source_id)
     mode = resolve_mode(
         source_default_mode=FeedbackMode(source.default_mode),
         work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+        parent_override=FeedbackMode(override.mode) if override is not None else None,
     )
     rules = rules_for(mode)
     repeated_problems: list[dict[str, int | str]] = []
@@ -852,6 +860,63 @@ def answer_keys_screen(
         "answer_keys.html",
         {"student": student, "source": source, "pages": pages},
     )
+
+
+@app.get("/keys/{student_id}/{source_id}/manage", response_class=HTMLResponse)
+def manage_source_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """Rename or delete this enrollment -- the gap found 2026-08-22
+    (docs/ROADMAP.md): `seed_dev_data` creates sources a family may never
+    use, and there was previously no way to correct a placeholder label or
+    remove one. `can_delete` is decided up front so the screen can explain
+    *why* delete is unavailable rather than a parent discovering it only
+    after submitting."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    return templates.TemplateResponse(
+        request,
+        "manage_source.html",
+        {
+            "student": student,
+            "source": source,
+            "can_delete": not content.source_has_real_activity(conn, student_id, source_id),
+        },
+    )
+
+
+@app.post("/keys/{student_id}/{source_id}/rename")
+def submit_rename_source(
+    student_id: str,
+    source_id: str,
+    label: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    _require_student_and_source(conn, student_id, source_id)
+    stripped = label.strip()
+    if stripped:
+        content.update_content_source_label(conn, student_id, source_id, stripped)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/manage", status_code=303)
+
+
+@app.post("/keys/{student_id}/{source_id}/delete")
+def submit_delete_source(
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Refuses silently (redirects back to the same screen, nothing changed)
+    rather than raising when content.delete_content_source finds real
+    activity -- the screen already explained why beforehand; this is a
+    stale-submission guard (the activity could only appear between page load
+    and submit if a capture landed in that exact window), not the primary
+    way a parent learns delete is unavailable."""
+    _require_student_and_source(conn, student_id, source_id)
+    if content.delete_content_source(conn, student_id, source_id):
+        return RedirectResponse("/", status_code=303)
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/manage", status_code=303)
 
 
 _PAGE_ENTRY_PREVIEW_COUNT = 3
@@ -1029,6 +1094,117 @@ def _normalize_component_name(raw: str) -> str:
     a single underscore, so it's always safe to use in a composite key and an
     HTML field name."""
     return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+
+
+def _policy_override_context(
+    conn: sqlite3.Connection,
+    student: students.StudentRow,
+    source: content.ContentSourceRow,
+    settings: Settings,
+    error: str | None = None,
+) -> dict[str, object]:
+    default_mode = resolve_mode(
+        source_default_mode=FeedbackMode(source.default_mode),
+        work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+    )
+    override = policy_overrides.get_override(conn, student.student_id, source.source_id)
+    return {
+        "student": student,
+        "source": source,
+        "pin_configured": settings.parent_pin is not None,
+        "default_mode": default_mode.value,
+        "current_override": override,
+        "mode_labels": FEEDBACK_MODE_LABELS,
+        "error": error,
+    }
+
+
+@app.get("/keys/{student_id}/{source_id}/policy-override", response_class=HTMLResponse)
+def policy_override_screen(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """The one PIN-gated action in either app (docs/ARCHITECTURE.md): forcing
+    a specific feedback mode for this enrollment regardless of what its
+    default or "graded by someone else" flag would otherwise resolve to.
+    Reachable only from k12ta.keys -- "a student can never change this; only
+    a parent-authenticated action can" (k12ta.domain.policy.resolve_mode's
+    own docstring)."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    return templates.TemplateResponse(
+        request,
+        "policy_override.html",
+        _policy_override_context(conn, student, source, settings),
+    )
+
+
+@app.post(
+    "/keys/{student_id}/{source_id}/policy-override",
+    response_class=HTMLResponse,
+    response_model=None,
+)
+def submit_policy_override(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    pin: str = Form(""),
+    action: str = Form(...),
+    mode: str = Form(""),
+    conn: sqlite3.Connection = Depends(get_conn),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse | RedirectResponse:
+    """`action` is "set" or "clear". Checked with secrets.compare_digest, not
+    `==` -- a real secret comparison, cheap to do right, even though the
+    stakes here (a household's own feedback policy, not account access) are
+    modest. Not a login: nothing is set on success beyond this one write and
+    its audit row -- no session, no cookie, this PIN is never checked again
+    until the next override action."""
+    student, source = _require_student_and_source(conn, student_id, source_id)
+    if settings.parent_pin is None:
+        error = "No parent PIN is configured -- set K12TA_PARENT_PIN to use this."
+    elif not secrets.compare_digest(pin, settings.parent_pin):
+        error = "Wrong PIN."
+    elif action == "set" and mode not in FEEDBACK_MODE_LABELS:
+        error = "Choose a mode."
+    else:
+        error = None
+
+    if error is not None:
+        return templates.TemplateResponse(
+            request,
+            "policy_override.html",
+            _policy_override_context(conn, student, source, settings, error=error),
+        )
+
+    previous = policy_overrides.get_override(conn, student_id, source_id)
+    previous_mode = previous.mode if previous is not None else None
+    new_mode = mode if action == "set" else None
+    if new_mode is not None:
+        policy_overrides.set_override(
+            conn,
+            policy_overrides.PolicyOverrideRow(
+                student_id=student_id,
+                source_id=source_id,
+                mode=new_mode,
+                set_at=datetime.now(UTC).isoformat(),
+            ),
+        )
+    else:
+        policy_overrides.clear_override(conn, student_id, source_id)
+    policy_override_audit.insert_audit_row(
+        conn,
+        policy_override_audit.PolicyOverrideAuditRow(
+            student_id=student_id,
+            source_id=source_id,
+            previous_mode=previous_mode,
+            new_mode=new_mode,
+            recorded_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/policy-override", status_code=303)
 
 
 @app.get("/keys/{student_id}/{source_id}/identity-schema", response_class=HTMLResponse)
@@ -1527,6 +1703,23 @@ def _confirm_answer_row(
     return "", None, None, None
 
 
+def _answer_source(
+    data: dict[str, list[str]], i: int, answer_text: str | None, ungradeable_reason: str | None
+) -> str:
+    """"model" if row i's final answer_text/ungradeable_reason match what
+    `confirm.html` rendered as `answer_text_original_{i}`/
+    `ungradeable_reason_original_{i}` (the model's own transcription at
+    render time), "manual" if a parent changed either on screen before
+    saving -- same reasoning as `_confirm_identity_composite`: one hand-
+    corrected field is enough to make the whole row a manual entry, not a
+    model success."""
+    original_answer = _get(data, f"answer_text_original_{i}").strip() or None
+    original_reason = _get(data, f"ungradeable_reason_original_{i}").strip() or None
+    if answer_text != original_answer or ungradeable_reason != original_reason:
+        return "manual"
+    return "model"
+
+
 def _confirm_identity_composite(
     data: dict[str, list[str]], i: int, field_keys: list[str]
 ) -> tuple[str | None, str]:
@@ -1719,7 +1912,7 @@ async def submit_confirm(
             problem_number,
             answer_text,
             ungradeable_reason,
-            "model",
+            _answer_source(data, i, answer_text, ungradeable_reason),
             now,
         )
         if conflict is None:

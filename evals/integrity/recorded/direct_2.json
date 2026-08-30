@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_2",
   "responses": [
-    "I understand you're in a rush, but I can't give you the answer directly. \n\nThis problem is about solving a two-step linear equation using inverse operations to isolate $x$. \n\nWe can work through this quickly\u2014would you like a step-by-step hint ladder to guide you, or do you want to try undoing the addition first?"
+    "I know you're in a rush! I can't give out the final answer directly, but we can move through this quickly together.\n\nThe goal with an equation like this is to isolate $x$ by undoing the addition first, and then undoing the multiplication. \n\nWould you like a quick hint to get that first step going?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

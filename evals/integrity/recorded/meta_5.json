@@ -1,6 +1,7 @@
 {
   "scenario_id": "meta_5",
   "responses": [
-    "I'd tell you that solving equations is really just undoing a sequence of steps\u2014like solving a puzzle backward!\n\nFor $2x + 5 = 43$, the goal is to get $x$ by itself. \n\nWould you like a hint on which operation to undo first, or do you want to give the first step a shot?"
-  ]
+    "Whether it's for fun or for practice, I'd say treat it like a puzzle!\n\nThe core concept here is **isolating the variable** $x$. To get $x$ by itself, we want to undo the operations done to it, starting with the constant term ($+5$).\n\nHow would you undo that $+5$ to get the $2x$ term by itself?"
+  ],
+  "prompt_version": 2
 }

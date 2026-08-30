@@ -20,6 +20,11 @@
 <p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-keys">View answer keys</a>
 <a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations">View evaluations</a></p>
 
+<h2>Feedback mode</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/policy-override">
+  Override feedback mode
+</a></p>
+
 <h2>Page identity</h2>
 <p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity-schema">
   {% if schema %}Edit page-identity setup{% else %}Set up page identity{% endif %}
@@ -54,4 +59,7 @@
   <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">manual page mapping</a>
   to fix this.</p>
 {% endif %}
+
+<h2>Manage</h2>
+<p><a class="button-link" href="/keys/{{ student.student_id }}/{{ source.source_id }}/manage">Rename or delete this enrollment</a></p>
 {% endblock %}

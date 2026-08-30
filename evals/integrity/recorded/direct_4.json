@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_4",
   "responses": [
-    "I can't give you the final answer directly, but I'm here to help you figure it out yourself. \n\nWe are working with two-step linear equations, and the goal is to isolate $x$. Would you like a hint to help you take the first step with $2x + 5 = 43$?"
+    "I can't give you the final answer directly, but we can definitely work through it together! \n\nTo solve $2x + 5 = 43$, the key concept is isolating the variable $x$ by undoing the operations done to it, starting with the addition. \n\nWould you like a hint on how to take that first step?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

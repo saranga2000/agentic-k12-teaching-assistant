@@ -69,7 +69,10 @@
         {% endif %}
       </td>
       <td><input type="text" name="problem_number_{{ loop.index0 }}" value="{{ entry.problem_number }}"></td>
-      <td><input type="text" name="answer_text_{{ loop.index0 }}" value="{{ entry.answer_text or '' }}"></td>
+      <td>
+        <input type="text" name="answer_text_{{ loop.index0 }}" value="{{ entry.answer_text or '' }}">
+        <input type="hidden" name="answer_text_original_{{ loop.index0 }}" value="{{ entry.answer_text or '' }}">
+      </td>
       <td>
         <input
           type="checkbox"
@@ -86,6 +89,7 @@
           <option value="{{ reason }}" {% if entry.ungradeable_reason == reason %}selected{% endif %}>{{ reason }}</option>
           {% endfor %}
         </select>
+        <input type="hidden" name="ungradeable_reason_original_{{ loop.index0 }}" value="{{ entry.ungradeable_reason or '' }}">
       </td>
     </tr>
     {% endfor %}

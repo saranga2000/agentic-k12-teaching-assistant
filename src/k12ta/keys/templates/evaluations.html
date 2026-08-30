@@ -72,13 +72,13 @@
       <span class="question-number">Q{{ item.row.problem_id }}</span>
       {% endif %}
       &ldquo;{{ item.row.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw | humanize_math }}&rdquo;
-      {% if item.row.needs_human_cause == "answer_differs_from_key" %}
-      &mdash; key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;
+      {% if item.row.needs_human_cause in ("answer_differs_from_key", "needs_person") %}
+      {% if item.row.expected_answer %}&mdash; key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;{% endif %}
       <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
         <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
         <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
         <input type="hidden" name="problem_id" value="{{ item.row.problem_id }}">
-        <button type="submit" name="verdict" value="correct">Confirm correct</button>
+        <button type="submit" name="verdict" value="correct">Mark correct</button>
         <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
       </form>
       {% endif %}

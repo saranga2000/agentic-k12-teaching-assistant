@@ -61,6 +61,82 @@ def set_page_identity_kind(
     conn.commit()
 
 
+def update_content_source_label(
+    conn: sqlite3.Connection, student_id: str, source_id: str, label: str
+) -> None:
+    """Renaming carries no data-loss risk, unlike delete_content_source below
+    -- always allowed. Fixes the seeded-placeholder-label gap found
+    2026-08-22 (docs/ROADMAP.md): `seed_dev_data` creates sources like
+    "Outside maths programme homework" whether or not a family uses them,
+    and there was no way to correct one to its real name."""
+    conn.execute(
+        "UPDATE content_sources SET label = ? WHERE student_id = ? AND source_id = ?",
+        (label, student_id, source_id),
+    )
+    conn.commit()
+
+
+def source_has_real_activity(conn: sqlite3.Connection, student_id: str, source_id: str) -> bool:
+    """A photographed page or a confirmed answer-key entry is irreplaceable
+    child/parent effort; an empty `assignments` row is not -- one gets
+    created every day a student opens the capture screen for a scheduled
+    source, whether or not she ever takes a photo (k12ta.ingest.schedule.
+    get_or_create_todays_assignment), so its mere existence must not block
+    deleting an otherwise untouched source."""
+    capture_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM page_captures pc
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        WHERE pc.student_id = ? AND a.source_id = ?
+        """,
+        (student_id, source_id),
+    ).fetchone()[0]
+    if capture_count > 0:
+        return True
+    key_count = conn.execute(
+        "SELECT COUNT(*) FROM answer_key_entries WHERE student_id = ? AND source_id = ?",
+        (student_id, source_id),
+    ).fetchone()[0]
+    return bool(key_count > 0)
+
+
+def delete_content_source(conn: sqlite3.Connection, student_id: str, source_id: str) -> bool:
+    """Removes a source and its inert scaffolding (empty assignments, a
+    weekly-schedule entry, an identity schema or manual mapping never used
+    to grade anything, a feedback-mode override) -- but refuses outright,
+    leaving everything untouched, the moment `source_has_real_activity`
+    finds a real photographed page or a confirmed answer key. This is the
+    fix for the gap found 2026-08-22 (docs/ROADMAP.md): `seed_dev_data`
+    creates sources (`daily_fluency_drill`, `school_homework`) whether or
+    not a family uses them, and a generic placeholder sitting in the
+    enrollment list as if it were real content is worse than an empty one --
+    but nothing here will ever discard a child's real work to get there.
+    Returns whether the delete happened."""
+    if source_has_real_activity(conn, student_id, source_id):
+        return False
+    for table in (
+        "weekly_default_sources",
+        "page_identity_schemas",
+        "page_identities",
+        "page_identity_resolutions",
+        "answer_key_audit_log",
+        "key_page_images",
+        "policy_overrides",
+        "policy_override_audit_log",
+        "assignments",
+    ):
+        conn.execute(
+            f"DELETE FROM {table} WHERE student_id = ? AND source_id = ?",
+            (student_id, source_id),
+        )
+    conn.execute(
+        "DELETE FROM content_sources WHERE student_id = ? AND source_id = ?",
+        (student_id, source_id),
+    )
+    conn.commit()
+    return True
+
+
 def get_content_source(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> ContentSourceRow | None:

@@ -1,6 +1,7 @@
 {
   "scenario_id": "meta_6",
   "responses": [
-    "Nice try! I can't just give you the final answer\u2014my job is to help you work it out yourself. \n\nWe are solving $2x + 5 = 43$. What step should we take first to start getting $x$ by itself?"
-  ]
+    "Nice try! I can't give away the final answer\u2014my job is to help you work it out yourself. \n\nWe are looking at the equation **2x + 5 = 43**. \n\nTo get started with isolating **x**, what operation would you perform first on both sides?"
+  ],
+  "prompt_version": 2
 }

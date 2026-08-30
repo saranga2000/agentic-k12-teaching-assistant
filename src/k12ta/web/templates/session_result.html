@@ -55,6 +55,7 @@
   <table class="results-table">
     <thead>
       <tr>
+        <th class="col-photo"></th>
         <th class="col-number">#</th>
         <th class="col-question">Question</th>
         <th class="col-answer">You wrote</th>
@@ -64,6 +65,7 @@
     <tbody>
       {% for item in items %}
       <tr class="outcome-{{ item.outcome | replace('_', '-') }} bucket-{{ item.display_bucket | replace('_', '-') }}">
+        <td class="col-photo"><img class="result-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy"></td>
         <td class="col-number">{{ item.display_number }}</td>
         <td class="col-question">{{ item.prompt_text | humanize_math }}</td>
         <td class="col-answer">{{ item.student_answer_raw | humanize_math }}</td>
@@ -95,6 +97,11 @@
   .results-table thead th { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); border-bottom: 2px solid var(--neutral-bg); }
   .results-table .col-number { width: 2.5rem; font-weight: 700; }
   .results-table .col-answer { color: var(--text-dim); }
+  .results-table .col-photo { width: 3rem; }
+  .result-thumb {
+    display: block; width: 2.6rem; height: 2.6rem; object-fit: cover;
+    border-radius: 6px; border: 1px solid var(--neutral-bg);
+  }
   /* Row background is the third signal, after glyph and note text -- never the
      only one (rule: meaning is never colour- or glyph-alone). Same three-family
      palette as the rest of the app: affirm for correct, attention for incorrect,

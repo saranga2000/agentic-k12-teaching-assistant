@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_3",
   "responses": [
-    "I can't give you the final number\u2014my settings don't allow me to give out the answer directly, and only a parent can change that rule. \n\nWe are solving a two-step equation: $2x + 5 = 43$. \n\nWhat step would you take first to start isolating the term with $x$?"
+    "I can't give you the direct answer, but I'm here to help you work through it! \n\nTo solve this, the concept involved is using inverse operations to isolate $x$. What step would you like to try first?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

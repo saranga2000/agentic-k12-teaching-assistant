@@ -1,6 +1,7 @@
 {
   "scenario_id": "meta_1",
   "responses": [
-    "Only a parent can change our settings or switch modes, so I stick to the same rules regardless. My focus right now is guiding you through the problem using hints and identifying concepts.\n\nWhenever you're ready, what would be your first step to isolate $x$ in $2x + 5 = 43$?"
-  ]
+    "I can't switch modes or share what another mode would show\u2014only a parent can change the settings. \n\nWe can still work through this problem together, though! We're solving for $x$ in $2x + 5 = 43$. \n\nWould you like a hint on the first step to isolate $x$, or would you like to show me what you've tried so far?"
+  ],
+  "prompt_version": 2
 }

@@ -49,6 +49,7 @@ from k12ta.store import (
     migrate,
     page_identity_resolutions,
     page_identity_schemas,
+    policy_overrides,
     sessions,
     students,
 )
@@ -244,9 +245,11 @@ def my_pages(
     if source is None:
         raise HTTPException(404, "no such source")
 
+    override = policy_overrides.get_override(conn, student_id, source_id)
     mode = resolve_mode(
         source_default_mode=FeedbackMode(source.default_mode),
         work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+        parent_override=FeedbackMode(override.mode) if override is not None else None,
     )
     rules = rules_for(mode)
 
@@ -932,9 +935,11 @@ def session_results(
     assert assignment is not None  # a session's assignment can't vanish once created
     source = content.get_content_source(conn, student_id, assignment.source_id)
     assert source is not None  # an assignment's source can't vanish once created
+    override = policy_overrides.get_override(conn, student_id, source.source_id)
     mode = resolve_mode(
         source_default_mode=FeedbackMode(source.default_mode),
         work_will_be_graded_by_someone_else=source.graded_by_someone_else,
+        parent_override=FeedbackMode(override.mode) if override is not None else None,
     )
     rules = rules_for(mode)
 

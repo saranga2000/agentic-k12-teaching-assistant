@@ -30,6 +30,7 @@ from k12ta.store import (
     page_identities,
     page_identity_resolutions,
     page_identity_schemas,
+    policy_overrides,
     quota,
     sessions,
     students,
@@ -459,6 +460,10 @@ def test_my_pages_splits_waiting_to_look_at_and_graded(
     assert "3 + 4" in response.text
     assert 'action="/student/s-marcus/summer_bridge/remind"' in response.text
     assert "Nothing to look at right now." in response.text
+    # Each item shows the student's own photo, keyed to its own capture -- not
+    # just one photo for the whole page.
+    assert "/captures/s-marcus/c-waiting/image" in response.text
+    assert "/captures/s-marcus/c-correct/image" in response.text
 
 
 def test_submit_reminder_sets_the_flag_the_parent_app_shows(
@@ -527,6 +532,88 @@ def test_submit_reminder_sets_the_flag_the_parent_app_shows(
 
     pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
     assert pending[0].reminder_requested_at is not None
+
+
+def test_my_pages_honours_a_parent_override_of_the_feedback_mode(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The read side of M3's parent-override wiring: a PIN-gated override set
+    from k12ta.keys (tests/test_keys_app.py covers the write side) must
+    actually change what resolve_mode returns here too, not just what the
+    parent's own settings screen shows -- k12ta.domain.policy.resolve_mode's
+    own docstring says a student can never change this, but a parent's
+    override must reach the student surface, or it isn't a real override."""
+    _seed_one_source(conn)  # default_mode="full"
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="18",
+            transcription_confidence=0.9,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            assignment_id="a-1",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-1",
+            problem_id="1",
+            outcome="incorrect",
+            grader_confidence=0.99,
+            expected_answer="19",
+            page_number=15,
+        ),
+    )
+
+    # FULL mode (the source default) reveals the answer on a miss.
+    full_response = client.get("/student/s-marcus/summer_bridge/pages")
+    assert "The answer is 19" in full_response.text
+
+    # A parent override to DIAGNOSTIC_ONLY must withhold it instead.
+    policy_overrides.set_override(
+        conn,
+        policy_overrides.PolicyOverrideRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            mode="diagnostic_only",
+            set_at="2026-08-29T10:00:00+00:00",
+        ),
+    )
+    restricted_response = client.get("/student/s-marcus/summer_bridge/pages")
+    assert "The answer is 19" not in restricted_response.text
+    assert "This one needs another look" in restricted_response.text
 
 
 def test_capture_screen_shows_todays_default_assignment(
@@ -1054,6 +1141,8 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     assert "outcome-correct" in response.text
     assert "outcome-incorrect" in response.text
     assert "outcome-needs-human" in response.text
+    # Her own photo shows next to every row, not just the identity-ask edge case.
+    assert response.text.count("/captures/s-marcus/c-synthetic/image") == 3
 
 
 def test_results_table_orders_by_real_question_number_not_string_order(

@@ -22,8 +22,10 @@ class AnswerKeyEntryRow:
     """One of "answers_vary" or "graph_or_table" when `answer_text` is None."""
     confirmed_at: str
     source: str = "model"
-    """"model" when transcribed from a scanned key page, "manual" when a parent
-    typed it directly (M3.4, no photo, no model call) -- mirrors
+    """"model" when the confirmed value matches exactly what a scanned key page's
+    transcription produced, "manual" when a parent typed it directly with no
+    photo at all (M3.4) or corrected a scanned value on the confirm screen
+    before saving (`k12ta.keys.app._answer_source`) -- mirrors
     k12ta.store.page_identities.PageIdentityRow.source exactly, same reasoning:
     who supplied the value, not how sure anyone was, so an eval can measure
     accuracy against only what the model actually produced."""

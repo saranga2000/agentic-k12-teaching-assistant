@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Manage — {{ source.label }} — {{ student.display_name }}{% endblock %}
+{% block content %}
+<p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
+<h1>{{ source.label }} — Manage</h1>
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/rename">
+  <fieldset>
+    <legend>Rename</legend>
+    <input type="text" name="label" value="{{ source.label }}" required>
+  </fieldset>
+  <div class="actions"><button type="submit">Save name</button></div>
+</form>
+
+<h2>Delete this enrollment</h2>
+{% if can_delete %}
+<p class="message">Nothing has ever been photographed or keyed for {{ source.label }} --
+  deleting it removes it completely. This cannot be undone.</p>
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/delete">
+  <div class="actions"><button type="submit">Delete {{ source.label }}</button></div>
+</form>
+{% else %}
+<p class="message">{{ student.display_name }} has photographed a page or you've entered an
+  answer key for {{ source.label }} -- it can't be deleted, only renamed, so that real work
+  is never lost.</p>
+{% endif %}
+{% endblock %}
