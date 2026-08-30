@@ -119,12 +119,22 @@ first section's "Day 1", grading real work against the wrong page — exactly th
   RSM: `chapter` + `problem_range`). A source with zero components has legitimately
   never had a schema taught to it and never auto-resolves — an honest `NO_SCHEMA`
   outcome, not an error.
-- **Learned at first scan, not declared at enrollment.** A parent does not know what
-  identifies a page in a programme they have not scanned a key page from yet. The
-  first key-page confirm screen for a source with no schema shows a discovery panel
-  of whatever identifier-like markers that scan found (or blank rows to name one by
-  hand if it found nothing), and saving both teaches the schema *and* confirms that
-  scan's page under it in the same submit.
+- **Learnable at first scan, or declarable at enrollment — both paths exist.** A
+  parent who doesn't yet know what identifies a page in a programme they haven't
+  scanned a key page from can leave a schema empty: the first key-page confirm
+  screen for a source with no schema shows a discovery panel of whatever
+  identifier-like markers that scan found (or blank rows to name one by hand if it
+  found nothing), and saving both teaches the schema *and* confirms that scan's
+  page under it in the same submit. A parent who already knows the structure (a
+  chapter marker, a lesson number, whatever their book actually prints) does not
+  have to wait for a scan — `enrollment_landing.html`'s "Set up page identity" link
+  opens the same `/identity-schema` editor immediately after a source is created,
+  before any photo exists. **Corrected 2026-08-30**: this paragraph previously said
+  a schema could only ever be learned from a first scan; that was already stale —
+  the enrollment-time link has existed since before this correction, just
+  undocumented here. See M3.11 below for why this distinction matters in practice:
+  real RSM material needs a schema a parent can describe upfront, not one the
+  system has to guess from a single ambiguous photo.
 - **Revisable, never a one-shot commitment.** `k12ta.keys`'s `/identity-schema` route
   edits a schema any time — add, remove, reorder, relabel a component. Editing
   inserts the next schema *version* rather than mutating the current one in place, so
@@ -631,6 +641,126 @@ for both apps — four fixes from a parent using both apps for real, 2026-08-29.
 
 **Deferred, not built now:** per-child PIN entry before any capture or history screen
 is shown to a child -- see the P2 list below.
+
+**M3.11: page identity generalized to a schema a parent describes, not one hardcoded
+per program -- real RSM photos, 2026-08-30.** 13 real photos of two children's actual
+RSM material proved the identity system's implicit "one schema per program name"
+assumption wrong in practice: Jahnvi's book ("Pre-Algebra Advanced") is keyed by a
+"CH.4" chapter tab plus a page footer whose exercise numbers reset every page (and,
+within one chapter, sometimes carries a second, genuinely globally-unique numbering
+style for "Supplementary Problems" pages instead); Vihani's book ("Grade 1
+Accelerated") has no chapter marker at all and is keyed by "Lesson 21" printed on a
+page tab instead. Neither shape matches the roadmap's earlier unvalidated guess for
+RSM (`chapter` + `problem_range`, M3.7's note) -- confirming that guess was never
+going to survive contact with a real book, the same lesson M3.7 already learned once
+for Summer Bridge's Day+Section schema.
+
+Investigation found `k12ta.store.page_identity_schemas` (a per-source, versioned,
+arbitrary-length, named-component list) and `k12ta.grading.page_identity.resolve()`
+were already fully generic -- no code change needed there. The real gap was narrow:
+**`page_number` was hardcoded as a single trusted literal in exactly the two places a
+human confirms it** (the scanned-key confirm screen, the manual-entry screens), which
+is silently correct when a schema has one component (a Summer Bridge page number is
+already source-wide unique) and silently *wrong* the moment a schema needs two or
+more -- a printed footer digit like "4" is not source-wide unique across chapters, so
+two different chapters' printed "page 4" would collide in `answer_key_entries`'s
+primary key and one would silently overwrite the other's answer key. Closed without a
+data migration and without touching `problem_id`/`AMBIGUOUS_PROBLEM_ID` (a genuinely
+separate, already-correct, within-one-photo uniqueness mechanism -- unifying it into
+the identity schema would have been a much larger rewrite for no benefit the real
+photos actually demonstrated a need for):
+
+- `k12ta.store.page_identities.resolve_or_assign_page_number` -- the one new function.
+  Looks up an existing composite; if none exists, mints the next unused integer
+  scanned across both `page_identities` and `answer_key_entries` for that source (a
+  manual-answers row can carry an arbitrary page_number with no schema at all, so a
+  fresh surrogate must never collide with that table either). A 0/1-component schema
+  never calls this -- a human confirming it keeps typing/editing a literal integer
+  directly, exactly as before, since that raw value already is source-wide unique in
+  that case.
+- `submit_confirm`, `submit_manual_mapping`, `submit_manual_answers` (`k12ta.keys.
+  app`) all fork on schema size: 2+ components derive `page_number` from the full
+  composite via the function above; 0/1 keep today's exact behavior byte for byte.
+  `confirm.html`/`manual_entry.html`/`manual_answers.html` hide the now-meaningless
+  bare page-number field once a schema has 2+ components.
+- The free-text "ask a human" fallback (`preview_page_entry`, both apps) becomes
+  schema-aware too: for 2+ components it renders one field per component and does a
+  **read-only** composite lookup, refusing honestly (no regrade, no new mapping) for
+  a combination nobody has taught the system yet -- deliberately never minting a
+  fresh surrogate here, so this convenience path can't silently multiply how many
+  different integers one real page ends up under. A parent who wants to teach a
+  durable mapping for a brand-new page uses the existing manual-mapping screen, which
+  already does the minting correctly. This keeps the change a bounded widening of the
+  existing, deliberately-narrow "ask a human" exception (`docs/ARCHITECTURE.md`'s own
+  warning against widening it further) -- every individual resolution stays exactly
+  as fail-closed and confidence-gated as before; only the number of components a
+  schema can have grew, not how speculative any one resolution is.
+- Also corrected: `docs/ROADMAP.md` previously said a schema could only ever be
+  learned from a first scan. That was already stale --
+  `enrollment_landing.html`'s "Set up page identity" link has let a parent declare a
+  schema immediately after creating a source, before any photo exists, since before
+  this note; only the documentation was out of date.
+
+New regression tests use the real literal values observed on the photos (`"CH.4"`,
+printed page digits that repeat across chapters, `"Lesson 21"`/`"Lesson 26"`), not
+just synthetic ones, in `tests/test_page_identity_resolution.py` and
+`tests/test_keys_app.py` (the two-different-chapters'-page-4 collision is a named,
+explicit test). Full suite green (`ruff`, `mypy --strict`, `pytest`, browser tests)
+throughout.
+
+**Real-model smoke check, 3 calls against the actual photos, mixed and honest
+results, not a clean pass:** one ordinary Jahnvi lesson page hit a JSON parsing
+failure unrelated to identity (`JSONDecodeError: Unterminated string`) -- a
+transcription-robustness question for a separate ticket, not this redesign. The
+Jahnvi Supplementary Problems page correctly extracted `printed_page: "4"` at 0.95
+confidence but did **not** report a value for the declared `chapter` component even
+though "CH.4" is visible on that page -- exactly the honest `PARTIAL` outcome this
+system is designed to produce and ask about, not a crash or a silent wrong grade, but
+a real signal that the model may need a stronger prompt hint to reliably find a
+chapter marker specifically on this page style. The Vihani Lesson-based case never
+ran at all -- `RateLimitExhaustedError`, the same daily free-tier quota crunch
+already tracked elsewhere in this document. **Not blocking**: the resolution logic
+itself is proven correct by the synthetic real-value tests above regardless of what
+the model extracts on any single call; this check was about the model's own
+reliability, which remains partially unverified and should be retried once quota
+allows, and is a natural first case for the M2.1/M1-style transcription eval this
+codebase doesn't have a key-page equivalent of yet.
+
+**Thoroughness audit, requested 2026-08-30, confirmed rather than assumed:** the
+question was whether this fix is genuinely resilient for any program's structure, not
+just RSM/Kumon-shaped ones, and whether a child hitting the same OCR failure at
+capture time gets the same fallback a parent does. Checked directly, not assumed:
+
+- `grep -rni "rsm\|kumon"` across `src/k12ta` turns up nothing but documentation and
+  example strings -- no branch, string comparison, or special case anywhere keys off
+  a program name. The schema, the resolution logic, and every screen touched by this
+  fix operate on `page_identity_schemas.get_current_schema(student_id, source_id)`
+  alone.
+- **The child-side fallback was already generalized in the same pass** (`k12ta.web.
+  app`'s `preview_page_entry` and `session_result.html`) -- a child taking a photo
+  that fails to resolve gets the identical schema-aware "fill in what's missing"
+  form a parent gets from the pending list, not a lesser version of it. Re-verified
+  directly against the current template, not from memory.
+- `resolve_partial`'s existing, deliberate "refuse honestly rather than guess which
+  of several gaps to fill" rule (only ever attempts a constrained pick when exactly
+  one component is missing) already generalizes correctly to any schema length --
+  two or more components missing at once falls through to the same schema-aware
+  free-text ask this fix built, asking for every component, never a partial guess.
+  This was true before this fix and needed no change; confirmed by reading it, not
+  assumed.
+- New test proves the arity isn't accidentally hardcoded to "one or two": a
+  hypothetical three-component Volume+Chapter+Page schema resolves, disambiguates,
+  and degrades to an honest `PARTIAL` with one or two components missing exactly
+  like the two-component cases do (`tests/test_page_identity_resolution.py`), and
+  the same three-component shape is proven through the real write path, not just
+  the pure resolution function (`tests/test_keys_app.py`).
+- One real, minor friction point found and left as-is rather than silently
+  "fixed": the standalone schema editor (`identity_schema.html`) offers only 3
+  blank rows beyond a source's current schema per visit -- a parent describing a
+  program needing more components than that in one sitting has to save once and
+  reopen the editor to get 3 more. Not a resilience or correctness gap (nothing is
+  lost or mis-graded), just a UI rough edge, and left for whenever the UI pass
+  below happens rather than patched piecemeal now.
 
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**

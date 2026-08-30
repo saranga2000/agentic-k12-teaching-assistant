@@ -89,6 +89,57 @@ def get_page_number(
     return None if row is None else int(row[0])
 
 
+def resolve_or_assign_page_number(
+    conn: sqlite3.Connection,
+    student_id: str,
+    source_id: str,
+    composite_key: str,
+    schema_version: int,
+) -> tuple[int, bool]:
+    """The page_number a 2+-component schema's composite should be stored under
+    -- looked up if already confirmed, minted fresh otherwise. Exists because a
+    single schema component's raw printed value (a chapter's page footer digit,
+    say) is not safe to trust as this source's page_number once a second
+    component is needed to disambiguate it: two different chapters' printed
+    "page 4" would otherwise collide in answer_key_entries' primary key and one
+    would silently overwrite the other's answer key. A 0/1-component schema
+    never calls this -- the human confirming it keeps typing/editing a literal
+    integer directly, exactly as today, since that raw value already *is*
+    source-wide unique in that case (Summer Bridge).
+
+    A fresh assignment is `1 + the highest page_number already used anywhere for
+    this source`, scanned across both this table and answer_key_entries -- a
+    manual answer-entry row (k12ta.keys.app.submit_manual_answers) can exist
+    with an arbitrary parent-typed page_number even with no schema at all, so a
+    new surrogate must never collide with that table either, not only this one.
+
+    Does not call upsert_identity itself -- same convention as every other
+    function here; the caller owns the actual write, along with confirmed_at
+    and source. Single SQLite writer, one process: calling this and then
+    upsert_identity within the same request, before the implicit commit, is
+    all the concurrency safety this needs -- there is no worker pool or
+    multi-process writer anywhere in this codebase to race against.
+
+    Returns (page_number, was_newly_assigned)."""
+    existing = get_page_number(conn, student_id, source_id, composite_key, schema_version)
+    if existing is not None:
+        return existing, False
+    cur = conn.execute(
+        """
+        SELECT COALESCE(MAX(page_number), 0) FROM (
+            SELECT page_number FROM page_identities
+                WHERE student_id = ? AND source_id = ?
+            UNION ALL
+            SELECT page_number FROM answer_key_entries
+                WHERE student_id = ? AND source_id = ?
+        )
+        """,
+        (student_id, source_id, student_id, source_id),
+    )
+    (current_max,) = cur.fetchone()
+    return int(current_max) + 1, True
+
+
 def list_for_source_at_version(
     conn: sqlite3.Connection, student_id: str, source_id: str, schema_version: int
 ) -> list[PageIdentityRow]:

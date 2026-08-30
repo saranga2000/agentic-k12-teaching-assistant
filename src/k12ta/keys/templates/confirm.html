@@ -35,12 +35,14 @@
     {% set unconfirmed = entry.identifier_confidence < identifier_confidence_floor %}
     <tr>
       <td>
+        {% if schema|length < 2 %}
         <input
           type="text"
           name="page_number_{{ row }}"
           value="{{ entry.page_number }}"
           class="{{ 'unconfirmed-field' if unconfirmed else '' }}"
         >
+        {% endif %}
         {% if schema %}
         {% for component in schema %}
         <input

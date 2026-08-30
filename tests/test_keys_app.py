@@ -26,6 +26,7 @@ from PIL import Image
 import k12ta.keys.app as keys_app
 import k12ta.web.app as web_app
 from k12ta.config import Settings
+from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm.base import DataRetention
 from k12ta.store import (
     answer_key_audit,
@@ -861,6 +862,9 @@ def test_manual_mapping_screen_shows_one_field_per_current_schema_component(
     assert response.status_code == 200
     assert 'name="component_section"' in response.text
     assert 'name="component_day"' in response.text
+    # A 2-component schema derives page_number from the composite -- no bare
+    # field for a parent to (mis)type one directly.
+    assert 'name="page_number"' not in response.text
 
 
 def test_manual_mapping_screen_for_a_source_with_no_schema_says_so_plainly(
@@ -882,7 +886,11 @@ def test_submit_manual_mapping_persists_a_composite_marked_manual(
 ) -> None:
     """The backfill mechanism: entering a day-to-page mapping you've verified
     against the physical book yourself, no re-scan, no photo -- recorded as
-    manual so the eval never mistakes it for a model success."""
+    manual so the eval never mistakes it for a model success. A 2-component
+    schema's page_number is a system-assigned surrogate (resolve_or_assign_
+    page_number), not the bare "page_number" field a parent might submit --
+    a single component's own value (e.g. just "Day 5") is never source-wide
+    unique enough to trust directly once a second component exists."""
     _seed_marcus_with_source(conn)
     v = page_identity_schemas.save_new_schema(
         conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
@@ -890,19 +898,75 @@ def test_submit_manual_mapping_persists_a_composite_marked_manual(
 
     response = client.post(
         "/keys/s-marcus/summer_bridge/identity/manual-entry",
-        data={"page_number": "17", "component_section": "Section 1", "component_day": "Day 5"},
+        data={"component_section": "Section 1", "component_day": "Day 5"},
         follow_redirects=False,
     )
 
     assert response.status_code == 303
     assert (
         page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 5", v)
-        == 17
+        == 1
     )
     row = conn.execute(
         "SELECT source FROM page_identities WHERE composite_key = 'Section 1\x1fDay 5'"
     ).fetchone()
     assert row[0] == "manual"
+
+
+def test_submit_manual_mapping_with_a_two_component_schema_reuses_the_same_surrogate_on_reconfirm(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Re-submitting the exact same composite must not mint a second surrogate --
+    the whole point of resolve_or_assign_page_number's lookup-first behavior."""
+    _seed_marcus_with_source(conn)
+    v = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"component_section": "Section 1", "component_day": "Day 5"},
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"component_section": "Section 1", "component_day": "Day 5"},
+    )
+
+    assert (
+        page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 5", v)
+        == 1
+    )
+    count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
+    assert count == 1
+
+
+def test_submit_manual_mapping_with_a_two_component_schema_assigns_distinct_surrogates(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Two different composites sharing one raw component value (both "Day 5",
+    different sections) must land on two different stored page_numbers -- the
+    exact collision this whole mechanism exists to prevent."""
+    _seed_marcus_with_source(conn)
+    v = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("section", "Section", None), ("day", "Day", None)]
+    )
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"component_section": "Section 1", "component_day": "Day 5"},
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity/manual-entry",
+        data={"component_section": "Section 2", "component_day": "Day 5"},
+    )
+
+    first = page_identities.get_page_number(
+        conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 5", v
+    )
+    second = page_identities.get_page_number(
+        conn, "s-marcus", "summer_bridge", "Section 2\x1fDay 5", v
+    )
+    assert first != second
 
 
 def test_submit_manual_mapping_with_a_blank_component_persists_nothing(
@@ -964,6 +1028,22 @@ def test_manual_answers_screen_renders_identity_fields_when_a_schema_exists(
     assert response.status_code == 200
     assert 'name="component_day"' in response.text
     assert 'name="problem_number_0"' in response.text
+
+
+def test_manual_answers_screen_hides_the_bare_page_number_field_for_a_two_component_schema(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/answers/manual-entry")
+
+    assert response.status_code == 200
+    assert 'name="component_chapter"' in response.text
+    assert 'name="component_page"' in response.text
+    assert 'name="page_number"' not in response.text
 
 
 def test_manual_answers_screen_works_with_no_schema_unlike_identity_only_entry(
@@ -2008,6 +2088,100 @@ def test_preview_page_entry_with_no_key_yet_says_so_honestly(
     assert "No answers on file for page 15 yet" in response.text
 
 
+def test_preview_page_entry_with_a_two_component_schema_looks_up_the_composite(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+    version = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["CH.4", "4"]),
+            schema_version=version,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/preview-page-entry",
+        data={
+            "capture_id": "c-unresolved",
+            "session_id": "sess-c-unresolved",
+            "component_chapter": "CH.4",
+            "component_page": "4",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Is this page 15?" in response.text
+    assert "Problem 1: 19" in response.text
+
+
+def test_preview_page_entry_with_a_two_component_schema_refuses_an_unknown_composite(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/preview-page-entry",
+        data={
+            "capture_id": "c-unresolved",
+            "session_id": "sess-c-unresolved",
+            "component_chapter": "CH.4",
+            "component_page": "4",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    count = conn.execute("SELECT COUNT(*) FROM page_identities").fetchone()[0]
+    assert count == 0  # never mints a new mapping, only looks one up
+
+
 def test_preview_page_entry_rejects_a_non_numeric_page_silently(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -2187,6 +2361,34 @@ def test_enrollment_detail_shows_answer_differs_side_by_side_with_a_verdict_form
     assert "quadrilateral" in response.text
     assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
     assert 'value="c-differs"' in response.text
+
+
+def test_evaluations_screen_shows_one_ask_field_per_component_for_a_two_component_schema(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-unresolved", problem_id="1", cause="unknown_page", page_number=None
+    )
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'name="component_chapter"' in response.text
+    assert 'name="component_page"' in response.text
+    assert 'name="page_number"' not in response.text
 
 
 def test_evaluations_screen_shows_the_real_question_number_when_known(
@@ -2629,6 +2831,26 @@ def test_successful_upload_renders_confirm_form_with_photo_and_entries(
     assert "checked" in html.split('name="ungradeable_1"')[1].split(">")[0]
 
 
+def test_confirm_screen_hides_the_bare_page_number_field_for_a_two_component_schema(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+    transcriber.result = _success_result()
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+
+    html = _final_html(response)
+    assert 'name="page_number_0"' not in html
+    assert 'name="identity_chapter_0"' in html
+    assert 'name="identity_page_0"' in html
+
+
 def test_confirm_screen_sorts_entries_by_page_then_problem_number(
     client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
 ) -> None:
@@ -3047,6 +3269,174 @@ def test_confirm_in_targeted_mode_records_manual_source_when_any_one_component_i
     ).fetchone()
     assert row is not None
     assert row[0] == "manual"
+
+
+def test_confirm_with_a_two_component_schema_derives_page_number_from_the_composite(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The motivating RSM bug: a printed page-footer digit ("4") repeats across
+    chapters, so it cannot be trusted as this source's page_number once a
+    second component (chapter) exists to disambiguate it. Two rows sharing the
+    same printed page but different chapters must land in different stored
+    page_numbers, and a bare "page_number_i" field in the POST body must be
+    ignored outright."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "2",
+            "page_number_0": "999",  # must be ignored: not source-wide unique
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "identity_chapter_0": "CH.3",
+            "identity_chapter_original_0": "CH.3",
+            "identity_page_0": "4",
+            "identity_page_original_0": "4",
+            "page_number_1": "999",
+            "problem_number_1": "1",
+            "answer_text_1": "42",
+            "identity_chapter_1": "CH.4",
+            "identity_chapter_original_1": "CH.4",
+            "identity_page_1": "4",
+            "identity_page_original_1": "4",
+        },
+    )
+
+    ch3_page4 = page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "CH.3\x1f4", 1)
+    ch4_page4 = page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "CH.4\x1f4", 1)
+    assert ch3_page4 is not None
+    assert ch4_page4 is not None
+    assert ch3_page4 != ch4_page4
+    # Neither row's answer collided with the other's under a shared page_number.
+    assert (
+        answer_keys.get_entry(conn, "s-marcus", "summer_bridge", ch3_page4, "1").answer_text  # type: ignore[union-attr]
+        == "19"
+    )
+    assert (
+        answer_keys.get_entry(conn, "s-marcus", "summer_bridge", ch4_page4, "1").answer_text  # type: ignore[union-attr]
+        == "42"
+    )
+
+
+def test_confirm_with_a_three_component_schema_is_not_hardcoded_to_two(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The fix isn't special-cased to "exactly two components" -- any program a
+    parent describes, however many levels deep, goes through the same
+    resolve_or_assign_page_number path. A hypothetical Volume+Chapter+Page
+    program proves the write path, not just the pure resolution logic."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("volume", "Volume", None), ("chapter", "Chapter", None), ("page", "Page", None)],
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "2",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "identity_volume_0": "Volume 1",
+            "identity_volume_original_0": "Volume 1",
+            "identity_chapter_0": "CH.4",
+            "identity_chapter_original_0": "CH.4",
+            "identity_page_0": "4",
+            "identity_page_original_0": "4",
+            "problem_number_1": "1",
+            "answer_text_1": "42",
+            "identity_volume_1": "Volume 2",
+            "identity_volume_original_1": "Volume 2",
+            "identity_chapter_1": "CH.4",
+            "identity_chapter_original_1": "CH.4",
+            "identity_page_1": "4",
+            "identity_page_original_1": "4",
+        },
+    )
+
+    vol1 = page_identities.get_page_number(
+        conn, "s-marcus", "summer_bridge", "Volume 1\x1fCH.4\x1f4", 1
+    )
+    vol2 = page_identities.get_page_number(
+        conn, "s-marcus", "summer_bridge", "Volume 2\x1fCH.4\x1f4", 1
+    )
+    assert vol1 is not None
+    assert vol2 is not None
+    assert vol1 != vol2
+
+
+def test_confirm_with_a_two_component_schema_reuses_the_surrogate_on_a_second_scan_of_the_same_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    v = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "1",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "identity_chapter_0": "CH.4",
+            "identity_chapter_original_0": "CH.4",
+            "identity_page_0": "4",
+            "identity_page_original_0": "4",
+        },
+    )
+    first = page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "CH.4\x1f4", v)
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "page_number_0": "1",
+            "problem_number_0": "2",
+            "answer_text_0": "20",
+            "identity_chapter_0": "CH.4",
+            "identity_chapter_original_0": "CH.4",
+            "identity_page_0": "4",
+            "identity_page_original_0": "4",
+        },
+    )
+    second = page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "CH.4\x1f4", v)
+
+    assert first == second
+
+
+def test_confirm_with_a_two_component_schema_skips_a_row_with_an_incomplete_composite(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """No page to attach the answer to without the full composite -- the row is
+    silently skipped, the same honesty a 0/1-component schema already has for
+    an unparseable page_number."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("chapter", "Chapter", None), ("page", "Page", None)]
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "identity_chapter_0": "",
+            "identity_chapter_original_0": "",
+            "identity_page_0": "4",
+            "identity_page_original_0": "4",
+        },
+    )
+
+    count = conn.execute("SELECT COUNT(*) FROM answer_key_entries").fetchone()[0]
+    assert count == 0
 
 
 def test_confirm_in_targeted_mode_with_a_missing_component_typed_in_is_manual(

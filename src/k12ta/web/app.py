@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
@@ -47,6 +48,7 @@ from k12ta.store import (
     content,
     db,
     migrate,
+    page_identities,
     page_identity_resolutions,
     page_identity_schemas,
     policy_overrides,
@@ -762,6 +764,10 @@ def submit_identity_pick(
     return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
 
 
+def _get(data: dict[str, list[str]], key: str, default: str = "") -> str:
+    return data.get(key, [default])[0]
+
+
 _PAGE_ENTRY_PREVIEW_COUNT = 3
 """How many of the typed page's own confirmed answers the confirm step shows
 -- "the first two or three answers the system is about to grade against,"
@@ -775,25 +781,33 @@ stops being a quick check."""
     response_class=HTMLResponse,
     response_model=None,
 )
-def preview_page_entry(
+async def preview_page_entry(
     request: Request,
     student_id: str,
     session_id: str,
-    capture_id: str = Form(...),
-    page_number: str = Form(...),
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse | RedirectResponse:
-    """Step one of two for the free-text page-ask (PageNumberAsk): she typed a
-    number, this renders what she's about to confirm -- her own photo again,
-    the number, and this page's own first few confirmed answers, if any
-    exist yet -- and commits nothing. "A second tap alone is not enough; she
-    must be shown what she is confirming" is the whole reason this is a
-    separate step from commit_page_entry rather than one route that both
-    previews and commits.
+    """Step one of two for the free-text page-ask (PageNumberAsk): she typed
+    an identity, this renders what she's about to confirm -- her own photo
+    again, and this page's own first few confirmed answers, if any exist yet
+    -- and commits nothing. "A second tap alone is not enough; she must be
+    shown what she is confirming" is the whole reason this is a separate
+    step from commit_page_entry rather than one route that both previews and
+    commits.
 
-    A non-digit or non-positive submission redirects back to the results
-    page unchanged -- same honest "nothing happened" as a stale pick,
-    never a 500 for a plainly mistyped number."""
+    Body-parsed rather than typed Form(...) params, like k12ta.keys.app's
+    submit_confirm, because the field shape varies with the source's current
+    schema: a bare `page_number` for 0/1 components (exactly as before this
+    changed), one `component_{name}` per component for 2+ (a single raw
+    value, e.g. a chapter's page-footer digit, is not safe to trust as this
+    source's page_number once a second component exists to disambiguate it
+    -- see k12ta.store.page_identities.resolve_or_assign_page_number's
+    docstring for the collision this prevents). Unlike submit_confirm, this
+    path never mints a new mapping for an unrecognised 2+-component identity
+    -- it only looks one up; an unknown composite redirects back unchanged,
+    same honest "nothing happened" as a mistyped bare page number always
+    has here. A parent who wants to teach a durable mapping uses the
+    existing manual-mapping screen instead."""
     student = students.get_student(conn, student_id)
     if student is None:
         raise HTTPException(404, "no such student")
@@ -805,9 +819,25 @@ def preview_page_entry(
     source = content.get_content_source(conn, student_id, assignment.source_id)
     assert source is not None  # an assignment's source can't vanish once created
 
-    if not page_number.isdigit() or int(page_number) <= 0:
-        return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
-    parsed_page_number = int(page_number)
+    data = parse_qs((await request.body()).decode())
+    capture_id = _get(data, "capture_id")
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source.source_id)
+    if len(schema) >= 2:
+        values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
+        if not all(values):
+            return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
+        version = page_identity_schemas.get_current_version(conn, student_id, source.source_id)
+        found = page_identities.get_page_number(
+            conn, student_id, source.source_id, page_identity.build_composite_key(values), version
+        )
+        if found is None:
+            return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
+        parsed_page_number = found
+    else:
+        page_number_raw = _get(data, "page_number").strip()
+        if not page_number_raw.isdigit() or int(page_number_raw) <= 0:
+            return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
+        parsed_page_number = int(page_number_raw)
 
     entries = answer_keys.get_entries_for_page(
         conn, student_id, source.source_id, parsed_page_number
@@ -950,6 +980,7 @@ def session_results(
     identity_asks, page_number_asks = _resolve_pending_identities(
         conn, student_id, session_id, source.source_id, graded
     )
+    identity_schema = page_identity_schemas.get_current_schema(conn, student_id, source.source_id)
     if had_partial:
         # _resolve_pending_identities may have just regraded a capture in
         # place (the opportunistic auto-resolve case) -- reload so the page
@@ -1011,5 +1042,6 @@ def session_results(
             "no_problems_message": NO_PROBLEMS_FOUND_MESSAGE,
             "identity_asks": identity_asks,
             "page_number_asks": page_number_asks,
+            "identity_schema": identity_schema,
         },
     )

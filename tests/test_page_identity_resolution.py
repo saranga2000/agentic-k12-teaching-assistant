@@ -163,6 +163,169 @@ def test_same_day_different_section_resolves_to_different_pages() -> None:
     assert section2.page_number == 89
 
 
+# --- Real RSM material, both books photographed 2026-08-30 ----------------------
+# Two children's actual RSM material turned out to have two structurally
+# different identity schemes under one program name, neither matching the
+# roadmap's earlier unvalidated guess ("chapter" + "problem_range"). These
+# fixtures use the literal markers observed on the real photos.
+
+
+def _seed_chapter_and_page_schema(conn: sqlite3.Connection) -> int:
+    """Jahnvi's "Pre-Algebra Advanced": a "CH.4" corner tab plus a printed page
+    footer -- but the footer digit repeats every chapter (a lesson page and a
+    "Supplementary Problems" page both print "4"), so it is not source-wide
+    unique on its own. Same shape as Summer Bridge's section+day, real values."""
+    return page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("chapter", "Chapter", "CH.4"), ("printed_page", "Page", "4")],
+    )
+
+
+def test_rsm_chapter_and_page_disambiguates_a_footer_digit_that_repeats_every_chapter() -> None:
+    """The motivating real-world collision: two different chapters' pages both
+    printed "4" in the footer. Without the chapter component, both would
+    resolve to the same page_number and one chapter's answer key would
+    silently overwrite the other's."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = _seed_chapter_and_page_schema(conn)
+    _confirm_mapping(conn, build_composite_key(["CH.3", "4"]), version, 41)
+    _confirm_mapping(conn, build_composite_key(["CH.4", "4"]), version, 42)
+    _confirm_mapping(conn, build_composite_key(["CH.4", "13"]), version, 43)
+
+    ch3_page4 = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"chapter": ("CH.3",), "printed_page": ("4",)},
+        confidence=0.98,
+    )
+    ch4_page4 = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"chapter": ("CH.4",), "printed_page": ("4",)},
+        confidence=0.98,
+    )
+    ch4_page13 = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"chapter": ("CH.4",), "printed_page": ("13",)},
+        confidence=0.98,
+    )
+
+    assert (ch3_page4.outcome, ch3_page4.page_number) == (PageIdentityOutcome.RESOLVED, 41)
+    assert (ch4_page4.outcome, ch4_page4.page_number) == (PageIdentityOutcome.RESOLVED, 42)
+    assert (ch4_page13.outcome, ch4_page13.page_number) == (PageIdentityOutcome.RESOLVED, 43)
+
+
+def test_rsm_chapter_and_page_is_partial_when_the_photo_crops_out_the_chapter_tab() -> None:
+    """The chapter tab sits in a page corner -- exactly the kind of marker a
+    framing guide built around the printed work, not the corner, can crop
+    out (docs/ROADMAP.md's M3.7 framing-risk note)."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    _seed_chapter_and_page_schema(conn)
+
+    result = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"printed_page": ("4",)},
+        confidence=0.98,
+    )
+
+    assert result.outcome is PageIdentityOutcome.PARTIAL
+    assert result.missing_labels == ("Chapter",)
+
+
+def test_vihani_lesson_only_schema_needs_no_chapter_component_at_all() -> None:
+    """Vihani's "Grade 1 Accelerated": a spiral workbook with no chapter marker
+    anywhere -- "Lesson 21" printed on a page tab is the only identity signal.
+    A single-component schema here is correct, not an oversight; RSM does not
+    imply one fixed shape even across two children on the same program."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("lesson", "Lesson", "Lesson 21")]
+    )
+    _confirm_mapping(conn, build_composite_key(["Lesson 21"]), version, 35)
+    _confirm_mapping(conn, build_composite_key(["Lesson 26"]), version, 41)
+
+    lesson21 = resolve(
+        conn, "s-marcus", "summer_bridge", candidates={"lesson": ("Lesson 21",)}, confidence=0.98
+    )
+    lesson26 = resolve(
+        conn, "s-marcus", "summer_bridge", candidates={"lesson": ("Lesson 26",)}, confidence=0.98
+    )
+
+    assert (lesson21.outcome, lesson21.page_number) == (PageIdentityOutcome.RESOLVED, 35)
+    assert (lesson26.outcome, lesson26.page_number) == (PageIdentityOutcome.RESOLVED, 41)
+
+
+def test_a_three_component_schema_resolves_and_disambiguates_correctly() -> None:
+    """Nothing in this system's fix for the RSM/Kumon-shaped gap is hardcoded to
+    "one or two components" -- a hypothetical Volume+Chapter+Page program (or
+    any other structure a parent describes) must work identically, since
+    resolve() and resolve_or_assign_page_number both operate on an ordered
+    component list of any length, never a fixed arity."""
+    conn = _migrated_connection()
+    _seed_student_and_source(conn)
+    version = page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [
+            ("volume", "Volume", "Volume 2"),
+            ("chapter", "Chapter", "Chapter 4"),
+            ("page", "Page", "4"),
+        ],
+    )
+    _confirm_mapping(conn, build_composite_key(["Volume 1", "Chapter 4", "4"]), version, 101)
+    _confirm_mapping(conn, build_composite_key(["Volume 2", "Chapter 4", "4"]), version, 102)
+
+    volume1 = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"volume": ("Volume 1",), "chapter": ("Chapter 4",), "page": ("4",)},
+        confidence=0.98,
+    )
+    volume2 = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"volume": ("Volume 2",), "chapter": ("Chapter 4",), "page": ("4",)},
+        confidence=0.98,
+    )
+    missing_one = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"volume": ("Volume 2",), "page": ("4",)},
+        confidence=0.98,
+    )
+    missing_two = resolve(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        candidates={"page": ("4",)},
+        confidence=0.98,
+    )
+
+    assert (volume1.outcome, volume1.page_number) == (PageIdentityOutcome.RESOLVED, 101)
+    assert (volume2.outcome, volume2.page_number) == (PageIdentityOutcome.RESOLVED, 102)
+    assert missing_one.outcome is PageIdentityOutcome.PARTIAL
+    assert missing_one.missing_labels == ("Chapter",)
+    # Two of three components missing on one photo -- refuses honestly rather
+    # than guess which of the two gaps to fill; still PARTIAL, never a crash.
+    assert missing_two.outcome is PageIdentityOutcome.PARTIAL
+    assert set(missing_two.missing_labels) == {"Volume", "Chapter"}
+
+
 def test_below_confidence_floor_is_its_own_outcome_even_with_every_component_known() -> None:
     conn = _migrated_connection()
     _seed_student_and_source(conn)

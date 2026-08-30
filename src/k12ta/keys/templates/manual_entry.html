@@ -11,8 +11,10 @@
 <p class="message">For a page you already know, verified against the book itself — no photo,
   no re-scan. Recorded as a manual entry, not a model result.</p>
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">
+  {% if schema|length < 2 %}
   <label for="page_number">Page number</label>
   <input type="text" name="page_number" id="page_number">
+  {% endif %}
   {% for component in schema %}
   <label for="component_{{ component.component_name }}">{{ component.label }}</label>
   <input type="text" name="component_{{ component.component_name }}" id="component_{{ component.component_name }}"

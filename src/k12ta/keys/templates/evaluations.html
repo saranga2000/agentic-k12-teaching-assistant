@@ -29,8 +29,15 @@
     <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/preview-page-entry" class="page-entry-ask">
       <input type="hidden" name="capture_id" value="{{ group.capture_id }}">
       <input type="hidden" name="session_id" value="{{ group.session_id }}">
+      {% if identity_schema|length >= 2 %}
+      {% for component in identity_schema %}
+      <input type="text" name="component_{{ component.component_name }}" placeholder="{{ component.label }}" required>
+      {% endfor %}
+      <button type="submit">This is&hellip;</button>
+      {% else %}
       <input type="number" name="page_number" min="1" placeholder="page number" required>
       <button type="submit">This is page&hellip;</button>
+      {% endif %}
     </form>
     {% set other_unresolved = capture_groups | selectattr("page_number", "none") | rejectattr("capture_id", "equalto", group.capture_id) | list %}
     {% if other_unresolved %}

@@ -1522,7 +1522,23 @@ def test_capture_image_for_an_unknown_capture_is_404(client: TestClient) -> None
 def test_preview_page_entry_shows_the_photo_and_key_preview(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
+    """A 2-component schema's free-text ask is a read-only composite lookup
+    (per its own docstring), not a mint -- it only succeeds for a composite
+    someone already taught the system, e.g. via a prior scan or manual
+    mapping, so the test seeds that mapping the same way a real prior
+    confirmation would have."""
     session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
     answer_keys.upsert_entry(
         conn,
         answer_keys.AnswerKeyEntryRow(
@@ -1538,7 +1554,11 @@ def test_preview_page_entry_shows_the_photo_and_key_preview(
 
     response = client.post(
         f"/session/s-marcus/{session_id}/preview-page-entry",
-        data={"capture_id": "c-partial", "page_number": "15"},
+        data={
+            "capture_id": "c-partial",
+            "component_section": "Section 1",
+            "component_day": "Day 5",
+        },
     )
 
     assert response.status_code == 200
@@ -1551,14 +1571,68 @@ def test_preview_page_entry_with_no_key_yet_says_so_honestly(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     session_id = _seed_partial_identity_session(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            composite_key=build_composite_key(["Section 1", "Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-12T07:00:00+00:00",
+        ),
+    )
 
     response = client.post(
         f"/session/s-marcus/{session_id}/preview-page-entry",
-        data={"capture_id": "c-partial", "page_number": "15"},
+        data={
+            "capture_id": "c-partial",
+            "component_section": "Section 1",
+            "component_day": "Day 5",
+        },
     )
 
     assert response.status_code == 200
     assert "I don't have answers for page 15 yet" in response.text
+
+
+def test_preview_page_entry_with_a_two_component_schema_refuses_an_unknown_composite(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The read-only fork: an untaught composite is an honest no-op, not a
+    freshly-minted surrogate -- teaching a durable mapping is manual-mapping's
+    job, never this convenience flow's."""
+    session_id = _seed_partial_identity_session(conn)
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/preview-page-entry",
+        data={
+            "capture_id": "c-partial",
+            "component_section": "Section 1",
+            "component_day": "Day 5",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, "s-marcus", "summer_bridge")
+    assert counts.get("resolved_by_student_entry") is None
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
+    assert graded[0].outcome == "needs_human"  # never regraded
+
+
+def test_preview_page_entry_with_a_two_component_schema_skips_an_incomplete_submission(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    session_id = _seed_partial_identity_session(conn)
+
+    response = client.post(
+        f"/session/s-marcus/{session_id}/preview-page-entry",
+        data={"capture_id": "c-partial", "component_section": "Section 1"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
 
 
 def test_preview_page_entry_rejects_a_non_numeric_page_silently(

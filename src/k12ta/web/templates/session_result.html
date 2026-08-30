@@ -35,7 +35,13 @@
     <img class="page-number-ask-photo" src="/captures/{{ student.student_id }}/{{ ask.capture_id }}/image" alt="Your photo">
     <form method="post" action="/session/{{ student.student_id }}/{{ session_id }}/preview-page-entry">
       <input type="hidden" name="capture_id" value="{{ ask.capture_id }}">
+      {% if identity_schema|length >= 2 %}
+      {% for component in identity_schema %}
+      <input type="text" name="component_{{ component.component_name }}" placeholder="{{ component.label }}" required>
+      {% endfor %}
+      {% else %}
       <input type="number" name="page_number" min="1" inputmode="numeric" placeholder="page number" required>
+      {% endif %}
       <button type="submit" class="identity-ask-option">Next</button>
     </form>
   </div>

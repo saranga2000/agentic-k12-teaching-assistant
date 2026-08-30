@@ -817,6 +817,7 @@ def evaluations_screen(
     )
     resolved = sessions.list_resolved_for_source(conn, student_id, source_id)
     summary = _summarize_enrollment(pending, capture_groups, resolved)
+    identity_schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
 
     return templates.TemplateResponse(
         request,
@@ -831,6 +832,7 @@ def evaluations_screen(
             "summary": summary,
             "correct_items": [r for r in resolved if r.outcome == "correct"],
             "incorrect_items": [r for r in resolved if r.outcome == "incorrect"],
+            "identity_schema": identity_schema,
         },
     )
 
@@ -931,27 +933,53 @@ screen stops being a quick check."""
     response_class=HTMLResponse,
     response_model=None,
 )
-def preview_page_entry(
+async def preview_page_entry(
     request: Request,
     student_id: str,
     source_id: str,
-    capture_id: str = Form(...),
-    session_id: str = Form(...),
-    page_number: str = Form(...),
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse | RedirectResponse:
     """Parent-side twin of k12ta.web.app's preview_page_entry -- same shape,
     same reasoning, a separate route because k12ta.keys is its own app and
-    cannot import a route from k12ta.web (docs/ARCHITECTURE.md). She reads a
-    page number off the photo herself, this shows what she's about to
-    confirm (the photo again, plus the page's own first few answers), and
-    commits nothing yet. A non-digit or non-positive submission redirects
-    back unchanged, same honest no-op as a stale pick."""
+    cannot import a route from k12ta.web (docs/ARCHITECTURE.md). She reads
+    the page's identity off the photo herself, this shows what she's about
+    to confirm (the photo again, plus the page's own first few answers), and
+    commits nothing yet.
+
+    Body-parsed rather than typed Form(...) params, same reason as
+    submit_confirm: the field shape varies with the source's current schema
+    -- a bare `page_number` for 0/1 components, one `component_{name}` per
+    component for 2+ (see k12ta.web.app.preview_page_entry's docstring for
+    why a single raw value can't be trusted as page_number once a second
+    component exists). For a 2+-component schema this only looks an existing
+    composite up -- never mints a new one -- so an untaught combination
+    redirects back unchanged, same honest no-op as a mistyped bare page
+    number always has here; a parent who wants to teach a durable mapping
+    uses the existing manual-mapping screen instead."""
     student, source = _require_student_and_source(conn, student_id, source_id)
 
-    if not page_number.isdigit() or int(page_number) <= 0:
-        return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
-    parsed_page_number = int(page_number)
+    data = parse_qs((await request.body()).decode())
+    capture_id = _get(data, "capture_id")
+    session_id = _get(data, "session_id")
+    schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    if len(schema) >= 2:
+        values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
+        if not all(values):
+            return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+        version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+        found = page_identities.get_page_number(
+            conn, student_id, source_id, build_composite_key(values), version
+        )
+        if found is None:
+            return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+        parsed_page_number = found
+    else:
+        page_number_raw = _get(data, "page_number").strip()
+        if not page_number_raw.isdigit() or int(page_number_raw) <= 0:
+            return RedirectResponse(
+                f"/keys/{student_id}/{source_id}/evaluations", status_code=303
+            )
+        parsed_page_number = int(page_number_raw)
 
     entries = answer_keys.get_entries_for_page(conn, student_id, source_id, parsed_page_number)
     preview = sorted(entries, key=lambda e: _problem_number_sort_key(e.problem_number))[
@@ -1305,28 +1333,42 @@ async def submit_manual_mapping(
 ) -> RedirectResponse:
     """Always recorded `source="manual"` -- this route exists precisely for
     values a parent supplies from their own knowledge, never the model's, so the
-    eval must never count one of these as a model success."""
+    eval must never count one of these as a model success. A 2+-component
+    schema derives page_number from the full composite (`resolve_or_assign_
+    page_number`) rather than trusting a bare typed field, for the same
+    collision reason `submit_confirm` does; a 0/1-component schema keeps
+    trusting a directly-typed literal, exactly as before this changed."""
     _require_student_and_source(conn, student_id, source_id)
     schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
     if not schema:
         raise HTTPException(400, "no identity schema configured for this source yet")
     data = parse_qs((await request.body()).decode())
-    page_number_raw = _get(data, "page_number").strip()
     values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
-    if page_number_raw.isdigit() and all(values):
-        version = page_identity_schemas.get_current_version(conn, student_id, source_id)
-        page_identities.upsert_identity(
-            conn,
-            page_identities.PageIdentityRow(
-                student_id=student_id,
-                source_id=source_id,
-                page_number=int(page_number_raw),
-                composite_key=build_composite_key(values),
-                schema_version=version,
-                confirmed_at=datetime.now(UTC).isoformat(),
-                source="manual",
-            ),
+    if not all(values):
+        return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+    composite_key = build_composite_key(values)
+    if len(schema) >= 2:
+        page_number, _ = page_identities.resolve_or_assign_page_number(
+            conn, student_id, source_id, composite_key, version
         )
+    else:
+        page_number_raw = _get(data, "page_number").strip()
+        if not page_number_raw.isdigit():
+            return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+        page_number = int(page_number_raw)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id=student_id,
+            source_id=source_id,
+            page_number=page_number,
+            composite_key=composite_key,
+            schema_version=version,
+            confirmed_at=datetime.now(UTC).isoformat(),
+            source="manual",
+        ),
+    )
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
@@ -1365,7 +1407,7 @@ def manual_answers_screen(
 
 def _manual_answer_row(data: dict[str, list[str]], i: int) -> tuple[str, str | None, str | None]:
     """Row i's (problem_number, answer_text, ungradeable_reason) from
-    manual_answers.html's submitted form -- same shape as _confirm_answer_row,
+    manual_answers.html's submitted form -- same shape as _confirm_answer_content,
     minus a per-row page_number: a manual session is scoped to one page,
     entered once at the top of the form, not repeated per row."""
     problem_number = _get(data, f"problem_number_{i}").strip()
@@ -1395,36 +1437,61 @@ async def submit_manual_answers(
     that page's identity too, no reason to make this two trips. Answer rows
     go through _save_answer_entry, the same never-silently-overwrite path
     submit_confirm's scanned rows use -- a conflict here renders resolve.html
-    exactly like a scanned one would. page_number is required (unlike
-    /identity/manual-entry's silent no-op on a blank field): discarding up to
-    twenty typed answers over one missing field is a worse failure than a
-    loud 400."""
+    exactly like a scanned one would. For a 0/1-component schema, page_number
+    is required as a bare typed field (unlike /identity/manual-entry's silent
+    no-op on a blank field): discarding up to twenty typed answers over one
+    missing field is a worse failure than a loud 400. For a 2+-component
+    schema, page_number comes from the full composite instead (same collision
+    reasoning as submit_confirm/submit_manual_mapping) -- there, it's the
+    identity component fields that are required, not a bare number."""
     student, source = _require_student_and_source(conn, student_id, source_id)
     data = parse_qs((await request.body()).decode())
     row_count = int(_get(data, "row_count", "0"))
-    page_number_raw = _get(data, "page_number").strip()
-    if not page_number_raw.isdigit():
-        raise HTTPException(400, "page_number is required")
-    page_number = int(page_number_raw)
     now = datetime.now(UTC).isoformat()
 
     schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
-    if schema:
+    if len(schema) >= 2:
         values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
-        if all(values):
-            version = page_identity_schemas.get_current_version(conn, student_id, source_id)
-            page_identities.upsert_identity(
-                conn,
-                page_identities.PageIdentityRow(
-                    student_id=student_id,
-                    source_id=source_id,
-                    page_number=page_number,
-                    composite_key=build_composite_key(values),
-                    schema_version=version,
-                    confirmed_at=now,
-                    source="manual",
-                ),
-            )
+        if not all(values):
+            raise HTTPException(400, "every identity field is required for this program")
+        version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+        composite_key = build_composite_key(values)
+        page_number, _ = page_identities.resolve_or_assign_page_number(
+            conn, student_id, source_id, composite_key, version
+        )
+        page_identities.upsert_identity(
+            conn,
+            page_identities.PageIdentityRow(
+                student_id=student_id,
+                source_id=source_id,
+                page_number=page_number,
+                composite_key=composite_key,
+                schema_version=version,
+                confirmed_at=now,
+                source="manual",
+            ),
+        )
+    else:
+        page_number_raw = _get(data, "page_number").strip()
+        if not page_number_raw.isdigit():
+            raise HTTPException(400, "page_number is required")
+        page_number = int(page_number_raw)
+        if schema:
+            values = [_get(data, f"component_{c.component_name}").strip() for c in schema]
+            if all(values):
+                version = page_identity_schemas.get_current_version(conn, student_id, source_id)
+                page_identities.upsert_identity(
+                    conn,
+                    page_identities.PageIdentityRow(
+                        student_id=student_id,
+                        source_id=source_id,
+                        page_number=page_number,
+                        composite_key=build_composite_key(values),
+                        schema_version=version,
+                        confirmed_at=now,
+                        source="manual",
+                    ),
+                )
 
     saved = 0
     conflicts = []
@@ -1679,28 +1746,27 @@ def _parse_discovery_panel_submission(
     return components
 
 
-def _confirm_answer_row(
+def _confirm_answer_content(
     data: dict[str, list[str]], i: int
-) -> tuple[str, int | None, str | None, str | None]:
-    """Row i's (problem_number, page_number, answer_text, ungradeable_reason)
-    from `confirm.html`'s submitted form, or ("", None, None, None) when the row
-    is an unused slot or has nothing valid to store (neither an answer nor
+) -> tuple[str, str | None, str | None]:
+    """Row i's (problem_number, answer_text, ungradeable_reason) from
+    `confirm.html`'s submitted form, or ("", None, None) when the row is an
+    unused slot or has nothing valid to store (neither an answer nor
     "ungradeable" -- storing it would violate answer_key_entries' CHECK
-    constraint anyway)."""
+    constraint anyway). Page-number determination is `submit_confirm`'s own
+    job now, not this function's -- it depends on the source's schema shape
+    (a bare typed field for 0/1 components, the full composite for 2+), not
+    just this one row's fields."""
     problem_number = _get(data, f"problem_number_{i}").strip()
     if not problem_number:
-        return "", None, None, None
-    page_number_raw = _get(data, f"page_number_{i}").strip()
-    if not page_number_raw.isdigit():
-        return "", None, None, None
-    page_number = int(page_number_raw)
+        return "", None, None
     if _get(data, f"ungradeable_{i}") == "1":
         reason = _get(data, f"ungradeable_reason_{i}").strip() or UNGRADEABLE_REASONS[0]
-        return problem_number, page_number, None, reason
+        return problem_number, None, reason
     answer_text = _get(data, f"answer_text_{i}").strip()
     if answer_text:
-        return problem_number, page_number, answer_text, None
-    return "", None, None, None
+        return problem_number, answer_text, None
+    return "", None, None
 
 
 def _answer_source(
@@ -1877,32 +1943,57 @@ async def submit_confirm(
     saved = 0
     conflicts = []
     for i in range(row_count):
-        problem_number, page_number, answer_text, ungradeable_reason = _confirm_answer_row(data, i)
-        if not problem_number or page_number is None:
+        problem_number, answer_text, ungradeable_reason = _confirm_answer_content(data, i)
+        if not problem_number:
             continue
-        pages_scanned.add(page_number)
 
+        composite_key: str | None = None
+        identity_source = "model"
         if schema:
             composite_key, identity_source = _confirm_identity_composite(data, i, field_keys)
-            if composite_key:
-                # The composite -> page_number mapping a student capture later
-                # resolves against. Populated here, not at upload time: this is
-                # the parent's *confirmed* page_number, which may differ from
-                # whatever the model originally guessed (same reasoning as
-                # answer_key_entries itself -- the confirmed value is what gets
-                # stored).
-                page_identities.upsert_identity(
-                    conn,
-                    page_identities.PageIdentityRow(
-                        student_id=student_id,
-                        source_id=source_id,
-                        page_number=page_number,
-                        composite_key=composite_key,
-                        schema_version=schema_version,
-                        confirmed_at=now,
-                        source=identity_source,
-                    ),
-                )
+
+        if len(schema) >= 2:
+            # A single component's raw printed value (a chapter's page-footer
+            # digit, say) is not safe to trust as this source's page_number --
+            # two different chapters' printed "page 4" would otherwise collide
+            # in answer_key_entries' primary key. The full composite is the
+            # only thing that can safely determine page_number here, so a row
+            # missing any one component has no page to attach it to at all.
+            if composite_key is None:
+                continue
+            page_number, _ = page_identities.resolve_or_assign_page_number(
+                conn, student_id, source_id, composite_key, schema_version
+            )
+        else:
+            # 0/1-component schema: a single component's own value already IS
+            # source-wide unique (Summer Bridge today), so the human confirming
+            # it keeps typing/editing a literal integer directly, exactly as
+            # before this change.
+            page_number_raw = _get(data, f"page_number_{i}").strip()
+            if not page_number_raw.isdigit():
+                continue
+            page_number = int(page_number_raw)
+        pages_scanned.add(page_number)
+
+        if composite_key:
+            # The composite -> page_number mapping a student capture later
+            # resolves against. Populated here, not at upload time: this is
+            # the parent's *confirmed* page_number, which may differ from
+            # whatever the model originally guessed (same reasoning as
+            # answer_key_entries itself -- the confirmed value is what gets
+            # stored).
+            page_identities.upsert_identity(
+                conn,
+                page_identities.PageIdentityRow(
+                    student_id=student_id,
+                    source_id=source_id,
+                    page_number=page_number,
+                    composite_key=composite_key,
+                    schema_version=schema_version,
+                    confirmed_at=now,
+                    source=identity_source,
+                ),
+            )
 
         conflict = _save_answer_entry(
             conn,

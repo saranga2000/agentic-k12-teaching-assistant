@@ -15,8 +15,10 @@
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">
   <input type="hidden" name="row_count" id="row_count" value="{{ rows|length }}">
 
+  {% if schema|length < 2 %}
   <label for="page_number">Page number</label>
   <input type="text" name="page_number" id="page_number">
+  {% endif %}
 
   {% if schema %}
   {% for component in schema %}

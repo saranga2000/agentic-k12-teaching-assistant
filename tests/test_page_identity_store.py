@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 from k12ta.store import (
+    answer_keys,
     content,
     db,
     key_page_images,
@@ -181,6 +182,133 @@ def test_upsert_then_get_round_trips() -> None:
         page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Section 1\x1fDay 11", 1)
         == 33
     )
+
+
+def test_resolve_or_assign_returns_an_existing_mapping_unchanged() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=33,
+            composite_key="CH.4\x1f4",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    page_number, was_new = page_identities.resolve_or_assign_page_number(
+        conn, "s-marcus", "summer_bridge", "CH.4\x1f4", 1
+    )
+
+    assert (page_number, was_new) == (33, False)
+
+
+def test_resolve_or_assign_mints_one_for_a_brand_new_composite_on_an_empty_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    page_number, was_new = page_identities.resolve_or_assign_page_number(
+        conn, "s-marcus", "summer_bridge", "CH.4\x1f4", 1
+    )
+
+    assert (page_number, was_new) == (1, True)
+
+
+def test_resolve_or_assign_mints_one_past_the_current_max_for_a_new_composite() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=7,
+            composite_key="CH.4\x1f4",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    page_number, was_new = page_identities.resolve_or_assign_page_number(
+        conn, "s-marcus", "summer_bridge", "CH.4\x1f13", 1
+    )
+
+    assert (page_number, was_new) == (8, True)
+
+
+def test_resolve_or_assign_avoids_colliding_with_answer_key_entries_alone() -> None:
+    """A manual answer-entry row can carry an arbitrary page_number even with no
+    page_identities row at all (k12ta.keys.app.submit_manual_answers) -- a fresh
+    surrogate must never collide with that table either."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=50,
+            problem_number="1",
+            answer_text="42",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    page_number, was_new = page_identities.resolve_or_assign_page_number(
+        conn, "s-marcus", "summer_bridge", "CH.4\x1f4", 1
+    )
+
+    assert (page_number, was_new) == (51, True)
+
+
+def test_resolve_or_assign_is_scoped_to_student_and_source() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-priya",
+            display_name="Priya",
+            grade_level=5,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-priya",
+            source_id="summer_bridge",
+            label="Summer bridge workbook",
+            kind="workbook",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-priya",
+            source_id="summer_bridge",
+            page_number=99,
+            composite_key="CH.4\x1f4",
+            schema_version=1,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+
+    page_number, was_new = page_identities.resolve_or_assign_page_number(
+        conn, "s-marcus", "summer_bridge", "CH.4\x1f4", 1
+    )
+
+    assert (page_number, was_new) == (1, True)
 
 
 def test_a_mapping_confirmed_under_an_older_schema_version_is_invisible_but_not_deleted() -> None:
