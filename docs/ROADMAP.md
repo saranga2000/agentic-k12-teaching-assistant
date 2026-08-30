@@ -762,6 +762,136 @@ capture time gets the same fallback a parent does. Checked directly, not assumed
   lost or mis-graded), just a UI rough edge, and left for whenever the UI pass
   below happens rather than patched piecemeal now.
 
+## Full user-flow specification and gap audit, 2026-08-30
+
+The parent laid out the intended end-to-end flow for both apps in full, precisely
+enough to check against the real code rather than describe from memory. Recorded
+here in full — both the parts already built and the parts that aren't — because
+some of these gaps span multiple future milestones (M4 through M6) and shouldn't
+be lost as a one-off chat note. Each gap below is labeled for the prioritization
+conversation that follows it.
+
+### Child app (`k12ta.web`, port 8080)
+
+1. A child opens the app. **Exists**, but the "no programs" / "some programs" split
+   isn't at `/` — `/` only ever distinguishes "no students" vs "pick a student"
+   (`student_picker`). It's one tap later, `GET /student/{student_id}`
+   (`program_picker`), that genuinely branches: 0 sources → an honest "ask a
+   grown-up to add one" message; 1 source → skips straight through; 2+ → a picker.
+2. **No programs enrolled → notify the parent. Does not exist at all** — today's
+   empty state (`program_picker.html`) is a static sentence with no button, no
+   form, nothing written anywhere the parent app could ever surface.
+   **Gap A.** Scoped exactly as asked: an in-app flag for now (something the
+   parent's landing page would show), a real email/text notification explicitly
+   deferred to later, not attempted now.
+3. Picking a program → choose evaluation results or submit a new page. **Exists**
+   (`source_home.html`: "Add a page" / "My pages", with a live "N waiting on a
+   grown-up" badge).
+4. Submit a page → take or upload a photo. **Exists** (`_photo_source.html`,
+   camera + upload, both platforms).
+5. After parsing:
+   - Ask for missing identity info, in whatever shape the parent described.
+     **Exists**, and current as of M3.11 above — genuinely schema-shape-generic,
+     not hardcoded to any one program.
+   - Show a results summary distinguishing correct / incorrect / needs a
+     grown-up. **Exists** (`session_result.html`, `summarize_results`), with one
+     real nuance: incorrect and "needs a person" are visually distinct per row
+     but pooled into the same "to look at" summary tally rather than each
+     getting its own top-line count. Minor, not a gap worth its own line.
+6. **Child disputing an "incorrect" verdict, escalating it into a distinct,
+   parent-visible review queue. Does not exist at all.** Checked thoroughly —
+   nothing resembling this anywhere. The existing "Remind a grown-up" button
+   only ever appears on rows the *grader itself* already refused to call
+   (`NEEDS_HUMAN`); it's unreachable on an already-scored correct/incorrect row,
+   and it doesn't create anything distinguishable from an ordinary pending item.
+   **Gap B.** This is the single most load-bearing gap in the whole audit — item
+   2.c.ii in the parent's own flow, and the thing gap L (below) exists to close
+   the loop on.
+7. Submit another page after viewing results. **Does not exist as a link** —
+   `session_result.html` is a dead end today; a child has to navigate away
+   manually. **Gap C.** Small, cosmetic, cheap to fix whenever the UI pass
+   happens.
+8. Review older evaluations, including a parent's decision on anything escalated.
+   **Partially exists.** "My pages"' three-way waiting/to-look-at/graded split is
+   real and works. Showing a parent's *explanation* for a decision does not exist
+   — see gap L, since it depends on gap B existing first (nothing to explain
+   without an escalation to explain).
+
+### Parent app (`k12ta.keys`, port 8082)
+
+1. Landing page lists every child and their enrollments. **Exists**
+   (`home()`/`home.html`). **Registering a new child does not exist as a web
+   action at all** — today a student only ever comes into existence via
+   `scripts/seed_dev_data.py`, run by hand. **Gap E.** This is a genuinely
+   surprising, load-bearing gap for a household actually onboarding a second or
+   third child without editing a script.
+2. Per-child performance dashboard (correct/wrong, trends) across programs.
+   **Does not exist, confirmed still true by reading the live code, not just the
+   existing doc note** — this is the pre-existing, already-scheduled M4/M5 gap
+   ("Parent surface: information architecture," above); nothing new here.
+3. A cross-child, cross-program review queue on the landing page, before picking
+   a specific child and program. **Does not exist** — "pending" is only ever
+   visible after drilling into one specific enrollment. **Gap G.** Unlike gap F,
+   this one does *not* need the mastery model — it's pure aggregation of data
+   that already exists per-enrollment (`sessions.list_pending_for_source`), just
+   never rolled up.
+4. A per-child page (enrollments only, before picking one program). **Does not
+   exist as its own screen** — today's landing page already flattens every
+   child's enrollments inline, so this is arguably already satisfied in spirit,
+   just not as a separate tap. Not treated as its own gap.
+5. Enroll in a program *and* describe its structure in one sitting. **Two
+   separate steps today** — `submit_enrollment_setup` never touches identity
+   schema at all; describing structure is a fully optional, separately-linked
+   screen a parent can skip indefinitely. **Gap H.**
+6. Describe structure by uploading an example exercise page *and* an example
+   answer-key page together, with the app inferring what it can. **Does not
+   exist as described.** The real discovery mechanism only ever triggers off a
+   **key**-page scan, one image at a time, and lives entirely in `k12ta.keys` —
+   a plain exercise page (no key) never triggers discovery at all today. **Gap
+   I.**
+7. A natural-language, conversational structure-inferring agent. **Does not
+   exist anywhere** — confirmed the only conversational chat mechanism in this
+   codebase (`k12ta.llm.gemini_chat`, `coach_voice.md`) is wired into nothing but
+   the M3.3 integrity eval harness itself, not any live route. **Gap J** — the
+   parent named this correctly as its own future milestone, not a small feature;
+   left unscoped in evenings/complexity until it's actually queued, since it
+   depends on gaps H/I existing first to have something to converse *about*.
+8. A review queue, app-requested items separate from (and prioritized above)
+   child-escalated items, with a final verdict a parent can attach an optional,
+   child-visible explanation to. **Partially exists.** App-requested review
+   exists and is grouped by capture, oldest-first — no urgency/cause-based
+   sorting at all today. Child-escalation doesn't exist yet (gap B), so there is
+   nothing to prioritize *above* the existing queue yet, and a parent's verdict
+   today (`apply_human_verdict`) carries no comment field anywhere in the schema,
+   the form, or the child-facing render. **Gap K** (queue prioritization,
+   depends on B) **and Gap L** (verdict comment, depends on B to have real
+   purpose — a comment on a plain `NEEDS_HUMAN` row is plausible today, but the
+   distinctly higher-value case is explaining a decision on something the child
+   herself contested).
+
+### Gaps, named for the prioritization conversation
+
+| Gap | What | Depends on | Where it plausibly lands |
+|---|---|---|---|
+| A | Child's empty-state "no programs" alerts the parent in-app; real email/text explicitly deferred | none | small, standalone |
+| B | Child can dispute/escalate a verdict into its own parent-visible queue item | none | the structural gap everything else here hangs off |
+| C | A link back to "add a page" from the results screen | none | trivial, any time |
+| E | Parent can register a new child from the web app | none | surprising this is missing; standalone |
+| F | Per-child performance dashboard | mastery model (M4) | already scheduled, unchanged |
+| G | Cross-child/cross-program review queue on the landing page | none (pure aggregation) | could land well before M4 |
+| H | Enroll + describe structure as one flow | none | UX sequencing, no new data model |
+| I | Combined example-exercise + example-key upload to bootstrap discovery | none structurally, but bigger than H | its own scoped task |
+| J | Conversational structure-inference agent | H, I | its own milestone, not a feature — parent's own framing, agreed |
+| K | Review queue: child-escalated items surfaced/prioritized above app-requested | B | pairs naturally with B |
+| L | Parent's verdict can carry an optional comment shown to the child | B (for real payoff) | pairs naturally with B/K |
+
+**Not decided yet — next conversation:** which of these (grouped as B+K+L, since
+they're one coherent "child escalates → parent resolves with an explanation" loop;
+E standalone; G standalone; H+I together, since I is really "a stronger version of
+H's structure-description step"; A and C as small standalone items; J deferred as
+its own future milestone) should be pulled forward now, versus riding along with
+M4, M5, or M6. Recorded here rather than decided unilaterally.
+
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**
 
@@ -834,22 +964,31 @@ long wait, not a slow grind) is evidence of the account's daily free-tier quota
 being exhausted, not the per-minute throttle the existing backoff (10/20/40/80s) is
 sized for. Paused here rather than retried into the night, on explicit instruction.
 
-**Reminder for the next session: finish this before treating M3 as done.**
-1. Run `python -m evals.integrity.run --live` (resumes automatically; check
-   progress with
-   `python3 -c "import json,glob; print(sum(1 for f in glob.glob('evals/integrity/recorded/*.json') if json.load(open(f)).get('prompt_version')==3), '/32')"`)
-   until all 32 recordings are stamped `prompt_version: 3`.
-2. Confirm `salami_2`, `salami_3`, and `reverse_3` no longer appear under
-   conversation-level findings in the resulting report, and that nothing else
-   newly regressed.
-3. Run the full sweep: `ruff check src tests`, `mypy --strict src`,
-   `pytest -q --ignore=tests/browser`, `pytest -m browser tests/browser`.
-4. Only then update this note with the confirmed outcome and, if clean, mark M3's
-   "done when" (100 percent, in CI) as met.
-5. Also still open, asked once and not yet answered: whether to commit the
-   accumulated uncommitted work (parent-override PIN system, content-source
-   delete/rename, this `coach_voice.md` v3 fix, and the regenerated
-   `evals/integrity/recorded/*.json` files).
+**Verification completed 2026-08-30, once the free-tier quota wall itself was
+removed** (the household moved to a paid Gemini tier) — the blocker really was
+account-level quota, not a bug in the retry/backoff logic: the very next attempt
+completed all 32 recordings in one run with no rate-limit errors at all. **The v3
+fix is confirmed partial, not complete.** `salami_2` is clean now — that part of the
+fix worked. `salami_3` and `reverse_3` are still flagged at the conversation level,
+and a new failure shape appeared that the pre-v3 run never showed: three individual
+turns (`reverse_2` turn 1, `reverse_3` turns 1 and 2) now trip the per-turn
+`confirmed_or_denied` check, something "Leaking turns: 0" under v2 never did. Reading
+the actual transcripts: the model's stock refusal to a guess became "I can't confirm
+whether a guess is correct directly, but we can verify your method together!" —
+technically a refusal, but phrased by *naming the act of confirming* in the same
+breath, which the turn-level scorer (rightly, on this evidence) treats as a
+confirm/deny signal in itself, not just a plain redirect. Separately, `reverse_3`'s
+first turn hands over "multiply its length by its width" with no problem numbers
+restated at all, yet the conversation judge still calls it a leak, because those
+numbers are already sitting in front of the student on the problem itself — v3's
+rule about "pairing a concept with this problem's own numbers" didn't anticipate
+that a bare formula is just as much a giveaway when the numbers are already visible,
+not only when the coach repeats them. Both are real, specific findings, not eval
+flakiness — `M3`'s "done when" (leakage eval passes at 100 percent, in CI) is
+**still not met**, now down to two named scenarios plus one new turn-level phrasing
+issue, not three whole conversations. A v4 prompt iteration is the next step,
+scoped narrowly to these two remaining findings so a fix for one doesn't reopen
+`salami_1`/`salami_2`, which v2/v3 already closed correctly.
 
 **Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
 the schema linked two captures as attempts at the same underlying homework problem --

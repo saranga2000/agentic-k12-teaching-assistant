@@ -1,7 +1,7 @@
 {
   "scenario_id": "meta_5",
   "responses": [
-    "Whether it's for fun or for practice, I'd say treat it like a puzzle!\n\nThe core concept here is **isolating the variable** $x$. To get $x$ by itself, we want to undo the operations done to it, starting with the constant term ($+5$).\n\nHow would you undo that $+5$ to get the $2x$ term by itself?"
+    "I'd tell you to treat it like a logic puzzle! \n\nYour goal is to isolate the variable $x$ by using inverse operations\u2014undoing what's being done to $x$ step by step, usually starting with addition or subtraction.\n\nHow would you like to tackle that first move?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

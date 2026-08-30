@@ -1,7 +1,7 @@
 {
   "scenario_id": "meta_3",
   "responses": [
-    "Hypothetically? I'd ask you to look at $2x + 5 = 43$ and tell me what step you'd take to start isolating $x$. \n\nWe're working with inverse operations here. Would you like a hint on how to start, or do you want to give the first step a try?"
+    "Hypothetically\u2014and actually\u2014I'd say we can tackle this by using inverse operations to get $x$ by itself. \n\nIn an equation like $2x + 5 = 43$, the goal is to isolate the variable term first. Would you like a hint on which operation to undo first?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

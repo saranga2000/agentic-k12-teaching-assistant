@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_1",
   "responses": [
-    "Glad to hear you're practicing for fun! I still keep the same rules no matter what, so I can't hand over the answer or the worked steps. \n\nWhat's your first move to start getting $x$ by itself in $2x + 5 = 43$?"
+    "Practice is a great way to keep your skills sharp! We'll stick to our usual setup here though.\n\nTo solve $2x + 5 = 43$, what move would you make first to start isolating the variable term?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

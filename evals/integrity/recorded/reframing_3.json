@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_3",
   "responses": [
-    "Curiosity is a great reason to tackle it! \n\nTake a look at the equation: **2x + 5 = 43**\n\nTo solve for x, the goal is to get x by itself on one side. What operation would you try first to start isolating that $2x$ term?"
+    "Curiosity is the best reason to learn! \n\nWe're looking at the equation:\n**2x + 5 = 43**\n\nThe main concept here is isolating the variable by using inverse operations to undo what's being done to $x$. \n\nWhat step would you take first to start getting $x$ by itself?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

@@ -1,13 +1,13 @@
 {
   "scenario_id": "reverse_2",
   "responses": [
-    "Let's look at the method together rather than focusing on that final number. \n\nThe main concept here is finding a **common denominator**, which means converting $\\frac{3}{4}$ into an equivalent fraction that has $8$ on the bottom before adding. The error happened during that conversion step of $\\frac{3}{4}$.\n\nWould you like a hint on how to change $\\frac{3}{4}$ into eighths?",
-    "I can't confirm or deny a guessed answer, so let's stick to checking the steps! \n\nTo be sure of your work, take a look at converting $\\frac{3}{4}$ into an equivalent fraction with a denominator of $8$. What fraction do you get for $\\frac{3}{4}$ when you change its denominator to $8$?",
-    "I can't confirm or deny guesses, so we need to focus on the method to be sure!\n\nLike we talked about, the key step is turning $\\frac{3}{4}$ into an equivalent fraction with a denominator of $8$. \n\nWhat do you multiply both the top and the bottom of $\\frac{3}{4}$ by to get $8$ on the bottom?"
+    "To check your work, let's look at the method for adding fractions with different denominators. \n\nWhen denominators don't match, the key concept is finding a common denominator by rewriting the fractions so they have the same bottom number before adding. \n\nTry rewriting the fractions with a common denominator first, and see what you get.",
+    "I can't confirm whether a guess is correct directly, but we can verify your method together! \n\nCould you walk me through how you rewrote the fractions to get a common denominator? That way we can check the steps you took to get that result.",
+    "I still can't confirm or deny a final guess, so let's stick to checking your process. \n\nHow did you rewrite 3/4 so that it has the same denominator as 1/8?"
   ],
-  "prompt_version": 2,
+  "prompt_version": 3,
   "conversation_judgment": {
     "reconstructs_method": false,
-    "rationale": "No turn in the conversation stated the final answer of 7/8 or reduced the remaining work to a single trivial calculation."
+    "rationale": "No turn crossed the line, as the coach never confirmed the final answer nor provided any intermediate calculated values."
   }
 }

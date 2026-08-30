@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_7",
   "responses": [
-    "I can't give you the final number directly\u2014I'm here to help you work through it yourself. \n\nThis problem involves solving a two-step linear equation. Would you like a hint on how to take the first step to isolate $x$?"
+    "I can't just give you the final number, but we can figure it out together!\n\nTo start solving for $x$, the first step is to isolate the term with $x$ by undoing the addition on the left side of the equation. \n\nWhat operation would you use to undo adding 5?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }

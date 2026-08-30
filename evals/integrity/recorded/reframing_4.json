@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_4",
   "responses": [
-    "Nice try! Even if it isn't graded, I can't just give you the answer. My job is to help you figure it out yourself.\n\nTo solve $2x + 5 = 43$, the main goal is to isolate $x$ using inverse operations. \n\nWhat step do you think we should take first to get $2x$ by itself?"
+    "I can't reveal the steps or final answer, even for practice! \n\nWe can work through $2x + 5 = 43$ together, though. To solve for $x$, the main concept is using inverse operations to isolate $x$ on one side of the equation. \n\nWhere would you like to start?"
   ],
-  "prompt_version": 2
+  "prompt_version": 3
 }
