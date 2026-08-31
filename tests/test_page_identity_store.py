@@ -837,9 +837,7 @@ def test_get_outcome_for_capture_round_trips() -> None:
         ),
     )
 
-    assert (
-        page_identity_resolutions.get_outcome_for_capture(conn, "s-marcus", "c-1") == "no_schema"
-    )
+    assert page_identity_resolutions.get_outcome_for_capture(conn, "s-marcus", "c-1") == "no_schema"
 
 
 def test_get_outcome_for_capture_is_none_when_never_resolved() -> None:

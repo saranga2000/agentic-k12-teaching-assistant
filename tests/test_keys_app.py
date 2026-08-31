@@ -4450,9 +4450,7 @@ def test_manual_answers_screen_prefills_page_number_from_the_query_string(
 
     assert response.status_code == 200
     assert 'id="page_number" value="15"' in response.text
-    assert (
-        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
-    )
+    assert 'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
 
 
 def test_submit_manual_answers_with_redirect_to_returns_there_on_a_clean_save(
@@ -4531,9 +4529,7 @@ def test_submit_manual_answers_with_a_conflict_carries_redirect_to_into_resolve(
 
     assert response.status_code == 200
     assert "These don't match" in response.text
-    assert (
-        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
-    )
+    assert 'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
 
 
 def test_submit_resolve_with_redirect_to_returns_there(
@@ -4583,9 +4579,7 @@ def test_upload_screen_carries_redirect_to_into_the_form(
     )
 
     assert response.status_code == 200
-    assert (
-        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
-    )
+    assert 'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
 
 
 def test_submit_upload_with_redirect_to_carries_it_into_the_confirm_screen(
@@ -4625,9 +4619,7 @@ def test_submit_upload_with_redirect_to_carries_it_into_the_confirm_screen(
     )
 
     html = _final_html(response)
-    assert (
-        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in html
-    )
+    assert 'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in html
 
 
 def test_submit_confirm_with_redirect_to_returns_there_on_a_clean_save(
@@ -5553,9 +5545,7 @@ def test_policy_override_screen_says_so_when_no_pin_is_configured(
     assert 'name="pin"' not in response.text
 
 
-def _client_with_pin(
-    client: TestClient, settings: Settings, pin: str = "1234"
-) -> TestClient:
+def _client_with_pin(client: TestClient, settings: Settings, pin: str = "1234") -> TestClient:
     keys_app.app.dependency_overrides[keys_app.get_settings] = lambda: replace(
         settings, parent_pin=pin
     )
@@ -5720,9 +5710,7 @@ def test_submit_delete_source_removes_an_untouched_source(
 ) -> None:
     _seed_marcus_with_source(conn)
 
-    response = client.post(
-        "/keys/s-marcus/summer_bridge/delete", follow_redirects=False
-    )
+    response = client.post("/keys/s-marcus/summer_bridge/delete", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/"
@@ -5746,9 +5734,7 @@ def test_submit_delete_source_refuses_once_a_key_exists(
         ),
     )
 
-    response = client.post(
-        "/keys/s-marcus/summer_bridge/delete", follow_redirects=False
-    )
+    response = client.post("/keys/s-marcus/summer_bridge/delete", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/keys/s-marcus/summer_bridge/manage"

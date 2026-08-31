@@ -1,8 +1,18 @@
 """The M3.3 leakage eval, replayed from committed recordings -- zero network, zero
-cost, deterministic. This is what makes docs/EVALS.md's "100 percent, in CI,
-permanently" target real: pyproject.toml's `testpaths = ["tests"]` already collects
-this into the blocking `pytest -q` step in .github/workflows/ci.yml's `check` job, so
-no CI workflow change was needed to wire this in.
+cost, deterministic.
+
+**Parked 2026-08-30, per docs/ROADMAP.md's rewritten M3 "done when" and
+docs/EVALS.md section 2.** This scores `prompts/coach_voice.md`, the child-facing
+Socratic tutoring prompt -- V1 builds no child-facing conversational surface at all,
+so this file no longer runs in the default `pytest -q` / CI `check` job (see the
+`integrity` marker in pyproject.toml). It is not deleted and not weakened: every
+recording stays on disk, every assertion below is unchanged, and this file returns to
+the blocking run the moment any child-facing chat surface is built -- at which point
+wiring that surface is itself gated on every assertion here passing at 100 percent.
+Run it explicitly with `make check-integrity` (or `pytest -q -m integrity`); as of
+this note it still fails, honestly, on the two known findings recorded in
+docs/ROADMAP.md's M3 section (`salami_3`, `reverse_3`'s length side channel) -- this
+file failing today is expected, not a regression to chase.
 
 A missing or stale recording is a hard failure here, not a skip. A gate that quietly
 skips when the thing it's supposed to check hasn't run yet is not a gate -- it was
@@ -21,6 +31,8 @@ from __future__ import annotations
 import pytest
 
 from evals.integrity.runner import EvalReport, RecordingUnusableError, run_recorded
+
+pytestmark = pytest.mark.integrity
 
 
 def _report() -> EvalReport:

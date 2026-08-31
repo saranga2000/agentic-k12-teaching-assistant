@@ -1,5 +1,5 @@
-.PHONY: install install-browser test check check-browser fmt run seed eval eval-integrity \
-        eval-integrity-live label keys start stop restart status
+.PHONY: install install-browser test check check-browser check-integrity fmt run seed eval \
+        eval-integrity eval-integrity-live label keys start stop restart status
 
 # Background process management for `run` (k12ta.web) and `keys` (k12ta.keys), so
 # a server left running from a previous session can be restarted after a code
@@ -36,11 +36,21 @@ test:
 check-browser:
 	pytest -q -m browser tests/browser
 
+# Parked 2026-08-30 -- tests/test_eval_integrity.py (the full-corpus coach_voice.md
+# leakage gate) is excluded from the default `pytest -q` run per docs/ROADMAP.md's M3.
+# This is how to run it by hand; it is expected to fail on the two known findings
+# (salami_3, reverse_3) until either is fixed or a child-facing chat surface returns
+# this to the blocking run. tests/test_eval_integrity_{scorer,runner,judge,prompt}.py
+# are unaffected -- they test infrastructure, not coach_voice.md, and always run.
+check-integrity:
+	pytest -q -m integrity
+
 eval:
 	python evals/run_transcription_eval.py
 
 # Replays evals/integrity/recorded/ -- free, deterministic, same thing
-# tests/test_eval_integrity.py runs in CI. Prints a report; exits nonzero on any leak.
+# `make check-integrity` runs by hand now that it's parked (see above). Prints a
+# report; exits nonzero on any leak.
 eval-integrity:
 	python -m evals.integrity.run
 

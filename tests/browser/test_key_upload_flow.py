@@ -195,9 +195,7 @@ def test_clicking_the_confirm_screens_photo_opens_and_closes_the_lightbox(
     expect(page.locator("#lightbox-overlay")).to_be_hidden()
     photo.click()
     expect(page.locator("#lightbox-overlay")).to_be_visible()
-    expect(page.locator("#lightbox-image")).to_have_js_property(
-        "src", photo.get_attribute("src")
-    )
+    expect(page.locator("#lightbox-image")).to_have_js_property("src", photo.get_attribute("src"))
 
     page.locator("#lightbox-overlay").click()
     expect(page.locator("#lightbox-overlay")).to_be_hidden()

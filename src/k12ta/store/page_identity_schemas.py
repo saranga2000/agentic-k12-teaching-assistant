@@ -125,7 +125,7 @@ def save_new_schema(
 def get_current_schema_provenance(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> str | None:
-    """"parent" or "unconfirmed" for the source's current schema version, or
+    """ "parent" or "unconfirmed" for the source's current schema version, or
     None if it has no schema at all yet. Gap O: this is what decides whether
     a result graded under this schema is shown to the child as provisional,
     and whether k12ta.keys's identity_schema_screen shows the "not yet

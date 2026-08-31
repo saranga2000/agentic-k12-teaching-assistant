@@ -205,6 +205,4 @@ def discover_identity_from_example_page(
         logger.info("example-page discovery transcribe outcome=failed reason=%s", result.failure)
         return {}
 
-    return {
-        name: values[0] for name, values in result.page_identity.candidates.items() if values
-    }
+    return {name: values[0] for name, values in result.page_identity.candidates.items() if values}

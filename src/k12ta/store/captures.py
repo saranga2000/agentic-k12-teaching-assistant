@@ -187,9 +187,7 @@ def rename_problem_id(
         (student_id, capture_id, new_problem_id),
     ).fetchone()
     if collision is not None:
-        raise ValueError(
-            f"problem {new_problem_id!r} already exists on capture {capture_id!r}"
-        )
+        raise ValueError(f"problem {new_problem_id!r} already exists on capture {capture_id!r}")
     # Renaming a value a foreign key references (graded_problems.problem_id ->
     # problems.problem_id) trips PRAGMA foreign_keys = ON (k12ta.store.db) the
     # instant either table is updated alone -- whichever goes first, the other

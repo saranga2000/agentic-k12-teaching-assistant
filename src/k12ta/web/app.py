@@ -211,7 +211,7 @@ def source_home(
     source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse:
-    """"Add a page" or "My pages" -- the second half of the choice
+    """ "Add a page" or "My pages" -- the second half of the choice
     program_picker starts. The pending count reuses the same query
     (sessions.list_pending_for_source) the parent-facing pending list is
     built from, purely so a child can see "3 waiting on a grown-up" before

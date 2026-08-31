@@ -194,9 +194,7 @@ def home(
             student=student,
             sources=(sources := content.list_content_sources(conn, student.student_id)),
             program_requested_at=(
-                program_requests.get_requested_at(conn, student.student_id)
-                if not sources
-                else None
+                program_requests.get_requested_at(conn, student.student_id) if not sources else None
             ),
         )
         for student in students.list_students(conn)
@@ -1266,9 +1264,7 @@ async def preview_page_entry(
     else:
         page_number_raw = _get(data, "page_number").strip()
         if not page_number_raw.isdigit() or int(page_number_raw) <= 0:
-            return RedirectResponse(
-                f"/keys/{student_id}/{source_id}/evaluations", status_code=303
-            )
+            return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
         parsed_page_number = int(page_number_raw)
 
     entries = answer_keys.get_entries_for_page(conn, student_id, source_id, parsed_page_number)
@@ -2260,7 +2256,7 @@ def _confirm_answer_content(
 def _answer_source(
     data: dict[str, list[str]], i: int, answer_text: str | None, ungradeable_reason: str | None
 ) -> str:
-    """"model" if row i's final answer_text/ungradeable_reason match what
+    """ "model" if row i's final answer_text/ungradeable_reason match what
     `confirm.html` rendered as `answer_text_original_{i}`/
     `ungradeable_reason_original_{i}` (the model's own transcription at
     render time), "manual" if a parent changed either on screen before

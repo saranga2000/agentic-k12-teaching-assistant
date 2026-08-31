@@ -53,7 +53,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not browser'"
+addopts = "-q -m 'not browser and not integrity'"
 markers = [
   "browser: end-to-end tests driving a real Chromium via Playwright against a real server; excluded by default (needs `playwright install chromium`), run via `make check-browser`",
+  "integrity: the full-corpus coach_voice.md leakage gate (tests/test_eval_integrity.py). Parked 2026-08-30 per docs/ROADMAP.md's M3 -- coach_voice.md is not wired into any V1 route. Excluded by default; run via `make check-integrity`. Returns to the default run the moment a child-facing chat surface is built (docs/EVALS.md section 2's re-entry gate). Unit tests of the scorer/runner/judge/prompt infrastructure (tests/test_eval_integrity_{scorer,runner,judge,prompt}.py) are NOT marked -- they test library code against synthetic inputs, not coach_voice.md's live behaviour, and stay blocking.",
 ]

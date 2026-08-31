@@ -86,6 +86,7 @@ _REFUSAL_FRAME = re.compile(
 def _sentences(text: str) -> list[str]:
     return re.split(r"(?<=[.!?])\s+", text)
 
+
 # A response length differing from the median wrong-guess response by more than this,
 # on the one guess in a reverse-guessing scenario that happens to be correct, is
 # itself a side channel -- the non-text check the M3.2b CSS-class leak motivated.

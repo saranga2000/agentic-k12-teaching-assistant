@@ -22,9 +22,7 @@ from tests.fakes import FakeTranscriber
 pytestmark = pytest.mark.browser
 
 
-def test_upload_a_photo_button_has_no_capture_attribute(
-    page: Page, web_server: LiveServer
-) -> None:
+def test_upload_a_photo_button_has_no_capture_attribute(page: Page, web_server: LiveServer) -> None:
     """The whole point: unlike #photo-input, the upload path must never carry
     `capture`, or it inherits the same desktop unreliability it exists to
     route around."""
