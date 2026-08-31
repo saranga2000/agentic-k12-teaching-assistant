@@ -173,7 +173,7 @@ A report card passes that test. A progress dashboard, a "she is regressing in fr
 claim, and a weekly brief with skill language do not. Collecting *non-evaluatory* results
 — a school report card, an online platform's own score — is not V1's job either.
 
-**V2 does not start until the household is using V1 daily and M0–M8's own "done when"
+**V2 does not start until the household is using V1 daily and M0–M9's own "done when"
 bars are met** — the same "do not build placeholder screens for sections with no data
 behind them" discipline this doc applies under "Parent surface: information architecture"
 below.
@@ -976,7 +976,8 @@ capture time gets the same fallback a parent does. Checked directly, not assumed
   the same three-component shape is proven through the real write path, not just
   the pure resolution function (`tests/test_keys_app.py`).
 - One real, minor friction point found and left as-is rather than silently
-  "fixed": the standalone schema editor (`identity_schema.html`) offers only 3
+  "fixed" (**now owned by M9b**, the UI pass this bullet anticipated before such a
+  milestone existed): the standalone schema editor (`identity_schema.html`) offers only 3
   blank rows beyond a source's current schema per visit -- a parent describing a
   program needing more components than that in one sitting has to save once and
   reopen the editor to get 3 more. Not a resilience or correctness gap (nothing is
@@ -1678,6 +1679,66 @@ codebase already does and a chat surface is the most likely place to quietly ski
 - **It gets its own prompt and its own eval.** `coach_voice.md` is not reusable here.
   `AGENTS.md` rule 7 applies: prompts are versioned artefacts covered by evals.
 
+### M9. Design system and the premium UI/UX pass
+**New 2026-08-30.** Both apps, to a genuinely premium standard: consistent, beautiful,
+and coherent rather than an accumulation of screens that each got built when its feature
+did. This also closes a reference that was already dangling — M3.10 and M3.11 both defer
+rough edges to "whenever the UI pass happens," and until now no such milestone existed.
+
+**Two halves, and the ordering between them matters:**
+
+**9a. The design system — a prerequisite, not a finale.** Design tokens (colour, type
+scale, spacing, radius, state), a small set of base components, and **one shared
+stylesheet consumed by both apps**. Today `k12ta.web` and `k12ta.keys` each have their
+own `Jinja2Templates` directory and shared markup is physically duplicated
+(`_photo_source.html` exists twice, by necessity). That is how divergence gets in.
+
+**Land 9a before M7 and M8 build their new screens**, or report cards, archiving, the
+attempt history and the chat surface all get built in the old idiom and then rebuilt.
+This is the one part of M9 that is cheaper early than late.
+
+**9b. The polish pass** across every existing screen in both apps, once 9a exists.
+
+**Two audiences, one system, deliberately not two products:**
+- **The child** — a tablet, often 8:40pm, often tired, sometimes six years old and
+  sometimes twelve. Large tap targets, minimal reading, obvious next action, legible at
+  arm's length. **Grade-band UX variation is explicitly V3, not this** — V1 ships one
+  design that works honestly for both children rather than two skins.
+- **The parent** — 9pm, phone or laptop, wants to know what needs them and act on it.
+  Denser and more scannable than the child's surface. A queue, not a dashboard.
+
+**Hard constraints, because a "premium look" is exactly where they get quietly broken:**
+- **No build step, no frontend toolchain.** `docs/ARCHITECTURE.md` commits to
+  server-rendered pages with a tablet browser as the whole client, and that is a
+  reviewability decision, not inertia. No React, no Tailwind build, no bundler. Any new
+  runtime dependency needs its own justifying line in `ARCHITECTURE.md` per `AGENTS.md`
+  rule 4 — a CSS file needs none, and that is the point.
+- **The two-tap capture path is not negotiable.** `docs/PROMPT_REVIEW.md` Gap 3 states
+  the binding constraint plainly: if capture takes longer than roughly ten seconds and
+  two taps, adoption goes to zero and none of the rest matters. **A design that adds one
+  tap to capture is a failed design**, however good it looks. Count the taps before and
+  after.
+- **Empty and failure states are part of the design system, not afterthoughts.**
+  `AGENTS.md` rule 11 already requires every screen to render something intelligible when
+  its data is empty or a call fails. Those states get designed here, not improvised — the
+  first bug this project ever shipped was a capture screen rendering as a blank black
+  page with no students seeded.
+- **An accessibility baseline**: contrast ratios, tap-target sizes, and respecting the
+  system text size a parent may have already enlarged for a six-year-old. This is the
+  ordinary floor, and is **distinct from V3's parent-configured accommodation
+  preferences**, which stays V3.
+- **Responsive across the real devices**, per `docs/DEPLOYMENT.md`: an iPad Air M1 in an
+  ordinary Chrome tab, a phone as backup capture, and a MacBook for the parent.
+
+**Screens that will exist by the time 9b runs**, so none is forgotten: student picker,
+program picker, source home, capture, results, my-pages, dispute; and parent home,
+review queue, evaluations, enrollment setup, identity schema, key upload/confirm, manual
+entry, answer keys, policy override, report cards.
+
+Done when: both apps share one stylesheet and one token set, every screen in the list
+above has been through the pass including its empty and failure states, and the capture
+path still takes two taps — measured, not assumed.
+
 ### Later, in priority order — not milestones, not scheduled
 
 1. Second persona for the younger child, as a parent-run routine with streaks and no
@@ -1698,7 +1759,7 @@ quiz generation from diagnosed misconceptions" → V2; "study-buddy group mode" 
 ## V2. Learning intelligence
 
 **Not scheduled. Starts only once V1 is proven in real daily household use and
-M0–M8's own "done when" bars are met — see "V1. Evaluate, parent as final authority"
+M0–M9's own "done when" bars are met — see "V1. Evaluate, parent as final authority"
 above, which states that gate.** M3's bar is the one deliberately-rewritten exception:
 its original leakage-eval bar was moved out of V1 with the child-tutoring feature it
 covered, so M3 is measured against what it actually ships (see M3). The unnumbered
@@ -1886,14 +1947,18 @@ the answers to.
 
 The honest cut list, in order:
 
-1. **M8** (conversational assistant). Everything it does is reachable through the forms
+1. **M9b** (the polish pass), but **never M9a** (the design system). The tokens and the
+   shared stylesheet are what stop every later screen accumulating its own idiom, so
+   cutting 9a saves an evening now and costs several later. Cutting 9b leaves a plain
+   app that works.
+2. **M8** (conversational assistant). Everything it does is reachable through the forms
    and buttons that already exist. It is the largest single win in *ease*, and the
    smallest in *capability*.
-2. **M7's report cards.** The data is all there and can be read off the per-enrollment
+3. **M7's report cards.** The data is all there and can be read off the per-enrollment
    screens. Keep M7's archiving and attempt flow — archiving is what stops a finished
    program cluttering every screen forever, and the attempt cap is a correctness
    behaviour, not a nicety.
-3. **M5's fixture promotion.** Keep the audit trail; the automatic promotion of
+4. **M5's fixture promotion.** Keep the audit trail; the automatic promotion of
    corrections into the eval corpus can be done by hand for a while.
 
 **Do not cut M6.** If evenings genuinely disappear, cut M6's *scope* instead of the

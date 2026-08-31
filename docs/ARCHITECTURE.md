@@ -183,7 +183,12 @@ call and needs re-deriving.
 - **pydantic**: validation at the HTTP and model-output boundary only. Domain objects
   stay as plain dataclasses so they are cheap to reason about.
 - **fastapi + jinja2**: server-rendered pages, no build step, no frontend toolchain. A
-  tablet browser is the whole client.
+  tablet browser is the whole client. **This survives M9's premium UI/UX pass
+  unchanged** — that milestone delivers a design system as tokens and one shared
+  stylesheet, not a framework. No React, no Tailwind build, no bundler. "It would look
+  better with a component library" is exactly the argument this line exists to refuse;
+  the cost of a toolchain is paid by every future reviewer, and `docs/ROADMAP.md`'s M9
+  states the constraint again where someone doing UI work will actually read it.
 - **sqlite via stdlib**: single household, single machine. No ORM. If schema pain
   arrives, that is the moment to reconsider, not before.
 - **httpx**: model calls.
