@@ -249,6 +249,43 @@ because nothing before M6 ever asked a model to judge an answer.
 
 Target: state a number per slice. Do not ship the "mark wrong" flag on a vibe.
 
+### The key-withheld method for measuring the keyless path
+
+**Added 2026-08-30.** The keyless path's problem is that it has no ground truth by
+definition — that is the whole reason it exists. Summer Bridge solves this for free:
+it has **real confirmed answer keys and real graded child captures already on disk**.
+
+The method: **withhold the key from the evaluator.** Run a Summer Bridge page through
+the keyless path as though no key existed, let the agent generate its own answers and
+judge the child's work, then score against the key it never saw. The key is the golden
+set. No labelling session, no new photographs, and it can be re-run for free after any
+prompt change against pages already captured.
+
+**Two separate numbers, never conflated into one:**
+
+1. **Answer-generation accuracy** — did the agent's generated answer match the key?
+2. **Verdict accuracy** — did the agent judge the child's answer correctly?
+
+These come apart in a way that matters: an agent that generates a wrong answer can still
+mark the child correct by luck, or because the child made the same mistake. Reporting
+only (2) would hide a broken solver. Report both.
+
+**Three limits, stated so a good number is not over-read:**
+
+- **Summer Bridge is not the hard case.** The keyless path's real exposure is RSM
+  Pre-Algebra Advanced, where the model's own competence on grade-level problems is the
+  binding constraint (`docs/PROMPT_REVIEW.md` Gap 6). A strong Summer Bridge number does
+  **not** transfer. Do not quote it as evidence the keyless path is safe for RSM.
+- **A handful of pages is a smoke test, not a calibration number.** M6's "done when"
+  requires precision per confidence band. Five pages cannot produce that. A small run
+  finds crashes, prompt failures, and gross errors — which is worth doing first and
+  cheaply — but it must be labelled a smoke test wherever it is written down.
+- **Cap the spend before running it.** This repo has a recorded incident: a 429-retry
+  loop with no circuit breaker burned 108 requests against a 9-page corpus, invisible in
+  every log and test, visible only on the provider's billing dashboard
+  (`docs/PROGRESS.md`, M1). Any live run needs a hard request cap, a per-run count logged
+  where a human sees it, and no automatic retry into a failure it does not understand.
+
 ## Running
 
 ```bash
