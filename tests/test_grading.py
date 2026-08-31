@@ -19,6 +19,32 @@ def test_normalisation_handles_unicode_minus_and_spacing() -> None:
     assert normalise(" −14 ") == normalise("-14")
 
 
+def test_normalisation_unifies_nfc_and_nfd_tamil_spellings_of_the_same_word() -> None:
+    """ "kodi" (Tamil for "flag"), written two byte-different, visually-identical
+    ways: the vowel sign in the first syllable can be typed as a single
+    precomposed mark (U+0BCA) or as the two combining marks it canonically
+    decomposes to (U+0BC6 U+0BBE) -- keyboards, OCR, and OSes disagree on which
+    one they emit for the exact same glyph. Built from explicit \\uXXXX escapes,
+    not literal source characters, so this test does not depend on any tool in
+    the edit path preserving raw non-ASCII bytes exactly.
+    """
+    precomposed = "\u0b95\u0bca\u0b9f\u0bbf"  # KA + O-SIGN(precomposed) + TA + I-SIGN
+    decomposed = "\u0b95\u0bc6\u0bbe\u0b9f\u0bbf"  # KA + E-SIGN + AA-SIGN + TA + I-SIGN
+
+    assert precomposed != decomposed  # the bug this guards against: different bytes
+    assert normalise(precomposed) == normalise(decomposed)
+
+
+def test_grade_against_key_accepts_an_nfd_tamil_answer_against_an_nfc_key() -> None:
+    precomposed_key = "\u0b95\u0bca\u0b9f\u0bbf"
+    decomposed_student_answer = "\u0b95\u0bc6\u0bbe\u0b9f\u0bbf"
+
+    assert (
+        grade_against_key(decomposed_student_answer, precomposed_key, transcription_confidence=1.0)
+        == GradeOutcome.CORRECT
+    )
+
+
 # --- numeric-answer detection (which key answers exact-match can trust) -----
 
 

@@ -8,6 +8,7 @@ and, separately, the diagnosis of an already-established error.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from fractions import Fraction
 from typing import Protocol, TypeVar
@@ -34,8 +35,17 @@ def normalise(answer: str) -> str:
 
     Deliberately conservative. Ambiguity resolves to a mismatch, which routes to
     NEEDS_HUMAN rather than to a wrong mark against the student.
+
+    Unicode NFC runs first, before anything else. Tamil (and other Indic scripts)
+    can combine a base letter with a vowel sign either as one precomposed
+    codepoint or as multiple combining marks that render identically -- two
+    keyboards, or a keyboard and an OCR model, can produce visually identical
+    text that differs byte-for-byte. Without this, a correct Tamil answer would
+    be marked wrong purely because of which codepoint sequence produced the same
+    glyph. See tests/test_grading.py's NFC/NFD test for a real example.
     """
-    text = answer.strip().lower()
+    text = unicodedata.normalize("NFC", answer)
+    text = text.strip().lower()
     text = text.replace("−", "-").replace("×", "*").replace("÷", "/")
     text = _WHITESPACE.sub("", text)
     return text.rstrip(".")
@@ -168,9 +178,16 @@ def grade_against_key(
     A low-confidence transcription can never produce INCORRECT. A confidently wrong
     mark costs far more trust than an escalation to a grown-up. See `CONFIDENCE_FLOOR`
     for why the default is 0.95.
+
+    Both answers are Unicode-NFC-normalised before any comparison below, including
+    the numeric/unit-tolerance branch -- not just inside `normalise()` -- so a
+    byte-different but visually identical Tamil (or other combining-script) answer
+    is never the reason a correct answer is marked wrong.
     """
     if transcription_confidence < confidence_floor:
         return GradeOutcome.NEEDS_HUMAN
+    student_answer = unicodedata.normalize("NFC", student_answer)
+    key_answer = unicodedata.normalize("NFC", key_answer)
     if normalise(student_answer) == normalise(key_answer):
         return GradeOutcome.CORRECT
     key_number = numeric_part(key_answer)
