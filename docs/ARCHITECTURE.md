@@ -7,7 +7,7 @@ capture (tablet browser)          -- V1
   -> ingest: image on disk, PageCapture row                                -- V1
   -> transcribe: Transcriber adapter -> TranscribedItem[] with confidence  -- V1
   -> grade:  key path (deterministic)  |  keyless path (M6, model + cross-check) -- V1
-  -> diagnose: misconception per error, model call, prompt from prompts/   -- see note below
+  -> diagnose: misconception per error, model call, prompt from prompts/   -- V2, see note
   -> respond: policy filter decides what may be said                      -- V1
   -> mastery: evidence folded into per-skill traces with decay            -- V2
   -> schedule: next session composed from due skills                     -- V2
@@ -47,11 +47,11 @@ in full; the restriction is on what reaches the student. That means the parent d
 contain the worked reasoning even when the child's view cannot. (The "parent digest" this
 sentence refers to is the V2 Weekly Learning Brief above, not anything V1 builds.)
 
-**This paragraph describes the intended shape once `diagnose` exists, not today's
+**This paragraph describes the intended shape once `diagnose` exists in V2, not today's
 system.** `k12ta.respond`'s filter runs in V1 with no diagnosis stage upstream of it at
-all — it filters a key-grader verdict, not a worked explanation. Nothing is missing as a
-result; there is simply no worked reasoning yet for the filter to withhold. Whether that
-changes inside V1 is the open question in the note above.
+all — it filters a grading verdict, not a worked explanation. Nothing is missing as a
+result; there is simply no worked reasoning yet for the filter to withhold, and per the
+resolution above there will not be one inside V1.
 
 ## Module boundaries
 
@@ -63,7 +63,7 @@ changes inside V1 is the open question in the note above.
 | `k12ta.grading` | Correctness verdicts and confidence gating: the deterministic key match, and the evaluator agent for everything it can't settle | Generate student-facing text; **branch on a kind of answer** (see below) |
 | `k12ta.mastery` | Memory traces, decay, retrieval scheduling — **V2**, see the pipeline note above | Know about images or prompts |
 | `k12ta.llm` | The only place a model provider is called | Contain any product logic |
-| `k12ta.diagnose` | Turning an established error into a Diagnosis — **V1 or V2, undecided**, see the pipeline note above | Decide correctness |
+| `k12ta.diagnose` | Turning an established error into a Diagnosis — **V2**, resolved 2026-08-30, see the pipeline note above. V1's "why was this wrong" is a parent's typed comment, not a generated diagnosis | Decide correctness |
 | `k12ta.respond` | Applying the policy filter and rendering student-facing text | Call a model directly for a verdict |
 | `k12ta.digest` | Weekly parent rollups — **V2**, see the pipeline note above | Reuse student-facing renderers |
 | `k12ta.web` | HTTP and templates | Contain business logic |
