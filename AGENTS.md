@@ -39,6 +39,26 @@ introduced without being asked.
     empty list is a message, not silence; a failed call is a plain-language state, not
     a crash. First hit in M2.2: an unseeded student picker returned 200 OK with an
     empty body and nothing in the log to explain it.
+12. **No answer-type enumeration.** Never add a `MatchingAnswer`/`ProseAnswer` type
+    hierarchy, an `answer_kind` enum, or a grading branch per exercise format. One
+    evaluator agent reasons about any answer shape; adding a new kind of exercise must
+    require zero code. The single deliberate exception is a confidence branch, not a type
+    branch: an exact key match (after Unicode NFC normalisation) resolves deterministically
+    with no model call. See `docs/ARCHITECTURE.md`, "No answer-type enumeration."
+13. **A milestone's "done when" must be testable against what that milestone ships.**
+    A bar only meetable by building something out of scope is not a quality standard, it
+    is a permanently red light that teaches everyone to ignore CI. This was learned the
+    expensive way: M3 sat red for weeks against a leakage eval scoring a child-facing
+    tutoring prompt V1 does not build.
+
+## Where V1 is defined
+
+`docs/ROADMAP.md`'s "V1. Evaluate, parent as final authority" is the authoritative
+statement of scope. Read it before starting anything. Where any other document disagrees
+with it, that section wins. The two-line version: **every program is keyed (the parent
+supplies answers; a page with no key is never evaluated, it waits) or keyless (the AI
+generates the answers and the parent verifies) — and any answer determinism can't settle
+goes to one evaluator agent that reasons about it, whatever shape it takes.**
 
 ## Definition of done for any task
 

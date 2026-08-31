@@ -1,5 +1,23 @@
 # Review of the original spec
 
+**Note added 2026-08-30:** this is a frozen review from M0 and is kept as the historical
+record, not updated in place. Two recommendations below (Gap 4's weekly digest, Gap 5's
+manual score entry) named "M5" as their home; `docs/ROADMAP.md`'s 2026-08-30 V1/V2
+rescoping moved both out of M5 and into "V2. Learning intelligence" — a weekly digest
+with skill language and a parent-typed outside score are both out of V1's narrowed scope
+(an AI-assisted evaluator, not a general progress/record system). See `docs/ROADMAP.md`
+directly for what M5 covers now.
+
+The same rescoping reaches three more things below, so read them as V2 rather than as
+near-term recommendations: **Gap 5**'s "first-attempt accuracy on resurfaced skills"
+proxy (resurfacing is M4, now V2), **Gap 7**'s reshaped 1st-grader product ("the same
+mastery model with no transcription in the loop" — the mastery model is V2, and
+`docs/ROADMAP.md`'s M7 item 1 already carries this warning), and the "Smaller notes"
+item on grade rollover writing an audit row, whose stated justification is keeping
+*mastery history* interpretable across years. Rollover may still matter to V1 for a
+different reason — an ended enrollment, a new book mid-year — but the argument given
+below is a V2 argument, not that one.
+
 The original spec is unusually good for a v1 document. It already contains three things
 most product specs miss: a stated failure asymmetry (a confident wrong mark is worse
 than an escalation), a memory model that decays, and an integrity guardrail treated as
@@ -11,6 +29,15 @@ a testable requirement rather than a preference. What follows is the gap list.
    abstraction is one file; the cost of not having it is a rewrite.
 2. **Never grade from the model's own arithmetic alone.** This is the single most
    important line in the spec. Keep it.
+
+   **Still true after the 2026-08-30 clarification made the model the source of answers
+   for keyless programs — but it now has to be actively defended rather than assumed.**
+   Two mechanisms carry it: an exact key match resolves deterministically with no model
+   call at all, so unambiguous answers never depend on model judgement; and the keyless
+   path is independent solve **plus an adversarial cross-check plus agreement gating**,
+   never a single solve taken at face value. That cross-check is what makes this line
+   survive contact with M6. Anyone tempted to simplify it into one call should read this
+   item first.
 3. **Bias to "I cannot read this, ask a grown-up."** Correct, and it needs a numeric
    confidence floor so it is enforceable rather than aspirational.
 4. **Effort-and-consistency leaderboards, accuracy kept private.** The stated rationale
@@ -91,6 +118,15 @@ student's trust, which is unrecoverable.
 reports precision on INCORRECT verdicts specifically. Ship key-based grading first and
 route unkeyed work to "I flagged three problems for you to check" until precision is
 measured, not assumed.
+
+**Half-reversed 2026-08-30, and this is the most consequential correction in this file.**
+The *sequencing* advice was right and was followed — key-based grading shipped first, and
+M6 still ships behind exactly the calibration gate described here. The *framing* was
+wrong: this gap treats keyless grading as a risky enhancement that could be deferred
+indefinitely or dropped, and the roadmap's cut list duly listed it first. It is not. The
+household's real programs (RSM, Kumon) have no keys at all, so keyless grading is the
+core of what V1 is for, and V1 cannot ship without it. See `docs/ROADMAP.md`'s V1
+definition and M6. The caution survives; "cut it if evenings disappear" does not.
 
 ## Gap 7: the 1st grader case is harder than the 7th grader case, not easier
 

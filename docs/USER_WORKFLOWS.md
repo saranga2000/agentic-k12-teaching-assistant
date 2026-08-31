@@ -29,19 +29,20 @@ alongside them, not instead of them.
 | Parent | `k12ta.keys`, port 8082 | none for most actions; a PIN gates exactly one thing | The PIN (`k12ta.domain.policy` override) gates overriding feedback policy only — it is not a login. `k12ta.keys` is a fully separate process from `k12ta.web`, structurally unreachable from the child's flow (`docs/ARCHITECTURE.md`'s module table). |
 | System | both apps + `k12ta.store`, `k12ta.grading`, `k12ta.pipeline` | — | Deterministic where it can be; never asked to invent a fact it can't verify. |
 | Model | Gemini, via `k12ta.llm` | — | Every stage it feeds emits a confidence; anything below floor short-circuits to `NEEDS_HUMAN`, never a guess presented as fact (`docs/ARCHITECTURE.md`, "Confidence and escalation"). |
+| Evaluator agent | `k12ta.grading`, via `k12ta.llm` | — | Judges any answer determinism can't settle — prose, open-ended, matching, a keyed mismatch, a keyless page with no key at all — reasoning about the answer whatever shape it takes. **Never branches on a kind of answer** (`docs/ARCHITECTURE.md`, "No answer-type enumeration"). Every keyless INCORRECT reaches a parent before the child, regardless of confidence, until family 3's precision number justifies otherwise. |
 
 ## 2. Core entities
 
 | Entity | What it is | Store module |
 |---|---|---|
 | Student | One child | `k12ta.store.students` |
-| Content source ("enrollment") | One program for one child, e.g. "Jahnvi / RSM Pre-Algebra Advanced" | `k12ta.store.content` |
+| Content source ("enrollment") | One program for one child, e.g. "Jahnvi / RSM Pre-Algebra Advanced". Carries **keyed vs keyless** (declared by the parent at setup, switchable later, never retroactively regrading), the feedback policy that decides what a child is told on attempts 2–3, and an **archived** flag (no new child uploads; everything already evaluated stays visible; the parent's review queue stays workable) | `k12ta.store.content` |
 | Page identity schema | Versioned, ordered list of named components (`SchemaComponent`: `component_name`/`label`/`example`/`position`); exactly one version is "current" per source | `k12ta.store.page_identity_schemas` |
 | Page identity mapping | A confirmed `composite_key -> page_number` row, tagged with provenance | `k12ta.store.page_identities` |
 | Answer key entry | The graded truth for one `(page_number, problem_id)` | `k12ta.store.answer_keys` |
 | Page capture | One photograph, one `capture_id` | `k12ta.store.captures` |
 | Problem | One transcribed item on a capture | `k12ta.store.captures` |
-| Graded problem | One problem's verdict: `correct` / `incorrect` / `needs_human` (+ cause) | `k12ta.store.sessions` |
+| Graded problem | One problem's outcome: `answered` (bool) + `verdict` (`correct` / `partially_correct` / `incorrect` / `needs_human`, + cause). **`partially_correct` and `answered` added by the 2026-08-30 V1 clarification** — see `docs/ROADMAP.md`'s V1 definition. A multi-part question (a six-pair matching exercise, a seven-blank fill-in) is split into sub-items by the evaluator agent, one row each; `partially_correct` is for genuinely unsplittable partial work, such as a half-right prose answer | `k12ta.store.sessions` |
 | Session | One capture's grading run; groups `graded_problems` for rendering | `k12ta.store.sessions` |
 | Dispute | A child's contest of a verdict | **[BUILT]** `k12ta.store.disputes` |
 
@@ -159,19 +160,19 @@ provenance is not `"parent"` — and nowhere else.
 ```mermaid
 flowchart TD
     A["/ : student picker"] --> B["/student/id : program picker"]
-    B -->|"0 sources"| B0["honest message: ask a grown-up to add one [GAP A: no signal reaches the parent app]"]
+    B -->|"0 sources"| B0["honest message + 'tell a grown-up' request, badged in the parent app (A, built)"]
     B -->|"1 source"| C["source_home: Add a page / My pages"]
     B -->|"2+ sources"| B1["pick a program"] --> C
     C -->|"Add a page"| D["camera or upload"]
     C -->|"My pages"| M["waiting / to-look-at / graded history"]
     D --> E["transcribe + resolve identity"]
-    E -->|"NO_SCHEMA, first ever capture for this source"| E0["app proposes a guess; child confirms/corrects [GAP O]"] --> F
+    E -->|"NO_SCHEMA, first ever capture for this source"| E0["app proposes a guess; child confirms/corrects; provisional until a parent confirms (O, built)"] --> F
     E -->|"PARTIAL, one component missing, real candidates exist"| E1["constrained pick among real candidates"] --> F
     E -->|"NO_MAPPING / CONFLICTING / BELOW_FLOOR / NO_MARKERS"| E2["honest refusal, ask screen, read-only lookup only"]
     E -->|"RESOLVED"| F["graded: correct / incorrect / needs a grown-up"]
-    F -->|"incorrect"| G["dispute this verdict [GAP B]"]
+    F -->|"incorrect"| G["dispute this verdict, reason required (B, built)"]
     F -->|"needs a grown-up"| H["Remind a grown-up (existing)"]
-    F --> I["Add another page [GAP C]"]
+    F --> I["Add another page (C, built)"]
     F --> M
 ```
 
@@ -185,7 +186,7 @@ roadmap's own gap audit.
 | Corner case | Behavior |
 |---|---|
 | Zero students exist at all | `/` shows an honest empty state; this is a parent-setup problem, not a child-facing gap. |
-| A student exists but has zero sources | `program_picker` shows a static "ask a grown-up" sentence with no way to signal the parent app. **[GAP A]** — deliberately scoped to an in-app flag for the parent's landing page, real push/email/SMS explicitly deferred. |
+| A student exists but has zero sources | `program_picker` shows an honest message *and* a request the parent app badges on its landing page (`program_requests`, migration 0021, `submit_program_request`). **[BUILT]**, Gap A — deliberately scoped to an in-app flag only; real push/email/SMS stays explicitly deferred (§8). |
 | Shared device, wrong child selected | No authentication exists to catch this (`AGENTS.md` rule 8, deliberate for v1). Work gets attributed to the wrong student until someone notices. Named risk, not solved here; the only mitigation on the roadmap is the P2 per-child-PIN item, explicitly deferred. |
 
 **2. Pick a program.** `source_home.html`: "Add a page" or "My pages", with a
@@ -210,7 +211,7 @@ of the M3.11 identity-generalization pass **[BUILT]**:
 
 | Outcome | Child sees | Notes |
 |---|---|---|
-| `NO_SCHEMA` | Today: an honest refusal, dead end until a parent sets up structure. | Becomes the bootstrap-guess flow in **[GAP O]** — see §3 and §6.1. |
+| `NO_SCHEMA` | The bootstrap-guess flow: the app offers whatever identifier-like markers it found, the child confirms or corrects them, and grading proceeds against the resulting *provisional* schema, visibly marked unchecked until a parent confirms it. | **[BUILT]**, Gap O — see §3 and §6.1. Never a silent guess: it is only ever safe here because `NO_SCHEMA` implies no key can be addressed yet (§3.2). |
 | `CONFLICTING` | Honest refusal — the photo's own markers don't agree with each other. | **[BUILT]** |
 | `NO_MARKERS` | Honest refusal — nothing matching the schema was found at all. | **[BUILT]** |
 | `PARTIAL` | Either a constrained pick among real, already-confirmed candidates (when exactly one component is missing and coverage allows it), or an honest refusal otherwise. | **[BUILT]**, `resolve_partial`, narrow and deliberate — see `docs/ARCHITECTURE.md` §"Asking when exactly one component is missing." |
@@ -224,11 +225,11 @@ distinct per row, pooled into one "to look at" tally.
 
 | Corner case | Behavior |
 |---|---|
-| Result graded against a still-provisional (not parent-confirmed) identity | No visual distinction today. **[GAP O, new]** — must show "first guess, not checked by a grown-up yet" per §3.4. |
+| Result graded against a still-provisional (not parent-confirmed) identity | Shows a source-wide "first guess — a grown-up hasn't checked this yet" notice whenever `get_current_schema_provenance(...)` isn't `"parent"`. **[BUILT]**, Gap O, per §3.4. |
 | Second (or later) genuine guess at the same problem | Oracle suppression (`k12ta.domain.attempts.already_disclosed`) already prevents confirming/denying in a way that would leak the answer via retry-until-right — wired into `k12ta.respond.render` **[BUILT]**. The UI does not explicitly tell the child "this is a repeat attempt, that's why the feedback looks different" — a child could read suppressed feedback as a bug rather than a deliberate safety behavior. Not filed as a gap in the roadmap; worth a UI-copy fix whenever the results screen gets touched. |
-| Child disputes an "incorrect" verdict | Does not exist. **[GAP B]** — see §6.3 for the full lifecycle. |
+| Child disputes an "incorrect" verdict | `_dispute_control.html` → `submit_dispute`; a short typed reason is required. **[BUILT]**, Gap B — see §6.3 for the full lifecycle. |
 | "Remind a grown-up" on a row that's merely `NEEDS_HUMAN` | **[BUILT]** (`submit_reminder`, `request_reminder`) — sets a flag the parent app shows as a badge; re-tapping just overwrites the timestamp, no "already reminded" state to protect. Distinct from a dispute: a reminder means "this is stuck, please look," never "I think the grade is wrong" — the grader never called a verdict on a reminder-eligible row in the first place. |
-| Navigate to submit another page | No link exists; `session_result.html` is a dead end. **[GAP C]** |
+| Navigate to submit another page | A link back into the capture flow from `session_result.html`. **[BUILT]**, Gap C. |
 
 **6. My Pages / history** (`my_pages.html`) **[BUILT]**: waiting-on-a-grown-up /
 to-look-at / graded, three-way split, built from `list_all_graded_for_source` +
@@ -236,27 +237,24 @@ to-look-at / graded, three-way split, built from `list_all_graded_for_source` +
 
 | Corner case | Behavior |
 |---|---|
-| Child re-photographs a page whose problems already carry a decisive verdict | **Answer-safety is already correct** — oracle suppression works at the (page_number, problem_id) level regardless of how many captures produced attempts at it, because `k12ta.domain.attempts.attempt_number` counts genuinely distinct answers across every past capture, not per-capture. **But the listing itself does not group by (page_number, problem_id)** — `my_pages`'s `items` list is built one row per `(session, capture, problem)` from `list_all_graded_for_source`, with no dedup analogous to the parent app's `_pick_capture_for_page`/`capture_has_decisive_outcome`. A child who retakes the same page sees what looks like two separate homework items for the same question, sorted by problem id rather than by when each was taken. Confusing UX layered on top of correct underlying logic. **[GAP M, new]** |
-| A schema correction retroactively re-grades old captures (§3.4/§6.1) | The affected rows update in place (`update_graded_problem_after_identity_resolution`, never a new row) **[BUILT]**, so this doesn't create new duplicate-looking rows — it changes existing ones. The child needs to be told this happened. **[GAP O, new]**, same as §3.4's notification row. |
+| Child re-photographs a page whose problems already carry a decisive verdict | **Answer-safety is already correct** — oracle suppression works at the (page_number, problem_id) level regardless of how many captures produced attempts at it, because `k12ta.domain.attempts.attempt_number` counts genuinely distinct answers across every past capture, not per-capture. **But the listing itself does not group by (page_number, problem_id)** — `my_pages`'s `items` list is built one row per `(session, capture, problem)` from `list_all_graded_for_source`, with no dedup analogous to the parent app's `_pick_capture_for_page`/`capture_has_decisive_outcome`. A child who retakes the same page sees what looks like two separate homework items for the same question, sorted by problem id rather than by when each was taken. Confusing UX layered on top of correct underlying logic. **Closed** — `my_pages()` now groups by `(page_number, problem_id)` and shows `MyPageItem.attempt_count`. **[BUILT]**, Gap M. |
+| A schema correction retroactively re-grades old captures (§3.4/§6.1) | The affected rows update in place (`update_graded_problem_after_identity_resolution`, never a new row) **[BUILT]**, so this doesn't create new duplicate-looking rows — it changes existing ones. The child is told: `identity_corrections` leaves a "Got it" notice on `source_home.html`. **[BUILT]**, Gap O, same as §3.4's notification row. |
 
 ## 5. Parent app flow (`k12ta.keys`, port 8082)
 
 ```mermaid
 flowchart TD
-    P0["home(): every child + enrollment"] -->|"register a new child"| P0a["does not exist as a web action [GAP E]"]
+    P0["home(): every child + enrollment + cross-child review_queue (G, built)"] -->|"register a new child"| P0a["/students/new (E, built)"]
     P0 --> P1["enrollment_setup: add a program"]
-    P1 -->|"describe structure now"| P2["identity_schema_screen"]
+    P1 -->|"redirects into structure setup (H, built)"| P2["identity_schema_screen"]
     P1 -->|"skip, describe later"| P3["source pending review"]
-    P2 -.->|"[GAP H] not one flow today"| P1
-    P3 --> P4["upload a key page"]
-    P4 --> P5["discovery panel: app infers components from the key photo"]
+    P3 --> P4["upload a key page (+ optional example exercise page, I, built)"]
+    P4 --> P5["discovery panel: app infers components from the photos"]
     P5 --> P6["confirm screen: schema-shape-aware, per M3.11"]
     P6 --> P7["answer key entries persisted"]
     P0 --> P8["pending review queue, per enrollment"]
+    P8 -->|"child-escalated disputes, listed first (K, built)"| P9d["resolve dispute: verdict + required comment (L, built)"]
     P8 -->|"app-requested (NEEDS_HUMAN)"| P9["one-tap verdict: apply_human_verdict"]
-    P8 -.->|"[GAP K] child-escalated, prioritized above"| P8
-    P9 -.->|"[GAP L] optional comment back to child"| P9
-    P0 -.->|"[GAP G] cross-child review queue on landing page"| P0
 ```
 
 ### 5.1 Step by step, with corner cases
@@ -266,16 +264,16 @@ enrollments.
 
 | Corner case | Behavior |
 |---|---|
-| Registering a new child | Does not exist as a web action — a student only comes into existence via `scripts/seed_dev_data.py`, run by hand. **[GAP E]** |
-| A parent wants one glance across every child/program before drilling in | Does not exist — pending items are only visible after opening a specific enrollment. `sessions.list_pending_for_source` already has the data; nothing rolls it up. **[GAP G]** |
+| Registering a new child | `/students/new` in `k12ta.keys.app` — no longer requires running `scripts/seed_dev_data.py` by hand. **[BUILT]**, Gap E. |
+| A parent wants one glance across every child/program before drilling in | `home()`'s `review_queue` rolls `list_pending_for_source` up across every child and enrollment. **[BUILT]**, Gap G. |
 
 **2. Enroll in a program** (`submit_enrollment_setup`) **[BUILT]**.
 
 | Corner case | Behavior |
 |---|---|
-| Describing structure at the same time as enrolling | Two separate steps today — enrollment never touches the identity schema; describing structure is optional and separately linked, skippable indefinitely. **[GAP H]** |
-| Describing structure from one example exercise page *and* one example key page together | Does not exist — discovery only ever triggers off a key-page scan, one image at a time, and never touches a plain exercise page. **[GAP I]** |
-| A natural-language, conversational structure-inferring agent | Does not exist anywhere; `k12ta.llm.gemini_chat`/`coach_voice.md` is wired only into the M3.3 integrity-eval harness, no live route. **[GAP J]** — explicitly reprioritized 2026-08-30: the parent considers this a **P1**, not a "someday" item, precisely because natural language is a materially easier way to describe an arbitrary program's structure than any form-based schema editor ever will be. It remains sequenced after **H**/**I** (needs something concrete to converse about), and **[GAP O]**'s child/app-guess bootstrap (§3) covers a real slice of J's original value without a chat interface at all — J's remaining scope is now "describe structure conversationally instead of via forms," not "make structure description possible at all." |
+| Describing structure at the same time as enrolling | One flow — `submit_enrollment_setup` now redirects into `identity-schema`. Still skippable (a parent can leave and describe structure later, or never, in which case §6.1's bootstrap covers it), but it is no longer a separately-discovered screen. **[BUILT]**, Gap H. |
+| Describing structure from one example exercise page *and* one example key page together | An optional second photo on the `k12ta.keys` upload, merged via `discover_identity_from_example_page` (`k12ta.pipeline.key_ingestion`). **[BUILT]**, Gap I. |
+| A natural-language, conversational assistant for the parent | **Now `docs/ROADMAP.md`'s M8, with four hard constraints added 2026-08-30: (1) confirm before save, always — a chat turn proposes, the parent confirms against the same preview the form paths show, never a one-message commit; (2) it may not mint page-identity mappings, since §3.2's safety argument depends on guessing staying confined to the `NO_SCHEMA` bootstrap; (3) it cannot bypass the parent PIN on a policy override; (4) its own prompt and its own eval — `coach_voice.md` is not reusable.** Does not exist anywhere; `k12ta.llm.gemini_chat`/`coach_voice.md` is wired only into the M3.3 integrity-eval harness, no live route, and that prompt is not reusable here regardless — it's built for child-facing Socratic tutoring under leakage rules that don't apply. **[GAP J]** — explicitly reprioritized 2026-08-30 to **P1**, then **broadened 2026-08-30** to two jobs, both parent-facing only, both text-based for now (no voice, no child-facing surface): (a) describing a program's structure conversationally instead of via forms — the original scope, precisely because natural language is a materially easier way to describe an arbitrary structure than any form-based schema editor ever will be — and (b) walking through evaluation review conversationally instead of `evaluations.html`'s button UI (confirming a low-confidence read, resolving a verdict, an override), a natural-language front end onto M5's correction loop. Both additive alongside the existing forms/buttons, not a replacement. It remains sequenced after **H**/**I** (needs something concrete to converse about for the setup half — done), and **[GAP O]**'s child/app-guess bootstrap (§3) covers a real slice of J's original value without a chat interface at all — J's remaining scope is "describe structure, and review evaluations, conversationally instead of via forms/buttons," not "make either possible at all." |
 
 **3. Upload and confirm a key page** (`submit_upload`, discovery panel,
 `submit_confirm`) **[BUILT]**, fully schema-shape-generic as of M3.11.
@@ -293,8 +291,8 @@ oldest first) **[BUILT]**.
 |---|---|
 | Several captures resolve to the same page | `_pick_capture_for_page` prefers the most recent capture with a real (correct/incorrect) verdict anywhere among its items over plain recency — found necessary 2026-08-22 when the newest of three page-15 captures had the worst transcription of the three. **[BUILT]** |
 | A parent explicitly marks one capture a duplicate of another | `submit_mark_duplicate` / `_resolve_duplicate_root` follows the duplicate chain to its root, tolerant of cycles (stops the moment a revisit would occur). **[BUILT]** |
-| Urgency/cause-based sorting within the queue | Does not exist — oldest-first only, no distinction for how long something has waited or why. Not separately gap-lettered; folds into **[GAP K]** once child-escalated items exist to prioritize above. |
-| A parent's verdict needs to explain *why* to the child | No comment field exists anywhere in the schema, form, or child-facing render. **[GAP L]** |
+| Urgency/cause-based sorting within the queue | Child-escalated disputes now sort above everything else (a "disputed these" section in `evaluations.html`, above "Pending review"). **[BUILT]**, Gap K. *Within* each section it is still oldest-first, with no cause- or age-based ordering — the residual, unlettered half of K. |
+| A parent's verdict needs to explain *why* to the child | A comment field exists and is **required** when resolving a dispute, shown back through `StudentResultView.dispute`. **[BUILT]**, Gap L. It stays *optional* — in practice, absent — on an ordinary `NEEDS_HUMAN` verdict; see `docs/ROADMAP.md`'s M5, where the child-notice bullet is scoped to exactly that remaining case. |
 | Correcting an already-confirmed answer key entry | `upsert_entry`-style overwrite semantics let a parent resubmit and correct a wrong key value. **This does not auto-regrade** captures already graded against the old value — deliberately, per `submit_regrade_pending`'s own stated design (re-grading silently was "explicitly the wrong trade"). `replay_source` exists exactly for this — "re-run this after any key correction... in seconds" — but is a manual tool, not wired to fire automatically. Unchanged by this document; contrast with §3.5/§6.1, where automatic regrade is deliberately scoped to one specific, different trigger. |
 
 **5. Regrading** (`submit_regrade_pending`, `replay_source`) **[BUILT]**: both
@@ -369,8 +367,8 @@ different treatment:
 
 | Scenario | What happens today | Where |
 |---|---|---|
-| The child changed one answer and re-photographs the *whole page* | Every problem's answer is resubmitted; `_logical_attempt_count` (`k12ta.domain.attempts`) collapses an unchanged answer into the attempt it repeats — only the problem that actually changed counts as a new guess. Oracle suppression is correctly answer-safe. But `my_pages` shows a second, separate-looking row for every problem on the page, changed or not — see **[GAP M]**. | **[BUILT]** (safety) / **[GAP M]** (presentation) |
-| The child re-submits the exact same physical page for no revision reason (retake, not a double-tap) | Two independent `page_captures` rows, graded independently, no child-visible sign they're the same page. A parent can clean this up manually (`submit_mark_duplicate`) after the fact. Genuinely accidental double-tap submission is already prevented client-side (see below) — this row is about a deliberate second photo of the same page, which nothing needs to prevent. | not a gap — cosmetic overlap with **[GAP M]**, already covered there |
+| The child changed one answer and re-photographs the *whole page* | Every problem's answer is resubmitted; `_logical_attempt_count` (`k12ta.domain.attempts`) collapses an unchanged answer into the attempt it repeats — only the problem that actually changed counts as a new guess. Oracle suppression is correctly answer-safe. But `my_pages` shows a second, separate-looking row for every problem on the page, changed or not — closed by Gap M's grouping, see §4.1. | **[BUILT]** (safety and presentation alike) |
+| The child re-submits the exact same physical page for no revision reason (retake, not a double-tap) | Two independent `page_captures` rows, graded independently, no child-visible sign they're the same page. A parent can clean this up manually (`submit_mark_duplicate`) after the fact. Genuinely accidental double-tap submission is already prevented client-side (see below) — this row is about a deliberate second photo of the same page, which nothing needs to prevent. | not a gap — cosmetic overlap with Gap M, already covered there |
 | A page was `NEEDS_HUMAN` and a parent's later action resolves it (identity pick, key added, verdict applied) | Updates the *existing* `graded_problems` row in place — never inserts a new one, so this never produces a duplicate-looking row, and `k12ta.domain.attempts` keeps counting from the original capture's timestamp, not from when the regrade happened. | **[BUILT]** |
 
 ### 6.3 Dispute and escalation lifecycle **[BUILT 2026-08-30 — Gap B, K, L]**
@@ -385,8 +383,8 @@ on an overturn).
 stateDiagram-v2
     [*] --> Graded: verdict = incorrect
     Graded --> Disputed: child taps "I think this is right", must give a short reason
-    Disputed --> ParentQueue: appears in a distinct, prioritized section of the parent's review queue [GAP K]
-    ParentQueue --> Resolved: parent applies a verdict, comment required specifically for a dispute [GAP L]
+    Disputed --> ParentQueue: appears in a distinct, prioritized section of the parent's review queue (K)
+    ParentQueue --> Resolved: parent applies a verdict, comment required specifically for a dispute (L)
     Resolved --> [*]: no re-dispute on the same item once a parent has resolved it
 ```
 
@@ -403,16 +401,39 @@ Rules, exactly as agreed:
   dispute only ever appears on a row the grader *did* call, that the child
   believes is wrong.
 
-### 6.4 Multi-attempt / oracle suppression (already correct, described for completeness)
+### 6.4 Multi-attempt / oracle suppression
 
-`k12ta.domain.attempts` — zero I/O, two rules: `NEEDS_HUMAN` never counts as an
-attempt (a blurry retake must be free), and a resubmission with an unchanged
+**As built:** `k12ta.domain.attempts` — zero I/O, two rules: `NEEDS_HUMAN` never counts as
+an attempt (a blurry retake must be free), and a resubmission with an unchanged
 answer is not a new attempt. `already_disclosed` goes true from the second
 genuinely distinct guess onward, at which point confirm/deny responses must say
 the same thing regardless of whether the new guess happens to be right — this is
 what makes a wrong/wrong/right sequence non-revealing. **[BUILT]**, wired into
 `k12ta.respond.render` for the live child-facing render and into `k12ta.keys.app`
 for the parent-visible repeat count.
+
+**Changed by the 2026-08-30 V1 clarification — `docs/ROADMAP.md`'s M7 builds this:**
+
+- **A hard cap of three submissions per page**, which did not exist before.
+- **A resubmission is only accepted if the child confirms she actually redid the work.**
+  The app asks. An accidental re-upload of something already submitted — the real
+  behaviour that produced three independent captures of page 15 in the live database — is
+  caught rather than counted.
+- **This retires the "unchanged answer isn't a new attempt" text comparison.** That rule
+  was guesswork standing in for the child's intent, and it becomes actively unreliable
+  once the evaluator describes answers in prose (two reads of one matching exercise won't
+  produce byte-identical text). The child's own confirmation replaces it. `NEEDS_HUMAN`
+  still never counts.
+- **Every attempt is numbered and visible to both** child and parent — the history view
+  §4.1 says doesn't exist scoped to "this page, every time."
+- **The parent's most recent verdict is always final**, superseding the AI's call and any
+  earlier attempt.
+- **What the child is told on attempts 2 and 3 is now a per-program decision**, not a
+  blanket suppression: work someone else grades → "submitted, a grown-up will look at
+  this," no correct/incorrect; self-directed practice → full feedback every time. This
+  comes from the feedback policy each program already carries, so it needs no new concept.
+  Three attempts with live feedback on graded homework would be three free guesses at the
+  oracle, which is why the split exists.
 
 ### 6.5 Answer-key correction after captures already graded against it
 
@@ -450,21 +471,45 @@ in this document.
 | B | Child can dispute/escalate a verdict into its own parent-visible queue item | none | **Built 2026-08-30** — `disputes` table (migration 0022), `k12ta.store.disputes`, dispute button in `_dispute_control.html` |
 | C | A link back to "add a page" from the results screen | none | **Built 2026-08-30** — `session_result.html` |
 | E | Parent can register a new child from the web app | none | **Built 2026-08-30** — `/students/new` in `k12ta.keys.app` |
-| F | Per-child performance dashboard | mastery model (M4) | already scheduled, unchanged |
+| F | Per-child performance dashboard | learning intelligence (V2) | **rescoped 2026-08-30**: mastery/skill-tagging moved out of V1 entirely (`docs/ROADMAP.md`'s M4 now lives under V2), so this gap no longer has a V1 milestone to depend on — it waits for V2, not "M4" specifically. A plain, mastery-free review-queue status view is V1 scope instead; see `docs/ROADMAP.md`'s "Parent surface: information architecture" item 1 |
 | G | Cross-child/cross-program review queue on the landing page | none (pure aggregation) | **Built 2026-08-30** — `home()`'s `review_queue` in `k12ta.keys.app` |
 | H | Enroll + describe structure as one flow | none | **Built 2026-08-30** — `submit_enrollment_setup` redirects into `identity-schema` |
 | I | Combined example-exercise + example-key upload to bootstrap discovery | none structurally, bigger than H | **Built 2026-08-30** — optional second photo in `k12ta.keys` upload, merged via `discover_identity_from_example_page` (`k12ta.pipeline.key_ingestion`) |
-| J | Conversational (text or voice) structure-inference agent | H, I, benefits from O existing first | **reprioritized 2026-08-30 to P1** — not started; scope shrunk by O |
+| J | Conversational, parent-only, text-only assistant for structure setup *and* evaluation review | H, I, benefits from O existing first | **reprioritized 2026-08-30 to P1, broadened 2026-08-30** to include evaluation review, not just setup; not started; scope shrunk by O |
 | K | Review queue: child-escalated items surfaced/prioritized above app-requested | B | **Built 2026-08-30** — "disputed these" section in `evaluations.html`, above "Pending review" |
 | L | Parent's verdict can carry an optional comment shown to the child | B (for real payoff) | **Built 2026-08-30** — `resolve-dispute`'s required comment, shown back via `StudentResultView.dispute` |
 | M | "My pages" doesn't group repeated captures of the same (page, problem) into one item with a visible attempt history | none | **Built 2026-08-30** — `MyPageItem.attempt_count`, grouping in `my_pages()` |
 | N | ~~No automatic duplicate/double-submission guard~~ | — | **Corrected 2026-08-30: not a gap.** Already built (`_capture_checklist.html`'s disable-on-select guard); struck from the register. |
 | O | Child/app can propose a brand-new program's structure when none exists yet; provisional until a parent confirms; a parent's correction auto-regrades affected pages and notifies the child | none structurally, but touches identity trust model (§3) | **Built 2026-08-30** — `provenance` column (migration 0023), `SchemaGuessAsk` in `k12ta.web.app`, confirm/correct in `k12ta.keys.app` (`replay_source` wired for exactly this trigger), `identity_corrections` notice |
 
+**There is no gap D.** The letter was never assigned: `docs/ROADMAP.md`'s parent-app
+audit item 4 (a per-child page listing enrollments only) was judged already satisfied
+in spirit by the landing page and explicitly not filed as a gap. Recorded here so the
+hole in the sequence reads as deliberate rather than as a lost row.
+
 All five groups shipped 2026-08-30: Group 1 (C, A, M) → Group 2 (E, G) →
-Group 3 (H, I) → Group 4 (B, K, L) → Group 5 (O). F and J excluded from this
-pass (F needs M4; J is its own future milestone per the parent's own
-framing) -- the only two gaps from this critique still open.
+Group 3 (H, I) → Group 4 (B, K, L) → Group 5 (O). Two were excluded from that pass,
+for different reasons and they are not the same kind of thing: **F is no longer V1
+scope at all** (it needs the mastery layer, which the 2026-08-30 rescoping moved to
+V2), and **J is the only gap from this critique still open inside V1** — its own
+future milestone, at P1.
+
+### 6.8 Keyed vs keyless: what a child sees when a page can't be evaluated
+
+Added by the 2026-08-30 V1 clarification. The two paths fail differently on purpose, and
+a child should never have to know which kind of program she is in to understand the
+screen:
+
+| | Keyed program | Keyless program |
+|---|---|---|
+| No key on file for this page | **Not evaluated at all.** "Waiting on a grown-up to add the answers." The parent is notified and the page waits — the system never invents an answer for a program whose parent said they have the answers. | n/a — there is never a key |
+| The evaluator is confident and says correct | Shown to the child | Shown to the child |
+| The evaluator says **incorrect** | Shown (a human authored the key) | **Goes to the parent first, every time, regardless of confidence**, until family 3's precision number exists. She sees "a grown-up is checking this," not "wrong." |
+| The evaluator is unsure of the answer or of the OCR | Parent review queue, child sees "needs a grown-up" | Same |
+
+The asymmetry in row three is deliberate and is the single most important safety rule in
+V1: telling a child she is wrong on a model's unverified say-so is the confident-wrong-
+grade failure this whole system exists to refuse.
 
 ## 8. Explicitly out of scope for this document
 
@@ -472,8 +517,8 @@ framing) -- the only two gaps from this critique still open.
   scoped to an in-app flag, exactly as Gap A was originally scoped.
 - Per-child authentication/PIN — P2, unchanged, referenced only as a risk mitigation
   that doesn't exist.
-- Mastery-model-driven dashboards and scheduling (M4/M5) — referenced only where a
-  gap explicitly depends on them (Gap F).
+- Mastery-model-driven dashboards and scheduling (V2's M4, formerly slated for V1) —
+  referenced only where a gap explicitly depends on it (Gap F).
 - The M3.3 coach-voice prompt leaks (`salami_3`, `reverse_3`, the
   `confirmed_or_denied` refusal-phrasing false positives) — a separate, already-
   tracked thread in `docs/ROADMAP.md`'s M3 section, unrelated to these workflows.

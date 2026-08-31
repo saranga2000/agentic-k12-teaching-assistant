@@ -10,7 +10,203 @@ typing.
 
 ---
 
-## M0. Skeleton, domain model, green CI
+## V1. Evaluate, parent as final authority
+
+Rescoped 2026-08-30, tighter than this doc's original "Collect, evaluate, organize"
+framing, then **specified in full the same day** in a clarification pass that corrected
+two things this section previously got wrong (see "What this section used to say and got
+wrong" at the end). This section is now the authoritative statement of V1. Where any
+other document disagrees with it, this one wins.
+
+V1 is one job, done solidly:
+
+> **An AI-assisted evaluator of any program a child is in — for every child in the
+> household, across any subject and any language, with a parent as the final authority
+> on every answer, resilient to the model being wrong or unable to tell.**
+
+### The two program paths
+
+Every program is either **keyed** or **keyless**. The parent declares which when they
+add the program — it is asked and confirmed at setup, never inferred.
+
+**Keyed — the parent supplies the answers.** By photographing a printed key, or typing
+them in by hand. If a child uploads an exercise page and no key is on file for it, that
+page is **not evaluated at all**: it goes to "waiting on a key," the parent is notified,
+and it stays there until they supply one. The system never invents an answer for a keyed
+program. This is deliberate — a parent who said "I have the answers" is entitled to have
+the system wait for them rather than guess.
+
+**Keyless — no answer key exists, and none is coming.** **The AI generates the answers
+itself.** This is not a degraded fallback for programs whose keys went missing; it is
+the primary path for the household's actual programs (RSM, Kumon), and **it is the
+single most important capability in V1.** The parent's job shrinks from supplying truth
+to verifying it: confirming the AI's low-confidence answers, correcting the wrong ones.
+
+A program can be switched between the two at any time — a parent who gives up chasing
+keys, or a school that finally sends one. Switching never retroactively regrades, per
+this codebase's standing rule that a regrade is always a deliberate parent action.
+
+### What the parent is actually asked to review
+
+Two independent things the AI can be wrong about, both routed to the parent by the AI's
+own confidence rather than by the parent going looking:
+
+1. **What it read off the photograph** — transcription/OCR of the child's handwriting.
+2. **What it believes the correct answer is** — keyless programs only.
+
+Plus one unconditional rule: **every keyless INCORRECT reaches a parent before it
+reaches the child**, no matter how confident the model was, until `docs/EVALS.md`'s
+precision number exists to justify relaxing it. A confidently wrong INCORRECT is the
+one failure this system exists to refuse, and telling a child she is wrong on the
+model's unverified say-so is exactly that failure.
+
+### The evaluator is an agent, not a grading table
+
+**Deterministic first, agent for everything determinism cannot settle.** Where a key
+exists and the child's answer matches it exactly — after Unicode normalisation — that is
+a deterministic correct: free, instant, no model call, no confidence to gate. Everything
+else goes to the evaluator agent: a key mismatch, prose, an open-ended answer, a matching
+exercise, a keyless page with no key at all.
+
+**There is no enumeration of answer types.** No `MatchingAnswer`/`ProseAnswer` classes,
+no per-type grading branches, no "add a code path per exercise format." The agent is
+given the page, the child's work, and the key if one exists, and it *reasons* about
+whether the answer is right — however the answer is expressed. A child joining «ஆதி» to
+«தொடக்கம்» with a pencil line is evaluated by the same mechanism as a paragraph, a
+fill-in-the-blank, or a number. **Adding a new kind of exercise must require zero code.**
+This is the property that makes this an agentic application rather than a form-grader,
+and it is not negotiable for local convenience.
+
+The one branch that does exist — "did the strings match exactly" — is there to preserve
+the rail `docs/PROMPT_REVIEW.md` lists as must-not-renegotiate: never grade from the
+model's own arithmetic alone. Where the answer is genuinely unambiguous, determinism
+settles it and no model judgement is involved at all.
+
+### Verdicts
+
+Two fields, because "answered but a person still needs to look" has to be expressible:
+
+- `answered: bool` — did the child attempt this at all
+- `verdict: correct | partially_correct | incorrect | needs_human`
+
+`partially_correct` is new in this pass and exists for genuinely unsplittable partial
+work — a prose answer that is half right. **Detailed rubrics are deliberately not in
+V1**: the agent judges against these four values with no scoring scheme, no weights, and
+no numeric partial credit. Parent- or teacher-authored custom rubrics are V2 (see below).
+
+**Multi-part questions are split by the agent, not by a schema.** A matching exercise
+with six pairings or a fill-in-the-blank with seven blanks emits sub-items (`5a`…`5g`)
+with a verdict each, so a child can see she got five of seven; a genuinely single answer
+emits one verdict. The agent decides which, per question, from the page itself.
+
+### Any subject, any language — with real material behind the claim
+
+Math, English, and **Tamil**, which is a near-term target rather than an illustration: a
+Tamil school has expressed interest, and real material is on hand — handwritten Tamil
+(an அரிச்சுவடி letter-formation page) and printed Tamil worksheets («வளர் தமிழ் 4»)
+carrying matching and fill-in-the-blank exercises. Hindi, French and Spanish language
+courses are the same shape. Two concrete obligations follow, neither of which existed
+before this pass:
+
+- **Unicode normalisation (NFC) before any answer comparison.** Tamil combines vowel
+  signs, so two visually identical answers can differ byte-for-byte, and exact-match
+  would call a correct answer wrong. Small fix, large blast radius, belongs with the
+  existing numeric/unit tolerance in the grading path.
+- **Fixtures and an accuracy number per script, not one pooled number.** Handwritten
+  Tamil and printed Tamil are different problems with different error rates; so are
+  Tamil and English. `docs/EVALS.md` reports them sliced, never averaged into one
+  reassuring figure.
+
+### Attempts
+
+A child may submit a page up to **three times**. A resubmission is only accepted if she
+confirms she actually redid the work — the app asks, so an accidental re-upload of
+something already submitted is caught rather than counted. Every attempt is numbered and
+visible to both the child and the parent. **The parent's most recent verdict is always
+final**, superseding anything the AI or an earlier attempt produced.
+
+What she is *told* after attempts 2 and 3 depends on who grades the work, using the
+per-program feedback policy that already exists:
+
+- **Work someone else grades** (school homework, RSM, Kumon, a language school
+  worksheet): attempts 2 and 3 say "submitted, a grown-up will look at this" — no
+  correct/incorrect. Otherwise the app becomes an oracle: write 14, hear "not quite,"
+  write −14, hear "Correct!" — the answer extracted by guessing rather than worked out,
+  each response individually honest, the sequence a giveaway.
+- **Self-directed practice**: full feedback on every attempt. Fast feedback is the entire
+  point there and there is no one to mislead.
+
+### Report cards
+
+**In V1**, and built entirely from this system's own evaluations — never from a school
+report card, an outside platform's score, or anything this system did not itself grade
+question by question. Per child, per program: counts of correct / partially correct /
+incorrect / not answered / still awaiting review, computed from **final** verdicts after
+any parent correction or overturned dispute, never the AI's original call. A parent sees
+every child across every program; a child sees only her own programs, never a sibling's,
+with no ranking or comparison — `docs/PROMPT_REVIEW.md`'s "accuracy kept private, effort
+and consistency shared" rail applies to children against each other, not to a child
+seeing her own record. Counts, not percentages, so an unreviewed queue never reads as a
+bad score. No time periods in V1; archiving a program freezes its report card as that
+program's final record.
+
+### Archiving
+
+A parent can archive a program. Children can no longer upload to it; everything already
+evaluated stays fully visible to both parent and child; the parent can still work the
+review queue on it, so archiving at year end never strands pending items forever. This is
+V1's answer to a school-year rollover — a finished program is archived, a new one added —
+without building a term/semester model.
+
+### One parent identity
+
+Both parents share one login and see exactly the same thing, acting as one person. There
+is no per-parent attribution, no concurrent-edit problem to solve, and no second-parent
+review path. The audit trail records *what* changed and *when*, not *who*.
+
+### The V1/V2 line, stated once as a test rather than a list
+
+> **Counts and queues over evaluations that actually happened are V1. Anything requiring
+> a skill taxonomy, decay, or an inferred interpretation is V2.**
+
+A report card passes that test. A progress dashboard, a "she is regressing in fractions"
+claim, and a weekly brief with skill language do not. Collecting *non-evaluatory* results
+— a school report card, an online platform's own score — is not V1's job either.
+
+**V2 does not start until the household is using V1 daily and M0–M8's own "done when"
+bars are met** — the same "do not build placeholder screens for sections with no data
+behind them" discipline this doc applies under "Parent surface: information architecture"
+below.
+
+### What V1 is not
+
+Mastery and skill tagging, progress dashboards and trends, outside/manual score entry,
+weekly digests, child-facing tutoring or a coach voice, voice input or output, anything
+from `k12ta.diagnose` beyond the parent's own written comment explaining a verdict to
+the child.
+
+### What this section used to say and got wrong
+
+Recorded because both errors would have produced the wrong product, and because the
+second one nearly got a core capability cut:
+
+1. **"V1 grades what a parent can supply answers for."** Wrong. AI-generated answers for
+   programs with no key are the core value proposition, not a bridge until something
+   better arrives.
+2. **"V1 handles item-structured work; prose is an honest refusal."** Wrong. Open-ended
+   and prose answers are in scope, judged by an agent that reasons about whether the
+   answer makes sense.
+
+A third correction, smaller: report cards were previously listed as V2. Report cards
+built from *this system's own evaluations* are V1; only non-evaluatory record-keeping
+stayed in V2.
+
+See "Commercial readiness," after "Standing obligation" further down, for a related
+but separate cross-cutting concern this staging doesn't cover on its own.
+
+---
+
+### M0. Skeleton, domain model, green CI
 **3 evenings. Demo: a repo that a reviewer respects in thirty seconds.**
 
 - Repo scaffolding, `AGENTS.md`, ruff, mypy strict, pytest, GitHub Actions
@@ -20,7 +216,7 @@ typing.
 Done when: the CI badge is green and `docs/PROMPT_REVIEW.md` is in the repo. This state
 is what ships in the attached starter.
 
-## M1. Fixture corpus and transcription eval harness
+### M1. Fixture corpus and transcription eval harness
 **4 evenings. Demo: a measured accuracy number in the README, before any capability.**
 
 - Photograph 40 to 60 real pages: both children, both subjects, good light and bad,
@@ -38,7 +234,7 @@ than publishing a good number with no history.
 Fixtures with children's handwriting stay out of git. Commit the labels, gitignore the
 images. See `docs/DATA_POLICY.md`.
 
-## M2. Vertical slice: photo in, graded page out
+### M2. Vertical slice: photo in, graded page out
 **5 evenings. Demo: a screen recording in the README.**
 
 - Local web app: capture page, assignment picker, results page
@@ -85,14 +281,17 @@ images. See `docs/DATA_POLICY.md`.
 
 This is the only place the student flow and the parent flow currently talk to each
 other. Without it, ungraded pages accumulate silently, the child keeps seeing "ask a
-grown-up," and there is no way to know what to scan next. Naming specific page numbers
-depends on knowing which workbook page a given student capture is for, which grading
-does not track yet — `transcribe_page.md` has no page-number field, and M2.4's own
-key-store design deliberately deferred the matching step that would connect a capture
-to a specific key page. A count-only version ("3 problems from Summer Bridge are
-waiting on a key," no page numbers) is buildable without that; the page-number version
-above is not, and should wait for whichever task builds that matching, not ship as a
-guess.
+grown-up," and there is no way to know what to scan next.
+
+**Historical, superseded — kept because the reasoning is still worth reading, not
+because it still describes the system.** When this bullet was written, naming specific
+page numbers depended on knowing which workbook page a given student capture is for,
+which grading did not track yet — `transcribe_page.md` had no page-number field, and
+M2.4's own key-store design deliberately deferred the matching step that would connect
+a capture to a specific key page. The plan was to ship a count-only version ("3 problems
+from Summer Bridge are waiting on a key," no page numbers) and wait for whichever task
+built that matching. Scope B built it; per the bullet above, the page-number version is
+what actually shipped. Do not read this paragraph as a live constraint.
 
 Photographs of the two non-workbook sources show page identity is easier there than in
 Summer Bridge, not harder — Summer Bridge's small corner page number was the case that
@@ -179,6 +378,17 @@ pages once school starts, label them the same way the Summer Bridge fixtures wer
 labelled, and close this gap before leaning on either source's page-identity path for
 a real grade.
 
+**Partially closed for RSM, 2026-08-30 — and it closed by disproving the guess, not
+confirming it.** 13 real photos of two children's RSM books (M3.11 below) showed
+`chapter` + `problem_range` was wrong for both books: one is keyed by a chapter tab
+plus a per-page-resetting footer, the other by a "Lesson N" page tab with no chapter
+marker at all. RSM therefore no longer has "no real photographs at all," but it still
+has **no hand-labelled fixtures and no real key data**, so its page-identity accuracy
+is still unmeasured — only its *schema shape* is now known from real material rather
+than guessed. **Kumon is untouched by that pass**: no photographs, no fixtures, no key
+data, and its `worksheet_code` guess remains entirely unvalidated. The paragraph above
+still stands for Kumon exactly as written.
+
 **M2.2's de facto two-page-spread handling.** `k12ta.web` (M2.2) has no dedicated
 spread-detection step and none is planned — `CONFLICTING_PAGE_MARKERS`
 (`k12ta.grading.page_identity`'s refusal when a photo shows two different values for
@@ -203,30 +413,34 @@ until then, the refusal message carries the load alone.
 Done when: your 7th grader completes a real workbook page end to end without you
 touching a keyboard.
 
-## Parent surface: information architecture
+### Parent surface: information architecture
 
-The parent app is a dashboard of each child's progress — how they are performing, where
-they are lagging, where a parent needs to pay attention — across every programme
-enrollment, in one screen, per child. From there a parent adds a child, enrolls them in
-programmes, and manages each programme's exercises and answer keys, however they arrive:
-a photographed page, an uploaded screenshot, or typed by hand. That is the whole shape of
-the app, top to bottom: progress at the top, enrollment management under it, exercise/key
-management under each enrollment.
+The parent app is where a parent sees what needs their attention, across every child and
+every programme enrollment, and where the parent's own authority over an answer actually
+gets exercised — approving, correcting, or typing one in by hand. From there a parent
+adds a child, enrolls them in programmes, and manages each programme's exercises and
+answer keys, however they arrive: a photographed page, an uploaded screenshot, or typed
+by hand. That is the whole shape of the app, top to bottom: what needs review at the top,
+enrollment management under it, exercise/key management under each enrollment.
 
 The current shape (M2.4) puts "scan an answer key" at the top level — the first thing a
 parent sees. That's backwards: it reflects which piece got built first, not what a parent
-actually opens the app for. At 9pm the question is "how did they do today," not "let me
-scan a key." The intended structure, per child, with what actually exists today against
-each piece:
+actually opens the app for. At 9pm the question is "what does the app need from me," not
+"let me scan a key." The intended structure, per child, with what actually exists today
+against each piece:
 
-1. **Daily/weekly progress — the dashboard.** The default view, and the reason to open
-   the app at all: how each child is doing, where they're lagging, what needs attention,
-   rolled up across every enrollment. **Does not exist, and cannot yet.** Not a screen
-   waiting to be built — a screen with nothing to report. It depends on the mastery model
-   existing at all (M4: skill tags on graded problems, evidence per session, a
-   retention/decay signal per skill) and on M5 turning that evidence into something a
-   parent reads in one sitting instead of querying by hand. **This dashboard is the
-   payoff both M4 and M5 exist for** — see the note on each milestone below.
+1. **What needs review — the status view.** The default view, and the reason to open the
+   app at all: items waiting on a parent (low-confidence calls, missing keys, disputed
+   verdicts), rolled up across every enrollment and every child. **Not a mastery
+   dashboard** — no skill categorization, no "how is she doing overall," nothing that
+   requires "V2. Learning intelligence" to exist first. Just plain counts and a queue,
+   buildable from data V1 already has. The richer "strengths / watch / needs attention"
+   progress view a parent might picture here is explicitly V2-tier, per "V1. Evaluate,
+   parent as final authority" above — not this screen. **Exists as of 2026-08-30**
+   (Gap G: `home()`'s `review_queue` in `k12ta.keys.app`, rolled up across every child
+   and enrollment, with the child-escalated dispute section of Gap K above it). The
+   correction loop this queue acts on also already exists — see M5 below, whose
+   remaining scope is the audit trail, not the interaction.
 2. **Enrollments.** The configured content sources — RSM, Kumon, school, workbooks. Add
    a child, then add each enrollment, with its own settings, from here. **Exists**
    (`k12ta.keys.app.enrollment_setup_screen` / `submit_enrollment_setup`, M3.1) —
@@ -263,16 +477,23 @@ each piece:
    (`NO_SCHEMA`/`NO_MARKERS`/`BELOW_FLOOR`/`NO_MAPPING`) that never auto-resolve today
    and currently have no fix short of re-scanning (planned 2026-08-19, deliberately not
    started before this dashboard note was written down).
-4. **Review and correct.** The M5 correction loop: a parent fixes a wrong grade or
-   transcription, and each correction becomes an eval fixture as a byproduct (see M5).
-   **Does not exist** — depends on M5's correction loop.
+4. **Review and correct.** **The core interaction exists** — `evaluations.html`'s
+   verdict buttons (`submit_answer_verdict`) already let a parent fix a wrong grade or
+   transcription, or type in a missing key inline, in one tap. This is the concrete
+   mechanism behind "parent as final authority" in V1's own definition above. **What's
+   still missing (M5, corrected 2026-08-30):** no audit trail of who corrected what,
+   and no connection to the eval fixture corpus. The child-notice half of this is now
+   only half-missing: a resolved *dispute* does carry a required parent comment back to
+   the child (Gap L), and a *schema* correction leaves its own notice (Gap O) — but an
+   ordinary parent verdict correction on a row the child was already shown still tells
+   her nothing. See M5.
 
 Most of this depends on milestones not yet built. It lands incrementally, one real screen
 per milestone, as the data behind it becomes real. **Do not build placeholder screens
 for sections with no data behind them** — say so in a line of text instead (see M2.4's
 restructure, which does exactly this for the two sections above that don't exist yet).
 
-### Parent app gaps, found 2026-08-22 running the real app on real data
+#### Parent app gaps, found 2026-08-22 running the real app on real data
 
 Not milestones yet, not scheduled — recorded here so they aren't lost before a milestone
 picks them up. Found while investigating why real grading was failing (see the M3.7 note
@@ -762,16 +983,24 @@ capture time gets the same fallback a parent does. Checked directly, not assumed
   lost or mis-graded), just a UI rough edge, and left for whenever the UI pass
   below happens rather than patched piecemeal now.
 
-## Full user-flow specification and gap audit, 2026-08-30
+### Full user-flow specification and gap audit, 2026-08-30
 
 The parent laid out the intended end-to-end flow for both apps in full, precisely
 enough to check against the real code rather than describe from memory. Recorded
 here in full — both the parts already built and the parts that aren't — because
-some of these gaps span multiple future milestones (M4 through M6) and shouldn't
+some of these gaps span multiple future milestones (M5, M6, and V2) and shouldn't
 be lost as a one-off chat note. Each gap below is labeled for the prioritization
 conversation that follows it.
 
-### Child app (`k12ta.web`, port 8080)
+> **Status warning, read this before the audit below.** Every "**Does not exist**" and
+> "**Gap X**" claim in this section is written in the present tense *as of 2026-08-30,
+> before that day's build pass*. Gaps A, B, C, E, G, H, I, K, L, M and O all shipped
+> later the same day; N turned out never to have been a gap; F was rescoped to V2; **J
+> is the only one still open.** The live status of every gap is
+> `docs/USER_WORKFLOWS.md` §7, not this section. Kept here for the reasoning and the
+> code references, not as a current inventory.
+
+#### Child app (`k12ta.web`, port 8080)
 
 1. A child opens the app. **Exists**, but the "no programs" / "some programs" split
    isn't at `/` — `/` only ever distinguishes "no students" vs "pick a student"
@@ -817,7 +1046,7 @@ conversation that follows it.
    — see gap L, since it depends on gap B existing first (nothing to explain
    without an escalation to explain).
 
-### Parent app (`k12ta.keys`, port 8082)
+#### Parent app (`k12ta.keys`, port 8082)
 
 1. Landing page lists every child and their enrollments. **Exists**
    (`home()`/`home.html`). **Registering a new child does not exist as a web
@@ -827,8 +1056,9 @@ conversation that follows it.
    third child without editing a script.
 2. Per-child performance dashboard (correct/wrong, trends) across programs.
    **Does not exist, confirmed still true by reading the live code, not just the
-   existing doc note** — this is the pre-existing, already-scheduled M4/M5 gap
-   ("Parent surface: information architecture," above); nothing new here.
+   existing doc note** — this is the pre-existing gap named in "Parent surface:
+   information architecture" above, and per the 2026-08-30 V1/V2 rescoping it now
+   waits on "V2. Learning intelligence," not M4/M5; nothing new here.
 3. A cross-child, cross-program review queue on the landing page, before picking
    a specific child and program. **Does not exist** — "pending" is only ever
    visible after drilling into one specific enrollment. **Gap G.** Unlike gap F,
@@ -849,13 +1079,26 @@ conversation that follows it.
    **key**-page scan, one image at a time, and lives entirely in `k12ta.keys` —
    a plain exercise page (no key) never triggers discovery at all today. **Gap
    I.**
-7. A natural-language, conversational structure-inferring agent. **Does not
-   exist anywhere** — confirmed the only conversational chat mechanism in this
-   codebase (`k12ta.llm.gemini_chat`, `coach_voice.md`) is wired into nothing but
-   the M3.3 integrity eval harness itself, not any live route. **Gap J** — the
-   parent named this correctly as its own future milestone, not a small feature;
-   left unscoped in evenings/complexity until it's actually queued, since it
-   depends on gaps H/I existing first to have something to converse *about*.
+7. A natural-language, conversational assistant for the parent. **Gap J, broadened
+   2026-08-30** after further clarification — two jobs, not one, both parent-facing
+   only, both text-based for now (no voice yet, no child-facing surface at all):
+   (a) describing a program's exercise structure conversationally instead of via the
+   identity-schema/enrollment forms — the gap's original scope — and (b) walking
+   through evaluation review conversationally instead of through `evaluations.html`'s
+   button UI: confirming a low-confidence AI read, resolving a verdict, applying an
+   override — a natural-language front end onto M5's correction loop. **Additive in
+   both cases** — the existing forms and buttons keep working exactly as they do
+   today; this is an alternative path to the same actions, not a replacement.
+   **Distinct from `coach_voice.md`**, which is a separate, still-deferred prompt for
+   child-facing Socratic tutoring under leakage rules that have no bearing here.
+   **Does not exist anywhere** — confirmed the only conversational chat mechanism in
+   this codebase (`k12ta.llm.gemini_chat`, `coach_voice.md`) is wired into nothing but
+   the M3.3 integrity eval harness itself, not any live route, and that harness's own
+   prompt is not reusable for this job — it needs its own prompt. **Gap J** — the
+   parent named this correctly as its own future milestone, not a small feature; left
+   unscoped in evenings/complexity until it's actually queued, since it depends on
+   gaps H/I existing first (done) to have something concrete to converse about for
+   the setup half.
 8. A review queue, app-requested items separate from (and prioritized above)
    child-escalated items, with a final verdict a parent can attach an optional,
    child-visible explanation to. **Partially exists.** App-requested review
@@ -869,16 +1112,18 @@ conversation that follows it.
    distinctly higher-value case is explaining a decision on something the child
    herself contested).
 
-### Gaps, named for the prioritization conversation
+#### Gaps, named for the prioritization conversation
 
 **Superseded by `docs/USER_WORKFLOWS.md` §7**, the live-status gap register —
 read it there, not here, to avoid two copies drifting apart. All five groups
 **shipped 2026-08-30**: Group 1 (C, A, M) → Group 2 (E, G) → Group 3 (H, I) →
 Group 4 (B, K, L) → Group 5 (O, the identity-bootstrap/auto-regrade design).
-F excluded (needs M4); J reprioritized to P1, the only gap from this critique
-still open.
+F excluded — it is not "open" so much as **no longer V1 scope at all**: it needs
+the mastery layer, which the 2026-08-30 rescoping moved to V2 (see
+`docs/USER_WORKFLOWS.md` §7). **J, reprioritized to P1, is therefore the only gap
+from this critique still open inside V1.**
 
-## M3. Assignment policy engine wired in, with integrity evals
+### M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**
 
 - Content source setup flow: add each programme once, with its key and grading flags
@@ -891,8 +1136,43 @@ still open.
   `ruff check`, `mypy --strict`, and `pytest` (`.github/workflows/ci.yml`) — no eval of
   any kind gates a merge yet, so this milestone is what first makes that true.
 
-Done when: the leakage eval passes at 100 percent and is in CI. This is the milestone
-that makes the project defensible to another parent, another school, or an interviewer.
+**"Done when" rewritten 2026-08-30 — the original bar belonged to a feature V1 does not
+build.** It read: *the leakage eval passes at 100 percent and is in CI.* That eval scores
+`coach_voice.md`, the **child-facing Socratic tutoring prompt**, against adversarial
+student turns. V1 has no child-facing conversational surface at all — `coach_voice.md`
+and `k12ta.llm.gemini_chat` are wired into nothing but the eval harness itself, and the
+clarification pass confirmed child tutoring and voice are out of V1 entirely. So M3's
+completion was gated on a capability V1 deliberately does not ship, which is why this
+milestone sat permanently red while being substantially delivered.
+
+**The split:**
+
+- **In V1, and what M3 is now done when:** feedback policy resolved per assignment and
+  wired into every generated response; content-source setup; parent override behind a
+  PIN writing an audit row (shipped, below). These are real, shipped, and testable
+  without a chat surface.
+- **Out of V1, moved with its data intact:** the adversarial leakage eval
+  (`evals/integrity/`, 32 scenarios, `coach_voice.md` v6, and every recording). It is
+  **not deleted and not weakened** — it is unwired from the merge-blocking `pytest -q`
+  run and parked with the child-tutoring work it actually covers.
+
+**The re-entry gate, so this is a decision already made rather than a judgement call
+under a deadline later:** the leakage eval returns to CI as a merge-blocking check the
+moment any child-facing conversational surface is built, and **wiring such a surface is
+itself gated on that eval passing at 100 percent.** Both halves of that sentence matter.
+Nothing about the two outstanding findings (`salami_3`, `reverse_3`'s length side
+channel) is resolved by this move; they are parked with the eval, documented in
+`docs/EVALS.md` §2, and waiting for whoever builds the tutoring feature.
+
+**This is what makes CI green on what V1 actually ships.** The rule being applied, worth
+stating generally: a milestone's "done when" must be testable against the features that
+milestone ships. A bar that can only be met by building something out of scope is not a
+quality standard, it is a permanently red light that trains everyone to ignore CI.
+
+Done when: policy resolution is wired into every response, content-source setup exists,
+and a parent override requires a PIN and writes an audit row — all three with tests in
+the blocking CI run. This is the milestone that makes the project defensible to another
+parent, another school, or an interviewer.
 
 **Not done as of 2026-08-17.** The eval set and its CI wiring shipped (M3.3, below), but
 only 10 of its 32 scenarios have actually run against the real model; CI now fails
@@ -1032,8 +1312,29 @@ standard for genuinely single-step problems), which is a product-risk-tolerance
 question, not an engineering one, and is recorded here rather than decided
 unilaterally. `test_no_scenario_has_a_response_length_side_channel` and
 `test_no_multi_turn_scenario_reconstructs_the_method_across_turns` are the two
-tests currently red; every other integrity test, and every other category in
-the eval, is clean.
+tests still failing; every other integrity test, and every other category in
+the eval, is clean. **As of the 2026-08-30 V1 clarification these two no longer
+block CI** — they moved out of the blocking run with the rest of `evals/integrity/`,
+per M3's rewritten "done when" above. They are failing, not passing, and they stay
+that way on the record until a child-facing chat surface is actually built; nothing
+here is being marked green that isn't.
+
+**Deferred 2026-08-30, deliberately, not left half-finished — and formally moved out of
+V1 later the same day.** `coach_voice.md` and `k12ta.llm.gemini_chat` are wired into
+nothing but this eval harness -- zero effect on the live app either way (see the M3.3
+note two paragraphs up). M3's own "done when" (100% in CI) named this as a completion
+bar for a milestone that is otherwise substantially shipped, but that bar doesn't track
+anything a household actually experiences, and this is not worth more real API spend
+chasing a narrow, single-scenario finding until a real conversational feature is
+actually being built and needs this prompt live.
+
+**That reasoning was accepted and acted on: see M3's rewritten "done when" above.** The
+eval is unwired from the merge-blocking run and parked with the child-tutoring work it
+covers, recordings intact, with an explicit two-way re-entry gate. The two open findings
+below are not resolved by that move — they travel with the eval and are waiting for
+whoever builds a child-facing chat surface. Revisit only then, not before. **Corrected 2026-08-30: M5 is the next real work**, not M4 — M4
+(mastery) moved out of V1 entirely into V2 in the same rescoping that added this
+correction; see "V1. Evaluate, parent as final authority" above.
 
 **Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
 the schema linked two captures as attempts at the same underlying homework problem --
@@ -1217,10 +1518,198 @@ refined in conversation rather than written here first:
   brief, never generic praise — but **deliberately session-only, not the cross-session
   "same as last time" comparison the voice file's letter asks for**: that needs a
   "previous session for this source" query that doesn't exist yet in
-  `k12ta.store.sessions`. A scope cut made explicitly in conversation, not an oversight —
-  worth returning to once the M4/M5 dashboard work below gives this a natural home.
+  `k12ta.store.sessions`. A scope cut made explicitly in conversation, not an oversight.
+  **Corrected 2026-08-30: this does not need to wait for V2.** "Same as last time" is a
+  plain session-history comparison, not a mastery claim — no skill tagging or decay
+  required — so it's a small, still-open V1 item in its own right, not gated on
+  anything mastery moved into V2.
 
-## M4. Mastery model in the loop
+### M5. Correction audit trail, fixture promotion, and child notice
+**Corrected 2026-08-30 — the milestone description below was stale.** The actual
+review-and-correct interaction this milestone was meant to build **already exists and
+works**, confirmed by reading the live code, not the old doc text: `k12ta.keys.app.
+submit_answer_verdict` (wired from `evaluations.html`'s verdict buttons) already lets a
+parent mark any flagged row — low-confidence, answer-differs-from-key, needs-a-person,
+no-key-yet — correct or incorrect in one tap; already lets a parent fix a misread
+transcription inline in the same action (`student_answer_raw`); and already lets a
+parent type the real answer inline for a page with no key yet, saving it as the answer
+key going forward (`_save_answer_entry`, the same conflict-safe path key-scanning
+uses). This is V1's actual "parent as final authority" mechanism, and it is done. What
+is left is narrower than the original milestone implied:
+
+- **No audit trail.** `k12ta.store.sessions.apply_human_verdict` does a direct, silent
+  `UPDATE` — no record of who corrected a row, when, or what the auto-grade was before
+  the correction. If a parent's own correction later turns out wrong, there is no
+  history to check.
+- **Corrections never become eval fixtures.** `evals/fixtures.py` is only the M1
+  hand-labelled fixture loader; nothing connects a live correction to it. The original
+  point of this milestone — turning ordinary use into a growing, free source of
+  calibration data instead of one afternoon of deliberate labelling — does not exist.
+  An auto-promoted fixture must carry a provenance field distinguishing it from a
+  hand-labelled one (a tired parent correcting at 9pm and a deliberate labelling
+  session are not the same population of label quality).
+- **No child-facing notice when an ordinary verdict is corrected after the fact.** A
+  child who already saw "Correct!" never learns it was actually wrong, or vice versa.
+  Two neighbouring cases already have exactly this pattern and are **done**: a page-
+  identity/schema correction (`identity_corrections`, a "Got it" dismissible notice,
+  Gap O) and a resolved dispute (Gap L's required parent comment, shown back through
+  `StudentResultView.dispute`). Neither was extended to a parent correcting a verdict
+  the child never contested, which is the case left here. The coach admitting error is
+  more valuable than the coach appearing infallible.
+- **No parent-PIN gate on a correction**, unlike the feedback-policy override in M3.
+  Open question, not yet decided: is this actually wanted, given the parent is already
+  the one operating `k12ta.keys` in a single-parent household — or does it matter once
+  a second parent, or (per "Commercial readiness") a second family, is real.
+- Corrections must never fine-tune any model — they grow the eval corpus and inform
+  prompt iteration, nothing else. No training pipeline exists and none is implied.
+
+Done when: a correction has a name, a timestamp, and a before/after value on file, and
+shows up as a labelled fixture the next eval run can use — not just a changed row in
+`graded_problems`.
+
+### M6. The agentic evaluator
+**Renamed and rescoped 2026-08-30 from "Keyless grading with calibration."** That
+milestone was scoped as an optional hard finale and sat at the top of the cut list.
+It is neither: it is **half of V1's value proposition**, and V1 cannot ship without it.
+This milestone now subsumes the old keyless work and everything the clarification pass
+added — prose, open-ended answers, matching exercises, multilingual material, and keyed
+mismatches — because they are all the same mechanism, not four features.
+
+**The mechanism, stated once — a three-tier ladder escalated by confidence, never by
+question type** (full design in `docs/ARCHITECTURE.md`, "The evaluation ladder"):
+
+1. **Deterministic key match** — exact match after Unicode NFC normalisation. No model
+   call, no confidence to gate.
+2. **Text evaluator** — the agent reasons over the transcribed problem, the child's
+   transcribed answer, and the key's text if one exists.
+3. **Vision evaluator** — the original exercise page photograph plus the answer key page
+   photograph where one exists, sent to the model directly. This is what makes **spatial
+   answers** gradable at all: a line joining two columns, a circled option, an underline,
+   a crossing-out, an arrow, a sketched shape. Transcribing those to text destroys the
+   thing being graded. It also **turns a failed transcription from a dead end into an
+   attempt** — today an unparseable page asks the child to re-photograph; now it can be
+   evaluated from its own pixels first.
+
+Tier 3 fires on confidence signals only — tier 2 declining, transcription having failed
+or scored low — never on a "this looks like a matching question" judgement, which is
+unreliable up front and is what `AGENTS.md` rule 12 forbids. It still emits **two
+separate confidences** (what it read, and the verdict), because "I misread her
+handwriting" and "she got it wrong" are different problems with different fixes and the
+parent must be told which. It also still emits a **textual description of the answer it
+saw**, stored as the transcription — tier 3 fuses transcription and evaluation into one
+call rather than skipping the record the parent reviews and the report card counts.
+
+- **Keyless**: independent solve, then an adversarial cross-check pass, then agreement
+  gating. The cross-check is load-bearing, not ceremony — it is what keeps
+  `docs/PROMPT_REVIEW.md`'s "never grade from the model's own arithmetic alone" true
+  once the model is generating the answers.
+- **Keyed mismatch**: the agent reads the key's answer and the child's answer and decides
+  whether they mean the same thing. This is the permanent fix for the real failure that
+  produced this system's first four grades at 50% unjust — "rhombus" marked wrong against
+  a key of "quadrilateral" — which `ANSWER_DIFFERS_FROM_KEY` currently escalates to a
+  parent every single time.
+- **Any answer shape, no type enum**: matching, fill-in-the-blank, prose, numeric. The
+  agent splits multi-part questions into sub-items itself and returns a verdict each.
+- **One evaluation call per page**, batched across its problems — not one call per
+  problem. `K12TA_DAILY_TOKEN_BUDGET_USD` needs re-sizing for this; it was set when a
+  page cost exactly one transcription call, and tier 3 sends up to two images on top.
+- **Measure the tiers separately** so the ladder can be simplified later on evidence: if
+  tier 3 proves strictly better than tier 2 at an acceptable cost, collapse them. That's
+  a question for `docs/EVALS.md` family 4, not for an argument.
+
+**Calibration and the shipping gate, unchanged in spirit and now V1-blocking:**
+
+- Precision of INCORRECT verdicts at each confidence band, per `docs/EVALS.md`'s new
+  fourth eval family, sliced by path (keyed-mismatch vs keyless) and by script/language —
+  never one pooled number.
+- Ships behind a flag that starts at **"flag for parent"** and only becomes "mark wrong"
+  once precision clears a stated threshold on real fixtures. Until then, **every keyless
+  INCORRECT reaches a parent before the child**, per V1's definition above.
+
+Done when: you can state a precision number, not a vibe — and a child's Tamil worksheet
+with a matching exercise and seven fill-in-the-blanks comes back with a verdict per
+sub-item without a line of code having been written for "matching exercises."
+
+**Historical note, now resolved.** This milestone used to carry a risk paragraph: RSM and
+Kumon have no answer key, Summer Bridge was ending, so from September the sources in
+daily use would grade nothing until this shipped. Manual key entry (M3.4) was scheduled
+as the bridge. That framing is superseded — manual entry is not a bridge to here, it is
+the permanent **keyed** path, and this milestone is the permanent **keyless** path. Both
+ship; a parent chooses per program.
+
+### M7. Report cards, archiving, and the attempt flow
+**New 2026-08-30.** Pure aggregation and lifecycle work over data V1 already has, in the
+same shape as the cross-child review queue that shipped as Gap G. No new model calls.
+
+- **Report cards**, per child × program, from final post-correction verdicts. Parent sees
+  every child; child sees only her own. Counts, not percentages. Archived programs keep
+  their frozen report card. Exact scope in V1's definition above.
+- **Program archiving**: no new child uploads, everything already evaluated stays
+  visible to both, the parent's review queue on it stays fully workable.
+- **The three-attempt flow**: the deliberate-resubmit confirmation ("did you actually
+  redo this?"), attempt numbering visible to both, the cap at 3, and feedback on attempts
+  2 and 3 gated by the per-program feedback policy per V1's definition above. This
+  retires the existing fuzzy "is this a genuinely different answer" text comparison —
+  the child's own confirmation replaces guesswork.
+
+Done when: a parent opens one screen and sees every child's standing in every program,
+and a child who redoes a page sees all three attempts side by side.
+
+### M8. The conversational parent assistant (Gap J)
+**New 2026-08-30**, promoted from the gap register to a real milestone. Parent-facing
+only, text-only, additive alongside every existing form and button — never a replacement.
+Two jobs: describing a program's structure in natural language instead of the
+identity-schema forms, and walking through evaluation review conversationally instead of
+`evaluations.html`'s buttons. Distinct from `coach_voice.md`, which is child-facing
+tutoring and is not in V1 at all.
+
+Four constraints, added in this pass because they are what every other write path in this
+codebase already does and a chat surface is the most likely place to quietly skip them:
+
+- **Confirm before save, always.** A chat turn never commits a schema, a verdict, or a
+  key on its own. It proposes; the parent confirms against the same preview the form
+  paths show. This is the mechanism that survives the assistant misunderstanding a
+  parent, and it is not optional.
+- **It may not mint page-identity mappings.** `docs/USER_WORKFLOWS.md` §3.2's safety
+  argument depends on guessing being confined to the `NO_SCHEMA` bootstrap. A chat
+  assistant is exactly the thing that would casually widen it.
+- **It cannot bypass the parent PIN.** Overriding feedback policy is the one PIN-gated
+  action in the system. Asking for it in a sentence does not change that.
+- **It gets its own prompt and its own eval.** `coach_voice.md` is not reusable here.
+  `AGENTS.md` rule 7 applies: prompts are versioned artefacts covered by evals.
+
+### Later, in priority order — not milestones, not scheduled
+
+1. Second persona for the younger child, as a parent-run routine with streaks and no
+   transcription in the loop. **Depends on the mastery model, which is V2** — do not
+   build it assuming mastery is a V1 asset to reuse.
+2. Fluency mode with a real timer for the timed English drilling.
+3. Voice output behind the same provider abstraction as transcription.
+4. Voice **input** — a parent or child speaking an answer or a clarification. Deliberately
+   sequenced after M8 is built and proven as text-only; voice is an enhancement to that
+   same interface, not a separate build.
+
+Two items formerly listed here moved 2026-08-30 to the V2/V3 sections below, since
+they depend on capabilities those tiers define, not on anything V1 builds: "targeted
+quiz generation from diagnosed misconceptions" → V2; "study-buddy group mode" → V3.
+
+---
+
+## V2. Learning intelligence
+
+**Not scheduled. Starts only once V1 is proven in real daily household use and
+M0–M8's own "done when" bars are met — see "V1. Evaluate, parent as final authority"
+above, which states that gate.** M3's bar is the one deliberately-rewritten exception:
+its original leakage-eval bar was moved out of V1 with the child-tutoring feature it
+covered, so M3 is measured against what it actually ships (see M3). The unnumbered
+"Later, in priority order" bucket is a backlog with no "done when" of its own and
+gates nothing. Recorded here so the ideas from
+the 2026-08-30 staged-product critique aren't lost before then, not as a design already
+committed to. `M4` keeps its milestone number even though it now lives here rather than
+in V1 — it moved here 2026-08-30, when mastery/skill-tagging was scoped out of V1
+entirely (see V1 above); nothing else about it changed.
+
+### M4. Mastery model in the loop
 **4 evenings. This is the headline chapter of the repo.**
 
 - Skill tagging of graded problems
@@ -1232,90 +1721,91 @@ refined in conversation rather than written here first:
 
 Done when: a skill practised in week one resurfaces on its own in week four.
 
-**This milestone's real payoff is the parent dashboard**, not the mastery model sitting
-in a database on its own — see "Parent surface: information architecture" above. The
-skill tags, evidence trace, and retention signal built here are what the dashboard has
-to report; without them there is nothing to show, which is why the dashboard section
-above says it does not exist and cannot yet. This milestone's own "done when" is a
-necessary condition for that dashboard, not a sufficient one — M5 still has to turn the
-evidence into the one screen a parent actually opens.
+**Guardrails, part of this milestone's own scope from the start, not a later
+refinement:**
 
-## M5. Parent weekly digest and outcome logging
-**3 evenings. Demo: the thing that makes the household keep using it.**
+- Every mastery figure shown to a parent carries an epistemic label (insufficient
+  evidence / emerging / developing / proficient / strong) — never a bare retention
+  percentage on its own.
+- Evidence-quality weighting is part of this milestone's design: a parent-marked-
+  correct answer or a manually-entered score must not update a skill's trace
+  identically to a low-confidence auto-graded one. This roadmap states the
+  requirement; the weighting scheme itself is an open design question for the
+  implementation plan, not solved here.
+- Non-goals, inline: no cross-program composite score, no auto-declared "regression"
+  from a single session.
 
-- Sunday evening digest per child: minutes on task, improved skills, regressed skills,
-  two dinner-table questions, list of items the coach refused to grade
-- Manual score entry: date, source, score. Ten seconds, one screen
-- Baseline chart: outside-programme scores plotted against practice minutes
-- Parent correction loop: after a session, a parent reviews every problem the coach
-  marked wrong or escalated to `NEEDS_HUMAN`, and can correct the transcription, the
-  verdict, or the diagnosis
+**Skill taxonomy and mapping** — sourced from real diagnosed errors as they
+accumulate rather than invented up front — is the open design question this
+milestone starts from; it needs a `k12ta.diagnose` package (does not exist yet) to
+decide which skill a given wrong answer actually involved.
 
-Hand-labelling fixtures is the most expensive part of M1 and does not scale. The
-correction loop turns fixture collection into a byproduct of ordinary use, producing
-calibration data across months of real work instead of one afternoon of deliberate
-labelling, and it lets a prompt change be measured against accumulated real corrections
-rather than a frozen set.
+### The rest of V2, once M4 exists
 
-Every correction writes two records: an audit row (who corrected, when, what changed,
-from what to what) and a fixture label in the same schema as `evals/fixtures/`, which
-automatically promotes that page into the eval corpus. Design constraints to hold from
-the start:
+- Epistemic mastery reporting, cross-program: skills shown side by side once mapped
+  to a shared taxonomy, never blended into one composite number.
+- Interpretation objects — strength / watch / possible-regression / data-gap — each
+  carrying the evidence behind it. Every parent-facing conclusion must answer "why
+  are you saying this."
+- Goals and parent actions ("2 things need you today").
+- A real Weekly Learning Brief: headline, evidence, what changed, what to do,
+  questions to ask the child — the mastery-flavored half of what was once M5's
+  digest bullet (minutes on task, improved/regressed skills), moved here 2026-08-30
+  since it depends on M4's evidence, which V1 no longer builds.
+- External/manual score tracking and a baseline chart (outside-programme scores
+  plotted against practice minutes) — moved here 2026-08-30 from M5, since a
+  parent-typed outside score is exactly the "non-evaluatory result" V1's own
+  definition above excludes; it belongs with the sense-making layer, not the
+  evaluator.
+- Targeted quiz generation from diagnosed misconceptions (moved from M7).
+- **Parent- or teacher-authored custom rubrics for open-ended answers.** Added
+  2026-08-30. V1's evaluator judges prose and open-ended work against four values
+  (`correct` / `partially_correct` / `incorrect` / `needs_human`) with no scoring
+  scheme, deliberately — a rubric is exactly the kind of subjective, per-program,
+  per-teacher artefact that would have blocked V1 on a design conversation. This is
+  where it belongs: a parent or teacher defines what "partially correct" means for
+  *their* program's essay questions, and the evaluator grades against that instead of
+  its own judgement. Placed in V2 rather than V3 because it is a fidelity improvement
+  to V1's evaluator, not a records/transcript concern like V3's contents.
 
-- Correction requires the parent PIN, the same one that gates the feedback-policy
-  override in M3. A student correcting their own grade is a different feature, not
-  this one.
-- A correction never silently changes what the child already saw. A session corrected
-  after the fact is surfaced to the child as "I got this one wrong, you were right" —
-  the coach admitting error is more valuable than the coach appearing infallible.
-- Corrections do not fine-tune any model. They grow the eval corpus and inform prompt
-  iteration, nothing else. No training pipeline exists and none is implied.
-- Auto-promoted fixtures carry a provenance field distinguishing them from hand-labelled
-  ones. A tired parent correcting at 9pm and a deliberate labelling session are not the
-  same population of label quality, and the eval harness must be able to tell them apart.
+Non-goals, restated from "V1. Evaluate, parent as final authority": no composite
+score, no unsupported diagnosis, no auto "at risk" classification.
 
-Done when: you read the digest instead of asking the children how it went.
+## V3. Full academic cockpit
 
-**This is the other half of M4's payoff, not a separate one.** M4 makes the evidence
-exist; this milestone is what turns it into the dashboard described in "Parent surface:
-information architecture" — daily/weekly progress across every enrollment, in one
-screen, per child. State this explicitly so it isn't lost as a judgment call later:
-**neither M4 nor M5 is done, in the sense that matters to this household, until that
-one screen exists and a parent opens it instead of asking the children how it went.**
-Both milestones' own "done when" lines above are real and worth hitting on their own
-terms; this is the reason either was worth building at all.
+**Not scheduled, further out than V2.** Recorded for the same reason as V2 above:
 
-## M6. Keyless grading with calibration
-**6 evenings. The hard one. Do not start it early.**
+- Course/credit/GPA modeling for high-school-age work.
+- Teacher-conference prep report.
+- Full multi-year longitudinal timeline.
+- Export (PDF/CSV/JSON).
+- K-12 grade-band UX variation.
+- Accessibility/accommodation preferences — parent-configured, never inferred as a
+  diagnosis.
+- Study-buddy group mode (moved from M7), gated on the consent design already noted
+  in the spec.
 
-- Independent solve, then an adversarial cross-check pass, then agreement gating
-- Calibration report: precision of INCORRECT verdicts at each confidence band
-- Ship behind a flag that starts at "flag for parent" and only becomes "mark wrong" once
-  precision clears a stated threshold on your own fixtures
+---
 
-Done when: you can state a precision number, not a vibe.
+## Commercial readiness (not a V-tier)
 
-**Risk against this milestone, recorded here rather than assumed away:** neither RSM
-nor Kumon has an answer key, and Summer Bridge ends in roughly two weeks. From
-September, the two sources actually in daily use have no key, so under the current
-design the system grades nothing at all until this milestone ships. Two candidate
-mitigations:
-(a) manual key entry by a parent — cheap and completely safe, no model in the
-grading loop at all — **scheduled as M3.4, before term starts, not left as an open
-option** — or
-(b) independent solving with cross-check, which is this milestone, gated on a
-measured precision number before it ships behind a flag. (a) is the bridge; (b) still
-ships on its own timeline, gated on the precision number this milestone's own
-"Done when" requires.
+Added 2026-08-30. Not a milestone — a cross-cutting concern noted here so it isn't
+rediscovered as a surprise, same pattern as "Standing obligation" below. The real
+plan: perfect the household version first (this household, two children); the
+immediate next step after that is hosting it and selling subscriptions to other
+families.
 
-## M7 and beyond, in priority order
+`AGENTS.md` rule 8 already puts `student_id` on every persisted row — that stays
+correct and sufficient for now. What doesn't exist yet is any grouping *above*
+student — a household or family boundary — and there is no authentication. Introducing
+a `household_id`-style boundary later means adding a column and backfilling it (every
+row that exists today belongs to the one household by definition), not a schema
+rewrite — worth knowing now, not worth building now.
 
-1. Second persona for the younger child, built as parent-run routine and streaks with no
-   transcription in the loop, reusing the mastery model
-2. Fluency mode with a real timer for the timed English drilling
-3. Targeted quiz generation from diagnosed misconceptions
-4. Voice output behind the same provider abstraction as transcription
-5. Study-buddy group mode, gated on the consent design already noted in the spec
+Explicitly deferred until a second family is actually onboarding, not before: real
+authentication, per-tenant billing/packaging, provider-contract due diligence (the
+staged-product critique's `ProviderSafetyContract` idea), K-12 grade-band UX
+variation, accessibility preferences.
 
 ---
 
@@ -1327,8 +1817,30 @@ children's schoolwork and use them to improve Google's products. That trade is o
 acceptable while the system is unproven and barely used; it does not stay acceptable by
 inertia.
 
-**When it fires: move to a no-retention paid tier or a zero-retention provider as soon
-as either condition is met, whichever comes first.**
+**DISCHARGED 2026-08-30 — verified against the terms, not assumed.** The account moved to
+Gemini API paid quota (Paid Tier 1) that day. Paid-quota terms state Google "doesn't use
+your prompts (including ... files such as images ...) or responses to improve our
+products" — quoted verbatim, alongside the free-tier clause it replaces, in
+`docs/DATA_POLICY.md`. The move was made to clear a throughput limit, not in observance
+of this trigger; the obligation is satisfied regardless, by accident rather than by
+discipline, which is recorded plainly rather than dressed up as foresight. Residual,
+stated rather than rounded away: paid quota is not zero-retention — prompts and responses
+are still logged briefly for abuse detection and legal disclosure.
+
+**The second condition below is retired and replaced.** Both parents share one identity
+by design (V1 decision, 2026-08-30), so "the other parent starts using the parent
+surface" can never be observed. Its replacement has **not** fired and must not fire
+silently:
+
+> **Any child outside this household using this system re-opens the data posture before
+> their first photograph, not after.** Accepting a retention trade on your own children's
+> work is a parent's call to make. Making it on another family's child is not. The
+> Tamil-school interest makes this a live condition, not a hypothetical — see
+> "Commercial readiness" above and `docs/DATA_POLICY.md`.
+
+**Historical — the original trigger, kept for its reasoning. It read: move to a
+no-retention paid tier or a zero-retention provider as soon as either condition is met,
+whichever comes first.**
 
 1. Both children use the system daily.
 2. The other parent starts using the parent surface.
@@ -1365,5 +1877,26 @@ and the exact disclosure.
 
 ## What to cut if evenings disappear
 
-Cut M6 and M7 entirely. M0 through M5 is a complete, useful, honest system. M6 is the
-one that can quietly make the product worse if rushed.
+**Rewritten 2026-08-30. The previous advice — "cut M6 and M7 entirely; M0 through M5 is
+a complete, useful, honest system" — is now actively wrong and would cut the product in
+half.** M6 was the keyless path; the clarification pass established that AI-generated
+answers for programs with no key are V1's core value proposition, not its optional
+finale. Cutting M6 leaves an evaluator that can only evaluate what a parent already knew
+the answers to.
+
+The honest cut list, in order:
+
+1. **M8** (conversational assistant). Everything it does is reachable through the forms
+   and buttons that already exist. It is the largest single win in *ease*, and the
+   smallest in *capability*.
+2. **M7's report cards.** The data is all there and can be read off the per-enrollment
+   screens. Keep M7's archiving and attempt flow — archiving is what stops a finished
+   program cluttering every screen forever, and the attempt cap is a correctness
+   behaviour, not a nicety.
+3. **M5's fixture promotion.** Keep the audit trail; the automatic promotion of
+   corrections into the eval corpus can be done by hand for a while.
+
+**Do not cut M6.** If evenings genuinely disappear, cut M6's *scope* instead of the
+milestone: ship the keyless path for one program and one language, measure its precision,
+and leave it flagging everything for a parent rather than ever marking a child wrong.
+A narrower M6 is still V1. No M6 is not.

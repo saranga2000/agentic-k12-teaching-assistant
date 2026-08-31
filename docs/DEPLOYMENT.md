@@ -28,9 +28,15 @@ Setup on the MacBook:
 
 ```bash
 make install
-make seed   # until M3.1's real setup flow exists, seeds two example students
+make seed   # optional now: seeds two example students and some example sources
 make run    # or: uvicorn k12ta.web.app:app --host 0.0.0.0 --port 8080
 ```
+
+Seeding is no longer the only way a student comes into existence: a parent registers a
+child from the parent app at `/students/new`, and adds each enrollment there too
+(`docs/USER_WORKFLOWS.md` §7, gaps E and H). `make seed` is now a convenience for
+getting a dev database into a useful state, and its example sources can be renamed or
+deleted from the parent app rather than edited in the database.
 
 `make seed` and `make run` must see the same `K12TA_DATA_DIR` (unset is fine — both
 default to `./data` — but if you set it, set it for both). A mismatch, or skipping
@@ -82,7 +88,9 @@ Three options, in order of preference:
    first weeks, and you want to watch the early ones.
 2. **Keep it plugged in with `caffeinate -s` and the lid open on a shelf.** Costs
    nothing, works immediately, ugly.
-3. **Move the server to a dedicated always-on box around M4.** A used Mac mini or a
+3. **Move the server to a dedicated always-on box once V1 is in daily use** (around
+   M5/M6, per `docs/ROADMAP.md`'s 2026-08-30 rescoping — M4 moved to V2 and is no
+   longer a near-term marker). A used Mac mini or a
    Raspberry Pi 5 both run this workload comfortably. This is the right answer once the
    system is part of the routine, and it is a one hour migration because there is no
    cloud state to move.
@@ -103,5 +111,6 @@ and a hard stop is one line of code.
 ## Backups
 
 `data/` holds the database and the images. One line in a cron job copying it to an
-external drive or an encrypted cloud folder. The mastery history is the only thing in
-this system that cannot be regenerated.
+external drive or an encrypted cloud folder. The evaluation record — answer keys, grades,
+parent corrections — is what cannot be regenerated without re-photographing and re-running
+everything through the model; a mastery history, once V2 exists, joins that same list.
