@@ -39,18 +39,34 @@ running count logged below when that item starts.
       partially_correct disputable by the child, same as incorrect, in both
       session_result.html and my_pages.html. Full suite + browser suite + mypy +
       ruff all green.
-- [ ] 4. Content source `keyed | keyless` + `archived`; keyed-never-guesses rule
+- [x] 4. Content source `keyed | keyless` + `archived`; keyed-never-guesses rule --
+      committed. Reused the existing `has_answer_key` field rather than renaming it
+      (it already meant exactly "keyed", was already asked at setup, but had no
+      switch function and was never actually read by grading -- confirmed dead via
+      grep before touching anything). Added `content.set_has_answer_key` (switch,
+      no regrade) and `content.set_archived` + migration 0025 (`archived` column).
+      `k12ta.web.app.submit_capture` blocks a new upload to an archived source with
+      its own message. `manage_source.html` gets two new controls. The "keyed never
+      guesses" rule turned out to already be fully true and tested since M2
+      (`decide()` -> NO_KEY_FOR_PAGE) -- added a docstring connecting it to the flag
+      explicitly rather than a redundant test. Did NOT touch k12ta.content.source/
+      registry.py's ContentSource/example_sources -- confirmed dead code (only
+      SourceKind is imported live from that module), not worth the churn.
 - [ ] 5. M9a design system (tokens + shared stylesheet only, not 9b polish)
 - [ ] 6. M6 agentic evaluator (offline first: ladder, prompts, parsing, tests)
 
 Live model calls spent so far: 0 / 5 (budget applies to item 6 validation only)
 
-## Current item: 4
+## Current item: 5
 
-Starting. Need: ContentSource domain/store model, enrollment setup form (both apps?
-or just k12ta.keys), the "no key on file -> wait, don't guess" rule made explicit in
-process_capture, and an archived flag threaded through upload/review/report-card
-queries so an archived source's queue stays workable but closed to new uploads.
+Starting M9a (design system only, not 9b's polish pass). Need: design tokens (colour,
+type scale, spacing, radius, state), one shared stylesheet consumed by both apps
+(today k12ta.web and k12ta.keys each have their own Jinja2Templates directory with
+physically duplicated markup), plus designed empty/failure states per AGENTS.md rule
+11. Hard constraints: no build step/toolchain, the two-tap capture path must not grow
+a tap, accessibility baseline, one design for both children (no grade-band variation
+-- that's V3). Retrofit existing screens only as far as quota allows; a new
+inconsistent screen is not acceptable, a partially-retrofitted old one is.
 
 ## Questions for the morning
 

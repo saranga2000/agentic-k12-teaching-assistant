@@ -12,6 +12,31 @@
   <div class="actions"><button type="submit">Save name</button></div>
 </form>
 
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/grading-mode">
+  <fieldset>
+    <legend>Grading mode</legend>
+    <label><input type="radio" name="has_answer_key" value="1" {% if source.has_answer_key %}checked{% endif %}> Keyed — I'll supply the answers</label><br>
+    <label><input type="radio" name="has_answer_key" value="0" {% if not source.has_answer_key %}checked{% endif %}> Keyless — figure out the answers automatically</label>
+    <p class="message">Switching never changes anything already graded — only new work is affected.</p>
+  </fieldset>
+  <div class="actions"><button type="submit">Save grading mode</button></div>
+</form>
+
+<form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/archive">
+  <fieldset>
+    <legend>{% if source.archived %}Archived{% else %}Archive this enrollment{% endif %}</legend>
+    {% if source.archived %}
+    <input type="hidden" name="archived" value="0">
+    <p class="message">{{ student.display_name }} can't upload new pages to {{ source.label }} right now. Everything already evaluated stays visible, and the review queue still works.</p>
+    <div class="actions"><button type="submit">Reopen {{ source.label }}</button></div>
+    {% else %}
+    <input type="hidden" name="archived" value="1">
+    <p class="message">A finished or discontinued program — {{ student.display_name }} won't be able to upload new pages, but everything already evaluated stays visible and the review queue stays workable.</p>
+    <div class="actions"><button type="submit">Archive {{ source.label }}</button></div>
+    {% endif %}
+  </fieldset>
+</form>
+
 <h2>Delete this enrollment</h2>
 {% if can_delete %}
 <p class="message">Nothing has ever been photographed or keyed for {{ source.label }} --

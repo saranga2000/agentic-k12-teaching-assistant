@@ -1194,6 +1194,38 @@ def submit_rename_source(
     return RedirectResponse(f"/keys/{student_id}/{source_id}/manage", status_code=303)
 
 
+@app.post("/keys/{student_id}/{source_id}/grading-mode")
+def submit_grading_mode(
+    student_id: str,
+    source_id: str,
+    has_answer_key: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """docs/ROADMAP.md's V1 "two program paths": a parent switching a program
+    between keyed (True -- the parent supplies answers) and keyless (False --
+    the AI generates them). Never retroactively regrades -- content.set_has_
+    answer_key is a plain field update, nothing here calls a regrade path."""
+    _require_student_and_source(conn, student_id, source_id)
+    content.set_has_answer_key(conn, student_id, source_id, has_answer_key == "1")
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/manage", status_code=303)
+
+
+@app.post("/keys/{student_id}/{source_id}/archive")
+def submit_archive_source(
+    student_id: str,
+    source_id: str,
+    archived: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """docs/ROADMAP.md's V1 "Archiving" -- reversible, unlike delete below.
+    k12ta.web.app.submit_capture is what actually blocks new child uploads
+    once this is set; everything already evaluated stays visible here and on
+    every other read path, since none of them filter on this column."""
+    _require_student_and_source(conn, student_id, source_id)
+    content.set_archived(conn, student_id, source_id, archived == "1")
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/manage", status_code=303)
+
+
 @app.post("/keys/{student_id}/{source_id}/delete")
 def submit_delete_source(
     student_id: str,

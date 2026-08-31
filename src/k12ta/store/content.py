@@ -18,6 +18,13 @@ class ContentSourceRow:
     kind: str
     subject: str
     has_answer_key: bool
+    """docs/ROADMAP.md's V1 "two program paths": True is **keyed** (the parent
+    supplies answers; a page with no key on file is never evaluated, it waits
+    and the parent is notified), False is **keyless** (the AI generates the
+    answers itself, V1's core evaluation capability, not a fallback). Asked
+    at enrollment setup, switchable later via set_has_answer_key -- switching
+    never retroactively regrades anything already on file, since it is a
+    plain field update with no regrade call anywhere near it."""
     graded_by_someone_else: bool
     default_mode: str
     typical_session_minutes: int
@@ -27,6 +34,14 @@ class ContentSourceRow:
     "printed_page_number", or None if not yet configured for this source. Per-source,
     never a global assumption -- see docs/ROADMAP.md's page-identity discussion and
     k12ta.grading.page_identity, the only place this value is interpreted."""
+    archived: bool = False
+    """docs/ROADMAP.md's V1 "Archiving" (migration 0025): a parent's answer to
+    a school-year rollover, or any program that's simply done. Once true, the
+    child can no longer upload to this source (k12ta.web.app.submit_capture's
+    own check) -- everything already evaluated stays fully visible to both
+    parent and child, and the parent's review queue on it stays workable, so
+    archiving never strands a pending item. Never inferred, never set at
+    creation -- see set_archived below."""
 
 
 def insert_content_source(conn: sqlite3.Connection, row: ContentSourceRow) -> None:
@@ -57,6 +72,34 @@ def set_page_identity_kind(
     conn.execute(
         "UPDATE content_sources SET page_identity_kind = ? WHERE student_id = ? AND source_id = ?",
         (page_identity_kind, student_id, source_id),
+    )
+    conn.commit()
+
+
+def set_has_answer_key(
+    conn: sqlite3.Connection, student_id: str, source_id: str, has_answer_key: bool
+) -> None:
+    """A parent switching a program between keyed and keyless (docs/ROADMAP.md's
+    V1 "two program paths") -- a parent who gives up chasing a key, or a school
+    that finally sends one. Never retroactively regrades: this is a plain field
+    update with no call anywhere near it to replay_source or any other regrade
+    path, per this codebase's standing rule that a regrade is always a
+    deliberate, separate parent action, not a side effect of a settings change."""
+    conn.execute(
+        "UPDATE content_sources SET has_answer_key = ? WHERE student_id = ? AND source_id = ?",
+        (has_answer_key, student_id, source_id),
+    )
+    conn.commit()
+
+
+def set_archived(conn: sqlite3.Connection, student_id: str, source_id: str, archived: bool) -> None:
+    """docs/ROADMAP.md's V1 "Archiving". Blocking new child uploads is enforced
+    at the actual upload route (k12ta.web.app.submit_capture), not here -- this
+    function only flips the flag every read path checks. Reversible (a parent
+    can un-archive), unlike delete_content_source below."""
+    conn.execute(
+        "UPDATE content_sources SET archived = ? WHERE student_id = ? AND source_id = ?",
+        (archived, student_id, source_id),
     )
     conn.commit()
 
@@ -164,6 +207,7 @@ def _row_to_content_source(row: sqlite3.Row) -> ContentSourceRow:
     data = dict(row)
     data["has_answer_key"] = bool(data["has_answer_key"])
     data["graded_by_someone_else"] = bool(data["graded_by_someone_else"])
+    data["archived"] = bool(data["archived"])
     return ContentSourceRow(**data)
 
 

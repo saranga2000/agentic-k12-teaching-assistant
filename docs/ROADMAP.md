@@ -46,6 +46,26 @@ A program can be switched between the two at any time — a parent who gives up 
 keys, or a school that finally sends one. Switching never retroactively regrades, per
 this codebase's standing rule that a regrade is always a deliberate parent action.
 
+**Shipped 2026-08-31.** `ContentSourceRow.has_answer_key` was already asked at
+enrollment setup (a checkbox) but never switchable and never actually consulted by
+grading — `content.set_has_answer_key` adds the switch (a plain field update, verified
+by test to leave an already-graded row byte-identical), and `manage_source.html` gets
+a "Grading mode" control reading and writing it. The **keyed rule was already
+explicit, not emergent, before this pass** — `k12ta.grading.needs_human.decide` has
+returned `NO_KEY_FOR_PAGE` for a missing key, never a guess, since M2, and multiple
+existing tests in `tests/test_grading.py` and `tests/test_pipeline.py` already lock
+this in; this pass adds the docstring connecting that behavior explicitly to the
+`has_answer_key` flag's own meaning. Grading itself does not yet branch on this flag
+at all — M6, next, is what makes keyless a real, distinct grading path rather than a
+setting with no reader yet.
+
+**Archiving also shipped 2026-08-31** (see "Archiving" below for the full behavior):
+migration 0025 adds `content_sources.archived`, `content.set_archived` switches it,
+`k12ta.web.app.submit_capture` refuses a new upload to an archived source with its own
+honest message, and every read path (evaluations screen, resolved/pending queries) is
+untouched and therefore still fully workable, verified by a direct test rather than
+assumed from the absence of a filter.
+
 ### What the parent is actually asked to review
 
 Two independent things the AI can be wrong about, both routed to the parent by the AI's

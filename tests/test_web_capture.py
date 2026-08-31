@@ -2656,6 +2656,33 @@ def test_post_capture_with_a_bad_photo_is_rejected_and_nothing_is_persisted(
     assert cur.fetchone()[0] == 0
 
 
+def test_post_capture_to_an_archived_source_is_rejected(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Archiving": a parent can archive a program so
+    children can no longer upload to it, while everything already evaluated
+    stays visible. This is the enforcement half -- a real server-side guard,
+    not just hiding the picker option."""
+    _seed_two_students(conn)
+    _seed_todays_schedule(conn, "s-marcus")
+    assignment = get_or_create_todays_assignment(conn, "s-marcus", "summer_bridge", date.today())
+    content.set_archived(conn, "s-marcus", "summer_bridge", True)
+
+    response = client.post(
+        "/capture/s-marcus",
+        data={"assignment_id": assignment.assignment_id},
+        files={"photo": ("page.jpg", ACCEPTED, "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    final = _final_event(response)
+    assert "archived" in final["html"].lower()
+    assert _step_statuses(response, "checked") == ["failed"]
+
+    cur = conn.execute("SELECT COUNT(*) FROM page_captures WHERE student_id = ?", ("s-marcus",))
+    assert cur.fetchone()[0] == 0
+
+
 def test_group_by_problem_preserves_order_within_each_group() -> None:
     rows = [
         sessions.GradedAttemptRow(

@@ -77,6 +77,11 @@ REJECT_MESSAGES = {
     # see the worker() wrapper below. Deliberately not "I couldn't read this one": that
     # implies a photo problem, and by definition nothing is known about this one's cause.
     "internal_error": "Something went wrong on my end — ask a grown-up if it keeps happening.",
+    # docs/ROADMAP.md's V1 "Archiving": a parent has closed this program to new
+    # uploads. Everything already evaluated stays visible elsewhere; this route
+    # only refuses the one new thing archiving actually blocks.
+    "archived": "This program has been archived — ask a grown-up if you think it should be "
+    "reopened.",
 }
 NO_ASSIGNMENT_MESSAGE = "No assignment is set for today yet."
 NO_PROGRAMS_MESSAGE = "No programs are set up for you yet. Ask a grown-up to add one."
@@ -579,6 +584,13 @@ def _stream_capture_response(
         if assignment is not None
         else None
     )
+    if source is not None and source.archived:
+        # docs/ROADMAP.md's V1 "Archiving": no new child uploads once a parent
+        # has archived this program. Checked before spending anything on image
+        # quality -- an archived source refuses regardless of the photo itself.
+        yield step("checked", "failed", REJECT_MESSAGES["archived"])
+        yield final_html(_reject_html(request, student, assignment_id, "archived"))
+        return
     # The spread heuristic assumes a photograph of a physical page; a source
     # configured as SourceKind.ONLINE_EXERCISE is a screenshot, whose own aspect
     # ratio has nothing to do with "two pages." Configuration, not inference --

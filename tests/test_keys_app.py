@@ -5812,6 +5812,134 @@ def test_submit_rename_source_updates_the_label(
     assert source.label == "Summer Bridge (renamed)"
 
 
+def test_submit_archive_source_sets_the_flag(client: TestClient, conn: sqlite3.Connection) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/archive",
+        data={"archived": "1"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    source = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert source is not None
+    assert source.archived is True
+
+
+def test_submit_archive_source_can_unarchive(client: TestClient, conn: sqlite3.Connection) -> None:
+    _seed_marcus_with_source(conn)
+    content.set_archived(conn, "s-marcus", "summer_bridge", True)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/archive",
+        data={"archived": "0"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    source = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert source is not None
+    assert source.archived is False
+
+
+def test_manage_source_screen_shows_the_archive_control(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/manage")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/archive"' in response.text
+
+
+def test_submit_grading_mode_switches_keyed_and_keyless(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "two program paths": a parent can switch a program
+    between keyed and keyless at any time -- this is the setting a parent
+    changes, k12ta.grading/k12ta.pipeline (M6) is what will read it."""
+    _seed_marcus_with_source(conn)  # seeded has_answer_key=True (keyed)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/grading-mode",
+        data={"has_answer_key": "0"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    source = content.get_content_source(conn, "s-marcus", "summer_bridge")
+    assert source is not None
+    assert source.has_answer_key is False
+
+
+def test_evaluations_screen_stays_fully_workable_once_archived(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Archiving": everything already evaluated stays
+    fully visible, and the parent's review queue stays workable, once a
+    source is archived -- archiving only blocks new child uploads."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="1",
+            prompt_text="a correct problem",
+            student_answer_raw="19",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+            page_number=17,
+        ),
+    )
+    content.set_archived(conn, "s-marcus", "summer_bridge", True)
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "a correct problem" in response.text
+
+
 def test_submit_delete_source_removes_an_untouched_source(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
