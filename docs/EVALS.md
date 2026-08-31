@@ -15,9 +15,9 @@ printed Tamil, and English are different problems with different error rates; so
 keyed-mismatch judgement and a keyless solve. One averaged figure hides exactly the case
 that is failing. Report sliced, always.
 
-`tests/browser/` is not a fourth family here on purpose: it has no accuracy number and
+`tests/browser/` is not a family here on purpose: it has no accuracy number and
 never calls a real model. It's a browser-driven UI regression suite (Playwright against
-a real server) for the class of bug none of the three families below can see -- four
+a real server) for the class of bug none of the four families below can see -- four
 real bugs shipped past a fully green, model-accuracy-and-status-code suite because
 nothing executed the client-side JavaScript between a click and the rendered page. Read
 `tests/browser/conftest.py`'s module docstring before trusting a green run there as more
