@@ -66,6 +66,21 @@ class Settings:
     outright rather than silently accepting a blank PIN; AGENTS.md rule 8
     still holds ("do not build authentication") because this gates one
     write, not access to anything."""
+    evaluator_enabled: bool = False
+    """M6, docs/ROADMAP.md's "agentic evaluator" -- the tier-2/tier-3 ladder in
+    k12ta.grading.evaluator. Default False: with this unset, k12ta.pipeline.
+    process never calls it at all, so shipping this code changes nothing about
+    what a real deployment does today. A parent/deployer turns it on
+    deliberately, per M6's own "ships behind a flag" requirement."""
+    evaluator_mark_wrong_enabled: bool = False
+    """The second, independent half of M6's flag requirement, and the more
+    important one: even with evaluator_enabled True, an evaluator-produced
+    INCORRECT is never shown to a child as INCORRECT while this is False --
+    it downgrades to NEEDS_HUMAN so a parent sees it first, regardless of the
+    evaluator's own confidence. Per docs/ROADMAP.md's V1 definition, this
+    stays False until docs/EVALS.md family 3's precision number exists and
+    clears a stated threshold on real fixtures -- not a default to casually
+    flip because the first few keyless grades looked right."""
 
     @staticmethod
     def from_env() -> Settings:
@@ -80,4 +95,7 @@ class Settings:
             daily_token_budget_usd=Decimal(os.environ.get("K12TA_DAILY_TOKEN_BUDGET_USD", "1.50")),
             daily_request_limit=int(os.environ.get("K12TA_DAILY_REQUEST_LIMIT", "60")),
             log_level=os.environ.get("K12TA_LOG_LEVEL", "INFO"),
+            evaluator_enabled=os.environ.get("K12TA_EVALUATOR_ENABLED", "") == "1",
+            evaluator_mark_wrong_enabled=os.environ.get("K12TA_EVALUATOR_MARK_WRONG_ENABLED", "")
+            == "1",
         )

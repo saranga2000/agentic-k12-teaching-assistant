@@ -21,9 +21,11 @@ from uuid import uuid4
 from k12ta.config import Settings
 from k12ta.domain.models import GradeOutcome
 from k12ta.grading import page_identity
+from k12ta.grading.evaluator import evaluate_keyed_mismatch, evaluate_keyless
 from k12ta.grading.key_grader import find_key_entry
 from k12ta.grading.needs_human import GradeDecision, NeedsHumanCause, decide
 from k12ta.ingest import capture as ingest_capture
+from k12ta.llm.base import TextModel
 from k12ta.store import (
     answer_keys,
     captures,
@@ -114,6 +116,51 @@ def _resolve_storage_problem_ids(
     return tuple(resolved)
 
 
+def _maybe_escalate_to_evaluator(
+    settings: Settings,
+    get_text_model: Callable[[], TextModel],
+    source: content.ContentSourceRow,
+    item: TranscribedItem,
+    decision: GradeDecision,
+) -> GradeDecision:
+    """M6, the agentic evaluator (docs/ROADMAP.md) -- tried only after `decide`
+    has already produced an honest NEEDS_HUMAN, only for the two causes it can
+    actually help with, and only ever narrowing a NEEDS_HUMAN, never widening
+    one: a decisive CORRECT/INCORRECT/PARTIALLY_CORRECT from `decide` is never
+    revisited. See process_capture's own docstring for the full boundary this
+    enforces, especially why NO_KEY_FOR_PAGE only escalates on a keyless
+    source."""
+    if decision.outcome is not GradeOutcome.NEEDS_HUMAN:
+        return decision
+    if decision.needs_human_cause is NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY:
+        if decision.expected_answer is None:
+            return decision  # cannot happen in practice, but never guess a key
+        text_model = get_text_model()
+        result = evaluate_keyed_mismatch(
+            text_model, item.prompt_text, item.student_answer_raw, decision.expected_answer
+        )
+    elif (
+        decision.needs_human_cause is NeedsHumanCause.NO_KEY_FOR_PAGE and not source.has_answer_key
+    ):
+        text_model = get_text_model()
+        result = evaluate_keyless(text_model, item.prompt_text, item.student_answer_raw)
+    else:
+        return decision
+
+    if result.outcome is GradeOutcome.NEEDS_HUMAN:
+        return decision  # no verdict tier 2 is confident enough to give; leave as-is
+    if result.outcome is GradeOutcome.INCORRECT and not settings.evaluator_mark_wrong_enabled:
+        # V1's own rule (docs/ROADMAP.md): every keyless INCORRECT reaches a
+        # parent before the child, regardless of the evaluator's confidence,
+        # until docs/EVALS.md family 3's precision number exists. CORRECT and
+        # PARTIALLY_CORRECT are not gated this way -- only INCORRECT is.
+        return decision
+    return GradeDecision(
+        outcome=result.outcome,
+        expected_answer=decision.expected_answer or result.generated_answer,
+    )
+
+
 def process_capture(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -122,6 +169,7 @@ def process_capture(
     assignment_id: str,
     image_bytes: bytes,
     page_number: int | None = None,
+    get_text_model: Callable[[], TextModel] | None = None,
 ) -> PipelineOutcome:
     """Walk one accepted photo through transcription, key grading, and persistence.
 
@@ -148,13 +196,32 @@ def process_capture(
     `NeedsHumanCause.CONFLICTING_PAGE_MARKERS`/`PARTIAL_PAGE_MARKERS` before
     `decide` ever runs, because `decide` itself never produces either cause.
     Grading itself goes through `k12ta.grading.needs_human.decide`, which is the
-    only place that decides an outcome and, when it's NEEDS_HUMAN, why. Do not
-    add a fallback here that solves a problem independently when no key entry
-    covers it. Keyless grading is M6, explicitly gated on a measured precision
-    number before it ships behind a flag -- it does not exist yet, and "no key
-    for this page" must never quietly become "the model's best guess instead."
-    That guess is exactly the failure this system is built to avoid: a confident
-    wrong grade.
+    only place that decides an outcome and, when it's NEEDS_HUMAN, why. `decide`
+    itself never solves a problem independently or judges a mismatch -- that is
+    M6's agentic evaluator (`k12ta.grading.evaluator`), tried only *after*
+    `decide` has already produced its honest NEEDS_HUMAN, and only when
+    `settings.evaluator_enabled` is True and a `get_text_model` factory was
+    given (both default off/None, so an existing caller that passes neither
+    sees no change in behaviour at all). Two causes are eligible, each for a
+    different reason:
+    - `ANSWER_DIFFERS_FROM_KEY`: a key exists; the evaluator judges whether the
+      student's answer means the same thing (`evaluate_keyed_mismatch`).
+    - `NO_KEY_FOR_PAGE`, but only when this source is itself configured
+      keyless (`ContentSourceRow.has_answer_key` is False) -- on a **keyed**
+      source, this cause means "a parent hasn't scanned the key yet," not "no
+      key exists," and the evaluator must never fire for it: inventing an
+      answer there is exactly the confident-wrong-grade failure this system
+      exists to avoid, so V1's own "keyed" promise depends on this boundary
+      holding (`evaluate_keyless`).
+    An evaluator INCORRECT verdict is itself gated a second time, independent
+    of the escalation above: it only reaches the child as INCORRECT when
+    `settings.evaluator_mark_wrong_enabled` is also True (default False) --
+    otherwise the original honest NEEDS_HUMAN stands, per V1's "every keyless
+    INCORRECT reaches a parent before the child" rule. CORRECT and
+    PARTIALLY_CORRECT verdicts are not gated this way; only INCORRECT is.
+    Tier 3 (vision) is not called from here yet -- `should_escalate_to_vision`
+    exists and is tested, but nothing in this function acts on it yet, so a
+    case it would have escalated is simply left as the original NEEDS_HUMAN.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -338,6 +405,12 @@ def process_capture(
             ),
         )
 
+    source = (
+        content.get_content_source(conn, student_id, assignment.source_id)
+        if settings.evaluator_enabled and get_text_model is not None
+        else None
+    )
+
     session_id = str(uuid4())
     sessions.insert_session(
         conn,
@@ -386,6 +459,10 @@ def process_capture(
             decision = decide(
                 item.student_answer_raw, item.confidence, resolved_page_number, key_entry
             )
+            if source is not None and get_text_model is not None:
+                decision = _maybe_escalate_to_evaluator(
+                    settings, get_text_model, source, item, decision
+                )
         sessions.insert_graded_problem(
             conn,
             sessions.GradedProblemRow(

@@ -1675,6 +1675,56 @@ as the bridge. That framing is superseded — manual entry is not a bridge to he
 the permanent **keyed** path, and this milestone is the permanent **keyless** path. Both
 ship; a parent chooses per program.
 
+**Shipped 2026-08-31, offline half — built and tested with zero live model calls, per
+this milestone's own "build it offline first" discipline.** `k12ta.grading.evaluator`:
+`evaluate_keyed_mismatch` (one call, judges a keyed mismatch against the key's own
+answer — the permanent fix for this system's first four grades at 50% unjust) and
+`evaluate_keyless` (two genuinely independent calls, agreement-gated — "never grade
+from the model's own arithmetic alone" applied to a model that is now the one doing
+the arithmetic, not one call with a self-critique instruction bolted on).
+`should_escalate_to_vision` is real, tested policy; nothing calls it yet, since tier 3
+itself is not built. Wired into `k12ta.pipeline.process` behind **two independent
+flags**, both default `False` (`Settings.evaluator_enabled`,
+`Settings.evaluator_mark_wrong_enabled`) — confirmed by running the *entire*
+pre-existing test suite unchanged after wiring it in, not just asserted: default
+settings produce byte-identical behaviour to before this milestone. The escalation
+boundary is enforced in code, not just documentation: `NO_KEY_FOR_PAGE` only reaches
+the evaluator when the source is itself configured **keyless**
+(`ContentSourceRow.has_answer_key` is `False`) — on a keyed source the same cause means
+"a parent hasn't scanned the key yet," and the evaluator must never fire for it, tested
+directly (`test_evaluator_never_fires_for_a_keyed_source_still_waiting_on_its_key`).
+An evaluator `INCORRECT` is gated a second, independent time behind
+`evaluator_mark_wrong_enabled` — `CORRECT`/`PARTIALLY_CORRECT` are not. Live-wired into
+`k12ta.web.app` (`get_text_model`, same lazy-singleton pattern as `get_transcriber`) so
+turning the flags on in a real deployment actually reaches this code, not just tests —
+the earlier lesson from this same milestone's first life ("scoped as optional, sat
+unused") deliberately not repeated a second time.
+
+**Not done, explicitly, not guessed at:**
+- **Tier 3 (vision) is not implemented.** The policy that would trigger it exists and
+  is tested; nothing calls it. A case that would have escalated is left as the
+  original honest `NEEDS_HUMAN` rather than silently downgraded.
+- **Multi-part sub-item splitting (`5a`…`5g`) is not implemented.** This is a real
+  structural change (one transcribed item can currently only ever become one
+  `graded_problems` row) deserving its own design pass, not a mechanical addition
+  bolted onto the same pass as the evaluator itself — the single-answer case (the
+  actual RSM/Kumon material on hand) is what shipped instead.
+- **The live 5-page key-withheld smoke test has not been run.** Real household data,
+  real API spend — held for explicit confirmation before spending either, per this
+  milestone's own budget discipline, rather than run automatically at the end of an
+  already-large offline pass.
+- `docs/EVALS.md` families 3/4 have no runnable script yet, only the method
+  documented in that file.
+
+**A reused, not new, `NeedsHumanCause`.** When an evaluator `INCORRECT` is gated
+behind `evaluator_mark_wrong_enabled`, the row stays under whichever cause `decide`
+already gave it (`ANSWER_DIFFERS_FROM_KEY` or `NO_KEY_FOR_PAGE`) rather than a new,
+more specific cause naming the evaluator's own involvement. Safe — the child never
+sees anything different — but a parent reviewing the queue cannot yet tell "the
+evaluator flagged this" apart from "nothing has looked at this yet." A real, if minor,
+UX gap, deferred rather than adding a fifth cause and its render/migration surface
+area in the same pass as everything else above.
+
 ### M7. Report cards, archiving, and the attempt flow
 **New 2026-08-30.** Pure aggregation and lifecycle work over data V1 already has, in the
 same shape as the cross-child review queue that shipped as Gap G. No new model calls.

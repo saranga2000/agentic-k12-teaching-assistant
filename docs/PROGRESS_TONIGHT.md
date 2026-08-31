@@ -68,23 +68,50 @@ running count logged below when that item starts.
       decision -- child app's large buttons vs parent app's normal ones -- not a
       mechanical extraction), sharing the lightbox HTML/JS (only its CSS was in
       scope), and a deliberate empty/failure-state audit.
-- [ ] 6. M6 agentic evaluator (offline first: ladder, prompts, parsing, tests)
+- [x] 6a. M6 agentic evaluator, OFFLINE portion -- committed. New
+      `k12ta.grading.evaluator`: `evaluate_keyed_mismatch` (1 call) and
+      `evaluate_keyless` (2 independent calls, agreement-gated -- not one call with
+      self-critique, per "the cross-check is load-bearing, not ceremony").
+      `should_escalate_to_vision` is real tested policy; nothing calls it (tier 3 not
+      built). New prompt `prompts/evaluate_text.md`. Wired into
+      `k12ta.pipeline.process` behind two independent flags
+      (`Settings.evaluator_enabled`, `Settings.evaluator_mark_wrong_enabled`), both
+      default False -- confirmed by running the entire pre-existing suite unchanged
+      after wiring (byte-identical default behaviour, not just asserted). Critical
+      boundary tested directly: NO_KEY_FOR_PAGE only escalates on a source actually
+      configured keyless, never on a keyed source still waiting for its key scanned.
+      Live-wired into k12ta.web.app (`get_text_model`, mirrors `get_transcriber`) so
+      the flags actually reach live code, not just tests. 22 new offline tests
+      (tests/test_grading_evaluator.py, tests/test_pipeline.py), all model calls
+      faked (tests/fakes.py's new FakeTextModel). Full suite + browser suite + mypy
+      all green throughout.
+- [ ] 6b. M6 LIVE portion -- NOT STARTED. Deliberately held for explicit
+      confirmation before spending real API budget or touching real household data,
+      rather than run automatically at the end of an already-large offline pass. See
+      "Questions for the morning" below.
 
-Live model calls spent so far: 0 / 5 (budget applies to item 6 validation only)
+Live model calls spent so far: 0 / 5
 
-## Current item: 6
+## Current item: none -- all 6 items' offline work is complete and committed.
 
-Starting the last item: M6, the agentic evaluator. Work offline first per the
-instructions -- structure, prompts, parsing, tests against recorded/synthetic
-responses -- before spending a single live call. Three-tier ladder: deterministic
-key match (already exists, item 2 just added NFC to it) -> text evaluator -> vision
-evaluator over the page photo + key photo. No answer-type enumeration anywhere
-(AGENTS.md rule 12). Ships behind a flag starting at "flag for parent"; do NOT wire
-"mark wrong" as reachable. Live budget: 5 pages max, for the key-withheld smoke test
-only, hard-capped in code before the first call, two numbers reported separately
-(answer-generation accuracy vs verdict accuracy), labelled a smoke test not a
-calibration number, no automatic retry into an unexplained failure.
+Every numbered item (1-5 fully, 6's offline half) is done, tested, and committed.
+Nothing further to do without either (a) a decision on the live smoke test (6b), or
+(b) new direction. Not proceeding to 6b without explicit confirmation -- see below.
 
 ## Questions for the morning
 
-(none yet)
+1. **Run the M6 live smoke test (6b)?** Real household data (Summer Bridge pages
+   with both a confirmed key and real child captures on disk), real API spend,
+   capped at 5 pages. Held for explicit confirmation rather than run automatically.
+2. **A more specific NeedsHumanCause for an evaluator-gated INCORRECT?** Currently
+   reuses whatever cause `decide` already gave the row (ANSWER_DIFFERS_FROM_KEY or
+   NO_KEY_FOR_PAGE) rather than a new cause naming the evaluator's own involvement.
+   Safe (the child sees nothing different either way), but a parent reviewing the
+   queue can't yet tell "the evaluator flagged this" apart from "nothing has looked
+   at this yet." Deferred rather than adding a fifth cause's render/migration
+   surface in the same pass as everything else.
+3. **Multi-part sub-item splitting (`5a`...`5g`) is not implemented at all.** Real
+   structural change (one transcribed item -> one graded_problems row today, always)
+   -- needs its own design pass, not a decision made solo tonight.
+4. **Vision (tier 3) is not implemented.** `should_escalate_to_vision` exists and is
+   tested; nothing calls it yet.

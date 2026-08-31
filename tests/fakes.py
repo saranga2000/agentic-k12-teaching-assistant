@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 
+from k12ta.llm.base import ChatResponse, DataRetention
 from k12ta.transcribe.base import TranscriptionResult
 from k12ta.transcribe.key_page import KeyPageResult
 
@@ -71,3 +73,25 @@ class FakeKeyTranscriber:
             for chars in self.progress_updates:
                 on_progress(chars)
         return self.result
+
+
+@dataclass
+class FakeTextModel:
+    """A `TextModel` (k12ta.grading.evaluator's tier 2) that returns canned
+    replies in order and never touches the network. One reply per call --
+    k12ta.grading.evaluator.evaluate_keyless makes two calls per invocation,
+    so a keyless test needs two replies queued."""
+
+    replies: list[str] = field(default_factory=list)
+    data_retention: DataRetention = DataRetention.NO_RETENTION
+    request_count: int = field(default=0, init=False)
+    seen_prompts: list[str] = field(default_factory=list, init=False)
+
+    def generate_conversation(self, system_prompt: str, turns: object) -> ChatResponse:
+        self.seen_prompts.append(system_prompt)
+        reply = self.replies[self.request_count]
+        self.request_count += 1
+        return ChatResponse(text=reply, cost_usd=Decimal("0"), latency_ms=1)
+
+    def verify(self) -> None:
+        pass

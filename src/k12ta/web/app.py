@@ -36,7 +36,8 @@ from k12ta.grading import page_identity
 from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.ingest import capture as ingest_capture
 from k12ta.ingest import schedule as ingest_schedule
-from k12ta.llm import build_vision_model
+from k12ta.llm import build_text_model, build_vision_model
+from k12ta.llm.base import TextModel
 from k12ta.pipeline.process import (
     PipelineOutcome,
     PipelineStatus,
@@ -121,6 +122,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: Transcriber | None = None
+_text_model: TextModel | None = None
 
 
 def get_settings() -> Settings:
@@ -153,6 +155,18 @@ def get_transcriber(settings: Settings) -> Transcriber:
             vision_model, provider=settings.llm_provider, model=settings.llm_model
         )
     return _transcriber
+
+
+def get_text_model(settings: Settings) -> TextModel:
+    """M6, the agentic evaluator's tier 2 (docs/ROADMAP.md) -- same reused-
+    singleton, same lazy-build reasoning as get_transcriber above. Only ever
+    called from inside process_capture, and only when settings.evaluator_
+    enabled is True, so a household that never sets K12TA_EVALUATOR_ENABLED
+    never builds this at all."""
+    global _text_model
+    if _text_model is None:
+        _text_model = build_text_model(settings)
+    return _text_model
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -632,6 +646,11 @@ def _stream_capture_response(
                 student.student_id,
                 assignment_id,
                 image_bytes,
+                # Always passed, same reasoning as get_transcriber above: process_
+                # capture's own settings.evaluator_enabled check decides whether
+                # this factory is ever actually called, exactly like its own
+                # quota gate already decides whether get_transcriber is.
+                get_text_model=lambda: get_text_model(settings),
             )
         except Exception as exc:
             logger.exception(

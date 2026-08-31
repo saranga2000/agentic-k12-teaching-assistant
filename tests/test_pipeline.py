@@ -40,7 +40,7 @@ from k12ta.transcribe.base import (
     TranscribedItem,
     TranscriptionResult,
 )
-from tests.fakes import FakeTranscriber
+from tests.fakes import FakeTextModel, FakeTranscriber
 
 TODAY = date.today()
 """`process_capture` calls `date.today()` internally (it has no injectable clock), so
@@ -54,7 +54,12 @@ def _migrated_connection(path: str = ":memory:") -> sqlite3.Connection:
     return conn
 
 
-def _settings(tmp_path: Path, daily_request_limit: int = 20) -> Settings:
+def _settings(
+    tmp_path: Path,
+    daily_request_limit: int = 20,
+    evaluator_enabled: bool = False,
+    evaluator_mark_wrong_enabled: bool = False,
+) -> Settings:
     return Settings(
         llm_provider="anthropic",
         llm_api_key="",
@@ -65,6 +70,8 @@ def _settings(tmp_path: Path, daily_request_limit: int = 20) -> Settings:
         daily_token_budget_usd=Decimal("1.50"),
         daily_request_limit=daily_request_limit,
         log_level="INFO",
+        evaluator_enabled=evaluator_enabled,
+        evaluator_mark_wrong_enabled=evaluator_mark_wrong_enabled,
     )
 
 
@@ -1276,3 +1283,283 @@ def test_no_schema_with_something_extracted_persists_the_guess_for_the_bootstrap
     )
     assert seen_json is not None
     assert json.loads(seen_json) == {"chapter": "CH.4", "printed_page": "13"}
+
+
+# --- M6: the agentic evaluator, wired behind a flag (docs/ROADMAP.md) -------
+
+
+def _seed_keyless_source(conn: sqlite3.Connection, student_id: str) -> str:
+    """A source explicitly configured keyless (has_answer_key=False) -- V1's
+    core capability, not a bridge until a key arrives."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id=student_id,
+            display_name="Jahnvi",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id=student_id,
+            source_id="rsm",
+            label="RSM",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=False,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    assignment_id = "rsm:2026-08-12"
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id=student_id,
+            assignment_id=assignment_id,
+            source_id="rsm",
+            created_at=TODAY.isoformat(),
+        ),
+    )
+    return assignment_id
+
+
+def _one_item_transcription(answer: str = "19") -> TranscriptionResult:
+    return TranscriptionResult(
+        items=(
+            TranscribedItem(
+                problem_id="1",
+                prompt_text="Solve for x: 2x + 5 = 43",
+                student_answer_raw=answer,
+                confidence=0.99,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+
+
+def test_evaluator_disabled_by_default_leaves_a_keyless_page_as_needs_human(
+    tmp_path: Path,
+) -> None:
+    """The literal safety requirement: shipping this code changes nothing
+    about what a real deployment does today. Default settings, a text model
+    is available but must never be reached."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path)  # evaluator_enabled=False, the default
+    transcriber = FakeTranscriber(result=_one_item_transcription())
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.9}'])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+    assert text_model.request_count == 0  # never called at all
+
+
+def test_evaluator_enabled_grades_a_keyless_page_correct(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "correct", "confidence": 0.9, "generated_answer": "19"}',
+            '{"verdict": "correct", "confidence": 0.85, "generated_answer": "19"}',
+        ]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert graded[0].needs_human_cause is None
+    assert text_model.request_count == 2  # two independent solves, agreement-gated
+
+
+def test_evaluator_incorrect_verdict_stays_needs_human_until_mark_wrong_is_enabled(
+    tmp_path: Path,
+) -> None:
+    """The other, more important half of M6's flag requirement: every keyless
+    INCORRECT reaches a parent before the child, regardless of the
+    evaluator's own confidence, until a real precision number exists."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)  # mark_wrong stays False
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="wrong guess"))
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "incorrect", "confidence": 0.95, "generated_answer": "19"}',
+            '{"verdict": "incorrect", "confidence": 0.95, "generated_answer": "19"}',
+        ]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+
+
+def test_evaluator_incorrect_verdict_reaches_the_child_once_mark_wrong_is_enabled(
+    tmp_path: Path,
+) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="wrong guess"))
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "incorrect", "confidence": 0.95, "generated_answer": "19"}',
+            '{"verdict": "incorrect", "confidence": 0.95, "generated_answer": "19"}',
+        ]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "incorrect"
+
+
+def test_evaluator_never_fires_for_a_keyed_source_still_waiting_on_its_key(
+    tmp_path: Path,
+) -> None:
+    """The critical safety boundary: NO_KEY_FOR_PAGE on a KEYED source means
+    "a parent hasn't scanned the key yet," not "no key exists" -- the system
+    must never invent an answer here, per V1's own "keyed" definition
+    (docs/ROADMAP.md). Only a genuinely keyless source may reach the
+    evaluator for this cause."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # has_answer_key=True
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.9}'])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+    assert text_model.request_count == 0
+
+
+def test_evaluator_resolves_a_keyed_mismatch_that_is_actually_the_same_answer(
+    tmp_path: Path,
+) -> None:
+    """The permanent fix for this system's first four grades at 50% unjust:
+    "rhombus" against a key of "quadrilateral"."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # has_answer_key=True
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="quadrilateral",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="rhombus"))
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.9}'])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert text_model.request_count == 1  # one call, no cross-check needed -- a key exists
+
+
+def test_evaluator_enabled_but_no_text_model_factory_stays_needs_human(tmp_path: Path) -> None:
+    """get_text_model is optional (every existing caller passes nothing) --
+    the flag alone must never crash a caller that hasn't wired a model in."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription())
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
