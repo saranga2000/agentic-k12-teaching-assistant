@@ -23,7 +23,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-_GRADED_OUTCOMES = frozenset({"correct", "incorrect"})
+_GRADED_OUTCOMES = frozenset({"correct", "partially_correct", "incorrect"})
+"""Outcomes that count as a real, disclosed grade for oracle-suppression purposes.
+`partially_correct` (docs/ROADMAP.md's V1 "Verdicts") is disclosed to the student
+exactly like correct/incorrect, so it must count here too -- leaving it out would
+reopen the multi-attempt oracle for every answer M6's evaluator judges partial."""
 
 
 @dataclass(frozen=True)

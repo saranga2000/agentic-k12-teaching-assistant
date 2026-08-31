@@ -68,3 +68,16 @@ def test_a_correct_first_attempt_is_still_not_disclosed_as_a_repeat() -> None:
     """A single confirmed correct answer isn't a probing sequence -- nothing to
     suppress on attempt one, regardless of outcome."""
     assert not already_disclosed([], "19")
+
+
+def test_a_partially_correct_prior_attempt_counts_toward_the_oracle_suppression() -> None:
+    """docs/ROADMAP.md's V1 "Verdicts" adds `partially_correct` as a real,
+    decisive grade (M6's agentic evaluator). A partially-correct verdict is
+    disclosed to the student exactly like correct/incorrect, so a later
+    resubmission must be recognised as a genuine second attempt -- treating a
+    partially_correct row as if nothing had been disclosed yet would reopen
+    the multi-attempt oracle for exactly the answers this verdict covers."""
+    prior = [PastAttempt(outcome="partially_correct", student_answer_raw="half the answer")]
+
+    assert attempt_number(prior, "a different answer") == 2
+    assert already_disclosed(prior, "a different answer")

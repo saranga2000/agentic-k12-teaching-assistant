@@ -94,6 +94,23 @@ work — a prose answer that is half right. **Detailed rubrics are deliberately 
 V1**: the agent judges against these four values with no scoring scheme, no weights, and
 no numeric partial credit. Parent- or teacher-authored custom rubrics are V2 (see below).
 
+**Shipped 2026-08-31.** Migration 0024 adds `graded_problems.answered`; every
+pre-existing row backfills to `answered=1`, keeping its verdict unchanged (verified by
+hand against a simulated pre/post-migration database, not just a fresh-schema test,
+since every other test fixture bootstraps a brand-new DB with no "existing" rows to
+backfill). `GradeOutcome.PARTIALLY_CORRECT` replaces the previously-unused `PARTIAL`.
+Wired everywhere a verdict is compared, counted, or rendered: the multi-attempt oracle
+(`k12ta.domain.attempts`, so a partially-correct disclosure counts toward suppression
+exactly like correct/incorrect), `k12ta.respond.render` (its own glyph "±", bucket,
+and feedback-policy-gated message), `k12ta.store.sessions` (`list_resolved_for_source`,
+`capture_has_decisive_outcome`), `k12ta.web.app`'s "my pages" attempt-grouping (a
+named `_GRADED_DISPLAY_BUCKETS` constant replaces a bare two-value tuple, precisely
+because that tuple silently excluded the new verdict from grouping until named), and
+`k12ta.keys.app`'s evaluations screen (a third "Mark partially correct" verdict button,
+a new `partially_correct_count`/`partially_correct_items`, its own "Graded partially
+correct" section). A partially-correct verdict is also now disputable by the child,
+same as incorrect, in both `session_result.html` and `my_pages.html`.
+
 **Multi-part questions are split by the agent, not by a schema.** A matching exercise
 with six pairings or a fill-in-the-blank with seven blanks emits sub-items (`5a`…`5g`)
 with a verdict each, so a child can see she got five of seven; a genuinely single answer

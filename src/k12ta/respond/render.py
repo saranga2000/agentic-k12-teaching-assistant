@@ -130,6 +130,16 @@ INCORRECT_GLYPH = "✗"
 # text later narrows this same branch rather than opening a new one.
 INCORRECT_RESTRICTED_MESSAGE = "This one needs another look."
 
+# GradeOutcome.PARTIALLY_CORRECT (docs/ROADMAP.md's V1 "Verdicts", M6's evaluator):
+# genuinely unsplittable partial work, e.g. a half-right prose answer. Gated by
+# the same feedback policy as incorrect -- not a special case that always tells
+# the child everything -- and given its own glyph/bucket rather than folded into
+# "incorrect", since a parent reviewing the results table needs to tell "wrong"
+# apart from "partly right" at a glance, same reasoning as CORRECT_UNSIMPLIFIED_
+# MESSAGE getting its own message text without a fourth CSS-driving outcome.
+PARTIALLY_CORRECT_GLYPH = "±"
+PARTIALLY_CORRECT_RESTRICTED_MESSAGE = "Part of this one is right — a grown-up will check the rest."
+
 REPEAT_GLYPH = "↺"
 # Identical regardless of whether this attempt is actually right or wrong -- a
 # message that varies with correctness is itself the oracle the multi-attempt
@@ -172,6 +182,7 @@ def _needs_human_bucket(cause_value: str | None) -> str:
 
 _BUCKET_GLYPH: dict[str, str] = {
     "correct": CORRECT_GLYPH,
+    "partially_correct": PARTIALLY_CORRECT_GLYPH,
     "incorrect": INCORRECT_GLYPH,
     "could_not_read": COULD_NOT_READ_GLYPH,
     "waiting_on_key": NO_ANSWER_KEY_GLYPH,
@@ -181,9 +192,10 @@ _BUCKET_GLYPH: dict[str, str] = {
 
 # Buckets that count toward the results-table summary's "to look at" tally --
 # things a student herself can act on (retry, or retake a clearer photo).
-# Everything else is either "correct" or "waiting_on_grownup"
+# partially_correct belongs here, not in "right": genuinely worth another look,
+# same as incorrect. Everything else is either "correct" or "waiting_on_grownup"
 # ("waiting_on_key", "needs_a_person" -- neither is hers to resolve).
-_TO_LOOK_AT_BUCKETS = frozenset({"incorrect", "could_not_read", "repeat"})
+_TO_LOOK_AT_BUCKETS = frozenset({"incorrect", "partially_correct", "could_not_read", "repeat"})
 _WAITING_ON_GROWNUP_BUCKETS = frozenset({"waiting_on_key", "needs_a_person"})
 
 
@@ -298,13 +310,27 @@ def render_student_result(
         bucket = _needs_human_bucket(row.needs_human_cause)
     elif (
         not rules.reveal_final_answer
-        and row.outcome in ("correct", "incorrect")
+        and row.outcome in ("correct", "partially_correct", "incorrect")
         and already_disclosed(prior_attempts, student_answer_raw)
     ):
         message, outcome, bucket = REPEAT_MESSAGE, "repeat", "repeat"
     elif row.outcome == "correct":
         outcome, bucket = row.outcome, "correct"
         message = CORRECT_UNSIMPLIFIED_MESSAGE if row.unsimplified else CORRECT_MESSAGE
+    elif row.outcome == "partially_correct":
+        outcome, bucket = row.outcome, "partially_correct"
+        if rules.reveal_final_answer:
+            # expected_answer can be None here (M6's keyless path has no
+            # reference key to show at all, only the agent's own judgement) --
+            # fall back to the same generic wording restricted mode uses rather
+            # than render a literal "None".
+            message = (
+                f"Part of this one is right. The full answer is {row.expected_answer}."
+                if row.expected_answer is not None
+                else PARTIALLY_CORRECT_RESTRICTED_MESSAGE
+            )
+        else:
+            message = PARTIALLY_CORRECT_RESTRICTED_MESSAGE
     else:
         outcome, bucket = row.outcome, "incorrect"
         if rules.reveal_final_answer:

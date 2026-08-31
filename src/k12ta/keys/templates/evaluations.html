@@ -138,6 +138,7 @@
         <input type="hidden" name="problem_id" value="{{ item.row.problem_id }}">
         <input type="text" name="student_answer_raw" value="{{ item.row.student_answer_raw }}" aria-label="What {{ student.display_name }} wrote">
         <button type="submit" name="verdict" value="correct">Mark correct</button>
+        <button type="submit" name="verdict" value="partially_correct">Mark partially correct</button>
         <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
       </form>
       {% elif item.row.needs_human_cause == "no_key_for_page" and group.page_number %}
@@ -149,6 +150,7 @@
         <input type="hidden" name="page_number" value="{{ group.page_number }}">
         <input type="text" name="key_answer_text" value="{{ item.row.student_answer_raw }}" aria-label="Answer key for this question">
         <button type="submit" name="verdict" value="correct">Mark correct &amp; save as key</button>
+        <button type="submit" name="verdict" value="partially_correct">Mark partially correct &amp; save as key</button>
         <button type="submit" name="verdict" value="incorrect">Mark incorrect &amp; save as key</button>
       </form>
       {% endif %}
@@ -170,6 +172,17 @@
 </ul>
 {% else %}
 <p class="message">Nothing graded correct yet.</p>
+{% endif %}
+
+<h2 id="graded-partially-correct">Graded partially correct</h2>
+{% if partially_correct_items %}
+<ul class="pending-list">
+  {% for item in partially_correct_items %}
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}</li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="message">Nothing graded partially correct yet.</p>
 {% endif %}
 
 <h2 id="graded-incorrect">Graded incorrect</h2>

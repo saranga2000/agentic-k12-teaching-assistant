@@ -1957,6 +1957,73 @@ def test_enrollment_detail_lists_graded_correct_and_incorrect_items(
     assert "key says &ldquo;20&rdquo;" in response.text
 
 
+def test_enrollment_detail_lists_graded_partially_correct_items(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Verdicts": partially_correct is a real, decisive
+    grade (M6's evaluator) -- it must get its own section on the parent's
+    evaluations screen, same as correct/incorrect, not be silently dropped
+    from list_resolved_for_source's filter."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-graded",
+            problem_id="1",
+            prompt_text="explain why the sky is blue",
+            student_answer_raw="half of a real explanation",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-graded",
+            capture_id="c-graded",
+            problem_id="1",
+            outcome="partially_correct",
+            grader_confidence=0.9,
+            page_number=17,
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "explain why the sky is blue" in response.text
+    assert "Nothing graded partially correct yet." not in response.text
+
+
 def test_enrollment_detail_groups_pending_items_by_cause(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -3638,6 +3705,46 @@ def test_submit_answer_verdict_works_on_a_needs_person_row(
     assert response.status_code == 303
     graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-needs-person")
     assert graded[0].outcome == "incorrect"
+    assert graded[0].needs_human_cause is None
+
+
+def test_submit_answer_verdict_accepts_partially_correct(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A parent reviewing a flagged item must be able to say "partially
+    right," not just correct/incorrect -- docs/ROADMAP.md's V1 "Verdicts"."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-needs-person",
+        problem_id="4",
+        cause="needs_person",
+        page_number=15,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-needs-person",
+            "capture_id": "c-needs-person",
+            "problem_id": "4",
+            "verdict": "partially_correct",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-needs-person")
+    assert graded[0].outcome == "partially_correct"
     assert graded[0].needs_human_cause is None
 
 

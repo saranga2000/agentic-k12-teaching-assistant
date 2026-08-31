@@ -2502,6 +2502,99 @@ def test_my_pages_groups_a_recaptured_page_into_one_item_with_an_attempt_count(
     assert "/captures/s-marcus/c-first/image" not in response.text
 
 
+def test_my_pages_groups_a_recaptured_partially_correct_page_with_an_attempt_count(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Verdicts": partially_correct is a real, decisive
+    grade (M6's evaluator) with page_number always set, exactly like
+    correct/incorrect -- it must join the same grouped/attempt-counted bucket
+    as those two in "my pages", not be silently excluded."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="summer_bridge",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-synthetic",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    for capture_id, session_id, captured_at in (
+        ("c-first", "sess-first", "2026-08-12T08:00:00+00:00"),
+        ("c-second", "sess-second", "2026-08-12T08:10:00+00:00"),
+    ):
+        store_captures.insert_page_capture(
+            conn,
+            store_captures.PageCaptureRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                assignment_id="a-synthetic",
+                captured_at=captured_at,
+                image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+        store_captures.insert_problem(
+            conn,
+            store_captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                problem_id="1",
+                prompt_text="Explain why the sky is blue.",
+                student_answer_raw="half of a real explanation",
+                transcription_confidence=0.9,
+            ),
+        )
+        sessions.insert_session(
+            conn,
+            sessions.SessionRow(
+                student_id="s-marcus",
+                session_id=session_id,
+                assignment_id="a-synthetic",
+                started_at=captured_at,
+            ),
+        )
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id=session_id,
+                capture_id=capture_id,
+                problem_id="1",
+                outcome="partially_correct",
+                grader_confidence=0.9,
+                page_number=5,
+            ),
+        )
+
+    response = client.get("/student/s-marcus/summer_bridge/pages")
+
+    assert response.status_code == 200
+    assert "Tried 2 times" in response.text
+
+
 def test_my_pages_does_not_tag_a_genuinely_single_attempt(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

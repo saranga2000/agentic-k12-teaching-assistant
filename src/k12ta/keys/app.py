@@ -608,6 +608,7 @@ class EnrollmentSummary:
     waiting_on_identity_count: int
     waiting_on_key_count: int
     correct_count: int
+    partially_correct_count: int
     incorrect_count: int
     first_needs_review_capture_id: str | None
     first_waiting_on_identity_capture_id: str | None
@@ -642,6 +643,7 @@ def _summarize_enrollment(
             1 for row in pending if row.needs_human_cause == _WAITING_ON_KEY_CAUSE
         ),
         correct_count=sum(1 for row in resolved if row.outcome == "correct"),
+        partially_correct_count=sum(1 for row in resolved if row.outcome == "partially_correct"),
         incorrect_count=sum(1 for row in resolved if row.outcome == "incorrect"),
         first_needs_review_capture_id=first_needs_review,
         first_waiting_on_identity_capture_id=first_identity,
@@ -806,7 +808,7 @@ def submit_regrade_pending(
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
-_VERDICTS = frozenset({"correct", "incorrect"})
+_VERDICTS = frozenset({"correct", "partially_correct", "incorrect"})
 
 
 @app.post("/keys/{student_id}/{source_id}/answer-verdict", response_model=None)
@@ -858,7 +860,7 @@ def submit_answer_verdict(
     this row exactly as it was, to judge again once resolved."""
     _require_student_and_source(conn, student_id, source_id)
     if verdict not in _VERDICTS:
-        raise HTTPException(400, "verdict must be 'correct' or 'incorrect'")
+        raise HTTPException(400, "verdict must be 'correct', 'partially_correct', or 'incorrect'")
     if student_answer_raw is not None and student_answer_raw.strip():
         captures.update_student_answer_raw(
             conn, student_id, capture_id, problem_id, student_answer_raw.strip()
@@ -1063,6 +1065,7 @@ def evaluations_screen(
             "now_gradable_count": now_gradable_count,
             "summary": summary,
             "correct_items": [r for r in resolved if r.outcome == "correct"],
+            "partially_correct_items": [r for r in resolved if r.outcome == "partially_correct"],
             "incorrect_items": [r for r in resolved if r.outcome == "incorrect"],
             "identity_schema": identity_schema,
         },

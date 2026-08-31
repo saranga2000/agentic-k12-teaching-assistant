@@ -1,0 +1,12 @@
+-- Part of V1's verdict model (docs/ROADMAP.md's "V1. Evaluate, parent as final
+-- authority", "Verdicts"): "answered but a person still needs to look" has to be
+-- expressible separately from the verdict itself. 0/1, NOT NULL DEFAULT 1: every
+-- existing row was graded under the old model, where a blank answer already
+-- routed to its own NEEDS_HUMAN cause rather than being flagged unanswered here
+-- -- migrating every existing row to answered=1 keeps its current verdict
+-- unchanged and does not retroactively guess which historical rows were blank.
+-- New rows written by k12ta.pipeline.process set this explicitly from whether
+-- the transcribed answer was actually blank; the column default exists only for
+-- this migration and any other write path that predates it, not as a value the
+-- application ever relies on going forward.
+ALTER TABLE graded_problems ADD COLUMN answered INTEGER NOT NULL DEFAULT 1;

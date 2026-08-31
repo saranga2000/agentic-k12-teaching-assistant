@@ -17,7 +17,14 @@ class GradeOutcome(Enum):
 
     CORRECT = "correct"
     INCORRECT = "incorrect"
-    PARTIAL = "partial"
+    PARTIALLY_CORRECT = "partially_correct"
+    """Genuinely unsplittable partial work -- a prose answer that is half right.
+    Added 2026-08-30/31 as part of V1's verdict model (docs/ROADMAP.md's "V1.
+    Evaluate, parent as final authority", "Verdicts"). No scoring scheme, no
+    weights, no numeric partial credit -- the agent (M6) judges against this
+    value with nothing finer. Renamed from the previously-unused `PARTIAL`
+    (never referenced anywhere in the codebase) to match the roadmap's exact
+    terminology rather than leave two similar-but-different names."""
     NEEDS_HUMAN = "needs_human"
     """Transcription or grading confidence below threshold. Never guess instead."""
 

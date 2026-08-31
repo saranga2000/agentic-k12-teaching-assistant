@@ -106,7 +106,7 @@
         <td class="col-result outcome-label">
           <span class="outcome-glyph">{{ item.glyph }}</span>
           <span class="outcome-note">{{ item.message }}</span>
-          {% if item.display_bucket == 'incorrect' or item.dispute %}
+          {% if item.display_bucket in ('incorrect', 'partially_correct') or item.dispute %}
           {% with session_id=session_id, capture_id=item.capture_id, problem_id=item.problem_id, dispute=item.dispute, redirect_to="/session/" ~ student.student_id ~ "/" ~ session_id %}
           {% include "_dispute_control.html" %}
           {% endwith %}
@@ -149,8 +149,10 @@
   .results-table tbody tr { border-bottom: 1px solid var(--neutral-bg); }
   .results-table tr.bucket-correct { background: var(--affirm-bg); }
   .results-table tr.bucket-correct .outcome-glyph { color: var(--affirm); }
-  .results-table tr.bucket-incorrect { background: var(--attention-bg); }
-  .results-table tr.bucket-incorrect .outcome-glyph { color: var(--attention); }
+  .results-table tr.bucket-incorrect,
+  .results-table tr.bucket-partially-correct { background: var(--attention-bg); }
+  .results-table tr.bucket-incorrect .outcome-glyph,
+  .results-table tr.bucket-partially-correct .outcome-glyph { color: var(--attention); }
   .results-table tr.bucket-could-not-read,
   .results-table tr.bucket-waiting-on-key,
   .results-table tr.bucket-needs-a-person,

@@ -404,6 +404,7 @@ def process_capture(
                 ),
                 needs_human_detail=detail,
                 unsimplified=decision.unsimplified,
+                answered=bool(item.student_answer_raw.strip()),
             ),
         )
 

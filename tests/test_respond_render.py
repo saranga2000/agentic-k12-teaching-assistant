@@ -120,6 +120,82 @@ def test_incorrect_in_restricted_modes_never_reveals_the_expected_answer(
     assert "42" not in view.message
 
 
+def test_partially_correct_in_full_mode_reveals_the_expected_answer() -> None:
+    """docs/ROADMAP.md's V1 "Verdicts": partially_correct is a real, decisive
+    grade from M6's evaluator, gated by the same feedback policy as incorrect
+    -- not a special case that always tells the child everything."""
+    view = render_student_result(
+        _row(outcome="partially_correct", expected_answer="42"),
+        "12 + 7",
+        "half of 42",
+        rules=_FULL,
+        prior_attempts=(),
+    )
+
+    assert "42" in view.message
+
+
+@pytest.mark.parametrize("rules", [_DIAGNOSTIC_ONLY, _FLUENCY])
+def test_partially_correct_in_restricted_modes_never_reveals_the_expected_answer(
+    rules: object,
+) -> None:
+    view = render_student_result(
+        _row(outcome="partially_correct", expected_answer="42"),
+        "12 + 7",
+        "half of 42",
+        rules=rules,  # type: ignore[arg-type]
+        prior_attempts=(),
+    )
+
+    assert "42" not in view.message
+
+
+def test_partially_correct_gets_its_own_display_bucket_and_glyph() -> None:
+    view = render_student_result(
+        _row(outcome="partially_correct"), "12 + 7", "half of 42", rules=_FULL, prior_attempts=()
+    )
+
+    assert view.display_bucket == "partially_correct"
+    assert view.outcome == "partially_correct"
+    assert view.glyph not in ("✓", "✗")
+
+
+def test_a_second_partially_correct_guess_is_itself_suppressed() -> None:
+    """The gap the generic fallback branch would miss: when the CURRENT row's
+    own outcome is partially_correct on a genuine second distinct guess, it
+    must be suppressed too, not just when a later guess happens to be plain
+    correct/incorrect."""
+    prior = (PastAttempt(outcome="incorrect", student_answer_raw="18"),)
+
+    view = render_student_result(
+        _row(outcome="partially_correct"),
+        "12 + 7",
+        "half of 42",  # a new, different guess from the prior "18"
+        rules=_DIAGNOSTIC_ONLY,
+        prior_attempts=prior,
+    )
+
+    assert view.outcome == "repeat"
+    assert view.display_bucket == "repeat"
+
+
+def test_a_second_distinct_guess_after_partially_correct_is_suppressed() -> None:
+    """The oracle-suppression rule must cover partially_correct exactly like
+    correct/incorrect -- otherwise a second guess following a partial verdict
+    would disclose freely, reopening the multi-attempt oracle for this verdict."""
+    prior = (PastAttempt(outcome="partially_correct", student_answer_raw="half of 42"),)
+
+    view = render_student_result(
+        _row(outcome="correct"),
+        "12 + 7",
+        "42",  # a new, different guess from the prior "half of 42"
+        rules=_DIAGNOSTIC_ONLY,
+        prior_attempts=prior,
+    )
+
+    assert view.outcome == "repeat"
+
+
 def test_needs_human_message_is_identical_across_every_mode() -> None:
     """The needs-human causes are honest in every feedback mode -- the branch
     that produces their copy never reads rules."""
@@ -383,6 +459,22 @@ def test_summary_counts_right_to_look_at_and_waiting_on_a_grownup() -> None:
     assert summary.right == 2
     assert summary.to_look_at == 2
     assert summary.waiting_on_grownup == 2
+
+
+def test_partially_correct_counts_toward_to_look_at_not_right() -> None:
+    """A partial verdict is not "right" (summary.right stays exact-correct-only),
+    but it is something worth another look, same as incorrect -- not silently
+    dropped from every count."""
+    items = [
+        _view("1", outcome="correct"),
+        _view("2", outcome="partially_correct"),
+    ]
+
+    summary = summarize_results(items)
+
+    assert summary.right == 1
+    assert summary.to_look_at == 1
+    assert summary.waiting_on_grownup == 0
 
 
 def test_all_correct_encouragement_names_no_problems() -> None:

@@ -284,6 +284,13 @@ class MyPageItem:
 
 _WAITING_ON_GROWNUP_BUCKETS = frozenset({"waiting_on_key", "needs_a_person"})
 _TO_LOOK_AT_BUCKETS = frozenset({"could_not_read", "repeat"})
+# The grouped/attempt-counted bucket in my_pages() below -- named so a future
+# fourth decisive verdict doesn't repeat the bug this fixed: partially_correct
+# (docs/ROADMAP.md's V1 "Verdicts", M6's evaluator) is a real, decisive grade
+# with page_number always set, exactly like correct/incorrect, and was
+# silently excluded from grouping entirely (not merely mis-bucketed) until
+# named here explicitly.
+_GRADED_DISPLAY_BUCKETS = frozenset({"correct", "incorrect", "partially_correct"})
 
 
 @app.get("/student/{student_id}/{source_id}/pages", response_class=HTMLResponse)
@@ -357,15 +364,16 @@ def my_pages(
     # order list_all_graded_for_source returned it in, so the last item seen
     # for a given (page_number, problem_id) is the most recent capture's --
     # exactly the one worth showing. Scoped to the graded bucket only:
-    # page_number is always set for correct/incorrect (GradedProblemRow's own
-    # invariant), so the grouping key is unambiguous there. waiting/to-look-at
-    # rows can have no page_number at all (a capture still waiting on
-    # identity), and collapsing them by problem_id alone risks conflating two
-    # genuinely different physical pages -- left ungrouped, unchanged.
+    # page_number is always set for correct/incorrect/partially_correct
+    # (GradedProblemRow's own invariant), so the grouping key is unambiguous
+    # there. waiting/to-look-at rows can have no page_number at all (a capture
+    # still waiting on identity), and collapsing them by problem_id alone
+    # risks conflating two genuinely different physical pages -- left
+    # ungrouped, unchanged.
     attempt_counts: dict[tuple[int, str], int] = {}
     latest_graded_by_key: dict[tuple[int, str], MyPageItem] = {}
     for item in items:
-        if item.view.display_bucket not in ("correct", "incorrect"):
+        if item.view.display_bucket not in _GRADED_DISPLAY_BUCKETS:
             continue
         assert item.page_number is not None
         key = (item.page_number, item.view.problem_id)

@@ -71,6 +71,15 @@ class GradedProblemRow:
     problem or a regrade, and never cleared automatically. Present here so
     _row_to_graded's `SELECT *` round-trips it; k12ta.web.app is the only
     writer."""
+    answered: bool = True
+    """Did the child attempt this problem at all -- distinct from `outcome`,
+    since "answered but a person still needs to look" must be expressible
+    (migration 0024, docs/ROADMAP.md's V1 "Verdicts"). Set once, at initial
+    grading (k12ta.pipeline.process), from whether the transcribed answer was
+    actually blank; never changed by a later verdict correction or regrade,
+    same as `page_number`/`expected_answer` in update_graded_problem_after_
+    identity_resolution. Defaults to True so every pre-migration call site
+    that doesn't yet pass this explicitly keeps behaving as it always did."""
 
 
 def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> None:
@@ -80,12 +89,12 @@ def insert_graded_problem(conn: sqlite3.Connection, row: GradedProblemRow) -> No
             (student_id, session_id, capture_id, problem_id, outcome, expected_answer,
              page_number, needs_human_cause, needs_human_detail, unsimplified,
              grader_confidence, diagnosis_misconception_id, diagnosis_explanation,
-             diagnosis_error_location, diagnosis_skill_ids)
+             diagnosis_error_location, diagnosis_skill_ids, answered)
         VALUES
             (:student_id, :session_id, :capture_id, :problem_id, :outcome, :expected_answer,
              :page_number, :needs_human_cause, :needs_human_detail, :unsimplified,
              :grader_confidence, :diagnosis_misconception_id, :diagnosis_explanation,
-             :diagnosis_error_location, :diagnosis_skill_ids)
+             :diagnosis_error_location, :diagnosis_skill_ids, :answered)
         """,
         {**vars(row), "diagnosis_skill_ids": json.dumps(list(row.diagnosis_skill_ids))},
     )
@@ -291,6 +300,7 @@ def _row_to_graded(row: sqlite3.Row) -> GradedProblemRow:
     data = dict(row)
     data["diagnosis_skill_ids"] = tuple(json.loads(data["diagnosis_skill_ids"]))
     data["unsimplified"] = bool(data["unsimplified"])
+    data["answered"] = bool(data["answered"])
     return GradedProblemRow(**data)
 
 
@@ -374,9 +384,9 @@ class ResolvedProblemRow:
     PendingProblemRow, same widening, same reasoning, for the parent
     enrollment page's graded-correct/graded-incorrect sections (M3.9): there
     is no way to see a real grade on that page today, only what's still
-    pending. `outcome` is "correct" or "incorrect", never anything else --
-    `list_resolved_for_source` is the only caller of this shape and filters
-    to exactly those two."""
+    pending. `outcome` is "correct", "partially_correct", or "incorrect",
+    never anything else -- `list_resolved_for_source` is the only caller of
+    this shape and filters to exactly those three."""
 
     session_id: str
     capture_id: str
@@ -392,11 +402,13 @@ class ResolvedProblemRow:
 def list_resolved_for_source(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> list[ResolvedProblemRow]:
-    """Every graded_problems row for this source with a real verdict (correct
-    or incorrect), across every session and capture, in capture order --
-    twin of list_pending_for_source above, same query shape, for the
-    "graded correct" / "graded incorrect" sections the parent-facing summary
-    (2026-08-22 M3.9) links to."""
+    """Every graded_problems row for this source with a real verdict
+    (correct, partially_correct, or incorrect), across every session and
+    capture, in capture order -- twin of list_pending_for_source above, same
+    query shape, for the "graded correct" / "graded incorrect" sections the
+    parent-facing summary (2026-08-22 M3.9) links to. partially_correct
+    added 2026-08-30/31, docs/ROADMAP.md's V1 "Verdicts": it is a real,
+    decisive verdict, not a pending one, so it belongs here."""
     cur = conn.execute(
         """
         SELECT gp.session_id AS session_id, gp.capture_id AS capture_id,
@@ -409,7 +421,8 @@ def list_resolved_for_source(
         JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
         JOIN problems p ON p.student_id = gp.student_id AND p.capture_id = gp.capture_id
             AND p.problem_id = gp.problem_id
-        WHERE gp.student_id = ? AND a.source_id = ? AND gp.outcome IN ('correct', 'incorrect')
+        WHERE gp.student_id = ? AND a.source_id = ?
+            AND gp.outcome IN ('correct', 'partially_correct', 'incorrect')
         ORDER BY pc.captured_at, gp.capture_id, gp.problem_id
         """,
         (student_id, source_id),
@@ -420,19 +433,21 @@ def list_resolved_for_source(
 def capture_has_decisive_outcome(
     conn: sqlite3.Connection, student_id: str, capture_id: str
 ) -> bool:
-    """Whether any item this capture ever produced landed on `correct` or
-    `incorrect` -- never scoped to `needs_human` rows the way `list_pending_
-    for_source` is, since the question here is "did this capture's own
-    identity and transcription ever actually earn a real verdict on
-    anything," not "is something from it still waiting." For k12ta.keys.app's
-    pending-list dedup: when several captures resolve to the same page, the
-    one with a real verdict somewhere in it is a stronger representative of
-    that page than one that never produced anything but needs_human, however
-    recently it was taken -- recency alone is not a proxy for quality."""
+    """Whether any item this capture ever produced landed on `correct`,
+    `partially_correct`, or `incorrect` -- never scoped to `needs_human` rows
+    the way `list_pending_for_source` is, since the question here is "did
+    this capture's own identity and transcription ever actually earn a real
+    verdict on anything," not "is something from it still waiting." For
+    k12ta.keys.app's pending-list dedup: when several captures resolve to the
+    same page, the one with a real verdict somewhere in it is a stronger
+    representative of that page than one that never produced anything but
+    needs_human, however recently it was taken -- recency alone is not a
+    proxy for quality."""
     cur = conn.execute(
         """
         SELECT 1 FROM graded_problems
-        WHERE student_id = ? AND capture_id = ? AND outcome IN ('correct', 'incorrect')
+        WHERE student_id = ? AND capture_id = ?
+            AND outcome IN ('correct', 'partially_correct', 'incorrect')
         LIMIT 1
         """,
         (student_id, capture_id),

@@ -60,7 +60,7 @@
       {% if item.attempt_count > 1 %}
       <span class="pages-attempts">Tried {{ item.attempt_count }} times</span>
       {% endif %}
-      {% if item.view.display_bucket == 'incorrect' or item.view.dispute %}
+      {% if item.view.display_bucket in ('incorrect', 'partially_correct') or item.view.dispute %}
       {% with session_id=item.session_id, capture_id=item.capture_id, problem_id=item.view.problem_id, dispute=item.view.dispute, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
       {% include "_dispute_control.html" %}
       {% endwith %}
@@ -87,7 +87,8 @@
   }
   .pages-glyph { font-weight: 700; margin-left: 0.5rem; }
   .outcome-correct .pages-glyph { color: var(--affirm); }
-  .outcome-incorrect .pages-glyph { color: var(--attention); }
+  .outcome-incorrect .pages-glyph,
+  .outcome-partially-correct .pages-glyph { color: var(--attention); }
   .pages-list form { display: inline; margin-left: 0.6rem; }
   .pages-list button {
     font-size: 0.95rem; padding: 0.4rem 0.9rem; border-radius: 8px; border: none;
