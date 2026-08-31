@@ -11,28 +11,13 @@
   mode. This app is meant to run as an ordinary browser tab. See docs/DEPLOYMENT.md.
 -->
 <title>{% block title %}Capture{% endblock %}</title>
+<link rel="stylesheet" href="/static/tokens.css">
 <style>
-  :root {
-    /* One palette, shared by every screen in this app: an affirmative family (calm
-       teal, not a scoreboard green), an attention family (muted amber-brown, never
-       alarm red), and a neutral family for "come back to this one, it's not a
-       verdict." Colour is always the third signal here, after a distinct glyph and
-       an explicit label -- see the results page and the capture framing guide,
-       which both draw from the same three families. */
-    --bg: #12141a;
-    --text: #f4f4f6;
-    --text-dim: #b8bcc4;
-    --surface: #1b1e26;
-    --accent: #ffd166;
-    --accent-active: #f2b705;
-    --affirm: #4ecdc4;
-    --affirm-bg: #1a3c30;
-    --attention: #c98f5e;
-    --attention-bg: #3a2a20;
-    --neutral: #8b93a1;
-    --neutral-bg: #262a33;
-  }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* App-specific layout only -- tokens, the lightbox, the working-spinner
+     keyframes, [hidden], and the base reset all live in the shared
+     /static/tokens.css now (M9a, docs/ROADMAP.md). What stays here is
+     genuinely specific to this app: a full-viewport, centred kiosk screen for
+     a child on a tablet, never the parent app's scrolling document layout. */
   html, body {
     height: 100%; margin: 0; padding: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -45,29 +30,21 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right)
              env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
+  * { -webkit-tap-highlight-color: transparent; }
   .screen {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    gap: 1.5rem; padding: 1.5rem; text-align: center;
+    gap: var(--space-5); padding: var(--space-5); text-align: center;
   }
   .big-button {
     display: block; width: 100%; max-width: 560px;
-    padding: 2rem 1.5rem; font-size: 1.75rem; font-weight: 600;
-    color: #12141a; background: var(--accent); border: none; border-radius: 20px;
+    padding: var(--space-6) var(--space-5); font-size: var(--text-2xl); font-weight: 600;
+    color: #12141a; background: var(--accent); border: none; border-radius: var(--radius-xl);
     text-decoration: none; cursor: pointer;
   }
   .big-button:active { background: var(--accent-active); }
   .big-button.secondary { background: var(--affirm); }
-  p.message { font-size: 1.25rem; line-height: 1.5; max-width: 32rem; }
-  /* [hidden] must win over any class rule below, always -- a live bug found
-     this the hard way: .working-state's own display:flex has equal CSS
-     specificity to the browser's default [hidden] rule, and author rules
-     always beat the user-agent stylesheet regardless of specificity, so
-     hidden="" was silently doing nothing for this element. A rejected photo
-     showed the reject message and a "Checking your page..." spinner at the
-     same time, and the spinner never stopped, because nothing was ever
-     going to: it was never hidden in the first place. */
-  [hidden] { display: none !important; }
+  p.message { max-width: 32rem; }
   /* The checklist that replaced the single opaque "Checking your page..."
      spinner -- so a stopped or failed request shows exactly which step it
      got to, not just "still waiting" indefinitely. See k12ta.web.app.
@@ -96,20 +73,10 @@
   .checklist-item:not(.done):not(.active):not(.failed) .checklist-glyph::before {
     content: "○"; color: var(--neutral);
   }
-  @keyframes working-spin { to { transform: rotate(360deg); } }
-  /* Click-to-enlarge (parent feedback, 2026-08-30, ported here too for the
-     same reason): any <img data-lightbox> opens at its real stored
-     resolution, capped only by the viewport, never upscaled. */
-  img[data-lightbox] { cursor: zoom-in; }
-  .lightbox-overlay {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 500;
-    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
-  }
-  .lightbox-overlay img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
-  .lightbox-close {
-    position: absolute; top: 1rem; right: 1.2rem; font-size: 2rem; line-height: 1;
-    color: var(--text); background: none; border: none; cursor: pointer;
-  }
+  /* working-spin's @keyframes, the lightbox's CSS, and [hidden] all now live
+     in the shared /static/tokens.css (M9a) -- this app's own markup/script for
+     the lightbox stays below, since only the stylesheet was in scope for this
+     pass, not a shared JS asset too. */
 </style>
 </head>
 <body>

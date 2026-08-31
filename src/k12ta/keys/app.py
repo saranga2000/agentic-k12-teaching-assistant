@@ -24,6 +24,7 @@ from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import COACH_NAME_PLACEHOLDER, Settings, load_dotenv
@@ -98,6 +99,12 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+# M9a (docs/ROADMAP.md): same shared design-system directory k12ta.web mounts --
+# see that app's own comment on this line for why (one physical file, no new
+# dependency).
+app.mount(
+    "/static", StaticFiles(directory=str(Path(__file__).parent.parent / "design")), name="static"
+)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["humanize_math"] = humanize_math_text
 

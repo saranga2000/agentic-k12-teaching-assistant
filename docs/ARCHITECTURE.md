@@ -71,6 +71,7 @@ resolution above there will not be one inside V1.
 | `k12ta.ingest` | Turning an uploaded photo into a validated `page_captures` row; resolving the day's default assignment | Render HTML, decide grading correctness, call a model |
 | `k12ta.pipeline` | Orchestrating one capture through ingest → transcribe → grade → persist, including the daily quota gate | Render HTML, call a model directly (it goes through `k12ta.transcribe`) |
 | `k12ta.keys` | Parent-only answer-key ingestion: upload, transcribe, present for confirmation, persist confirmed entries | Be reachable from the student capture flow, store an *answer key entry* nobody confirmed on screen, call a model directly |
+| `k12ta.design` | The M9a shared design system (docs/ROADMAP.md): `tokens.css` -- colour, type scale, spacing, radius, and state tokens, plus the base component CSS genuinely identical between the two apps before this milestone (the lightbox, the working-spinner keyframes, `[hidden]`). Not a Python package -- no `__init__.py`, nothing importable -- purely a static asset directory each app mounts independently at `/static` (`fastapi.staticfiles.StaticFiles`, itself already part of the approved `fastapi` dependency, so this needed no new line below) | Contain a build step or a frontend toolchain (plain CSS only, per `docs/ARCHITECTURE.md`'s existing commitment); contain anything importable from Python |
 
 Three of these packages did not exist when this table was first written:
 `k12ta.diagnose`, `k12ta.respond`, and `k12ta.digest`. They were listed because the

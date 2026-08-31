@@ -3,29 +3,17 @@
 <head>
 <meta charset="utf-8">
 <title>{% block title %}Answer keys{% endblock %}</title>
+<link rel="stylesheet" href="/static/tokens.css">
 <style>
-  /* Same design system as k12ta.web/templates/base.html -- identical token names
-     and values, not just a thematically-similar palette. This app is still
-     desk-based and form-dense (a parent working through 30 answers, not a child's
-     one-glance kiosk screen), so the layout differs -- a scrolling document with
-     dense tables instead of a full-screen centred .screen -- but the colours,
-     type, and glyph language are the one shared system across both apps. */
-  :root {
-    --bg: #12141a;
-    --text: #f4f4f6;
-    --text-dim: #b8bcc4;
-    --surface: #1b1e26;
-    --border: #2c2f38;
-    --accent: #ffd166;
-    --accent-active: #f2b705;
-    --affirm: #4ecdc4;
-    --affirm-bg: #1a3c30;
-    --attention: #c98f5e;
-    --attention-bg: #3a2a20;
-    --neutral: #8b93a1;
-    --neutral-bg: #262a33;
-  }
-  * { box-sizing: border-box; }
+  /* App-specific layout only -- tokens, the lightbox, the working-spinner
+     keyframes, [hidden], and the base reset all live in the shared
+     /static/tokens.css now (M9a, docs/ROADMAP.md), the actual same physical
+     file k12ta.web links too, not just matching values kept in sync by hand.
+     This app is still desk-based and form-dense (a parent working through 30
+     answers, not a child's one-glance kiosk screen), so the layout differs --
+     a scrolling document with dense tables instead of a full-screen centred
+     .screen -- but the colours, type, and glyph language are the one shared
+     system across both apps. */
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 17px; max-width: 960px; margin: 2rem auto; padding: 0 1.25rem;
@@ -64,12 +52,6 @@
   .schema-component-row input[type=text] { width: auto; display: inline-block; }
   .schema-example { color: var(--text-dim); font-size: 0.9rem; }
   .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
-  /* Same fix, same reason as k12ta.web/templates/base.html: an author rule
-     with equal specificity to the browser's default [hidden] rule always
-     wins regardless of specificity, which silently defeated hidden="" on
-     this app's own .working-state div too. See that file's comment for the
-     live incident this was found from. */
-  [hidden] { display: none !important; }
   .message {
     background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent);
     padding: 0.85rem 1.1rem; border-radius: 8px;
@@ -94,7 +76,6 @@
     border: 5px solid var(--neutral-bg); border-top-color: var(--accent);
     animation: working-spin 0.8s linear infinite;
   }
-  @keyframes working-spin { to { transform: rotate(360deg); } }
   /* Pending review, grouped by capture (2026-08-22) -- one photograph, its
      image, its items beneath, replacing a flat list grouped only by cause. */
   .capture-group {
@@ -139,22 +120,6 @@
   .summary-bar strong { font-size: 1.15rem; }
   .summary-bar a { color: var(--text); text-decoration: none; }
   .summary-bar a:hover { text-decoration: underline; }
-  /* Click-to-enlarge (parent feedback, 2026-08-30): every photo a parent has
-     to actually read -- a capture, a key scan -- is shown small so several
-     fit on screen at once. Any <img data-lightbox> opens here at its real
-     stored resolution (the image routes never resize, see k12ta.keys.app.
-     pending_capture_image/key_page_image), capped only by the viewport, never
-     upscaled past its native size. */
-  img[data-lightbox] { cursor: zoom-in; }
-  .lightbox-overlay {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 500;
-    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
-  }
-  .lightbox-overlay img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
-  .lightbox-close {
-    position: absolute; top: 1rem; right: 1.2rem; font-size: 2rem; line-height: 1;
-    color: var(--text); background: none; border: none; cursor: pointer;
-  }
 </style>
 </head>
 <body>

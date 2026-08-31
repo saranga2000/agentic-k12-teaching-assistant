@@ -52,21 +52,38 @@ running count logged below when that item starts.
       explicitly rather than a redundant test. Did NOT touch k12ta.content.source/
       registry.py's ContentSource/example_sources -- confirmed dead code (only
       SourceKind is imported live from that module), not worth the churn.
-- [ ] 5. M9a design system (tokens + shared stylesheet only, not 9b polish)
+- [x] 5. M9a design system -- committed. New `src/k12ta/design/tokens.css`, one
+      physical file, mounted at `/static` independently by both apps (StaticFiles,
+      no new dependency), proven byte-identical by a direct test. Colour tokens kept
+      their existing names (unchanged, dozens of templates reference them); new
+      type/spacing/radius scales added; the CSS genuinely identical between both
+      apps' base.html before this pass (lightbox, working-spinner keyframes,
+      [hidden], base reset) moved here once. New: a :focus-visible ring and a
+      44x44px minimum scoped to button-shaped controls only (not every <input> --
+      would have undone k12ta.keys' own dense-table tradeoff). Both base.html files
+      keep only their genuinely different layout (child kiosk .screen vs parent
+      scrolling document), now referencing shared tokens. Full suite + browser suite
+      + mypy all green. NOT done, left for 9b: retrofitting the new scales into any
+      other screen, merging _photo_source.html's two copies (a real separate design
+      decision -- child app's large buttons vs parent app's normal ones -- not a
+      mechanical extraction), sharing the lightbox HTML/JS (only its CSS was in
+      scope), and a deliberate empty/failure-state audit.
 - [ ] 6. M6 agentic evaluator (offline first: ladder, prompts, parsing, tests)
 
 Live model calls spent so far: 0 / 5 (budget applies to item 6 validation only)
 
-## Current item: 5
+## Current item: 6
 
-Starting M9a (design system only, not 9b's polish pass). Need: design tokens (colour,
-type scale, spacing, radius, state), one shared stylesheet consumed by both apps
-(today k12ta.web and k12ta.keys each have their own Jinja2Templates directory with
-physically duplicated markup), plus designed empty/failure states per AGENTS.md rule
-11. Hard constraints: no build step/toolchain, the two-tap capture path must not grow
-a tap, accessibility baseline, one design for both children (no grade-band variation
--- that's V3). Retrofit existing screens only as far as quota allows; a new
-inconsistent screen is not acceptable, a partially-retrofitted old one is.
+Starting the last item: M6, the agentic evaluator. Work offline first per the
+instructions -- structure, prompts, parsing, tests against recorded/synthetic
+responses -- before spending a single live call. Three-tier ladder: deterministic
+key match (already exists, item 2 just added NFC to it) -> text evaluator -> vision
+evaluator over the page photo + key photo. No answer-type enumeration anywhere
+(AGENTS.md rule 12). Ships behind a flag starting at "flag for parent"; do NOT wire
+"mark wrong" as reachable. Live budget: 5 pages max, for the key-withheld smoke test
+only, hard-capped in code before the first call, two numbers reported separately
+(answer-generation accuracy vs verdict accuracy), labelled a smoke test not a
+calibration number, no automatic retry into an unexplained failure.
 
 ## Questions for the morning
 

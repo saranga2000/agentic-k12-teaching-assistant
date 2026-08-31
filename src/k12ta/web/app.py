@@ -24,6 +24,7 @@ from urllib.parse import parse_qs
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from k12ta.config import Settings, load_dotenv
@@ -108,6 +109,14 @@ queue -- generous on purpose, well above any real call's worst case, so it never
 fires for a legitimately slow model response."""
 
 app = FastAPI()
+# M9a (docs/ROADMAP.md): src/k12ta/design/ is the one shared design-system
+# directory both this app and k12ta.keys mount independently -- same physical
+# file on disk, not two copies. StaticFiles ships with Starlette, itself a
+# transitive dependency of the already-approved fastapi, so this needs no new
+# line in docs/ARCHITECTURE.md's "Why these dependencies" (AGENTS.md rule 4).
+app.mount(
+    "/static", StaticFiles(directory=str(Path(__file__).parent.parent / "design")), name="static"
+)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["humanize_math"] = humanize_math_text
 

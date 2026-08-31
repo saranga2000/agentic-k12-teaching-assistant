@@ -1,0 +1,140 @@
+/* M9a design system (docs/ROADMAP.md), shipped 2026-08-31. One physical file,
+   served as a static asset by BOTH k12ta.web and k12ta.keys (each mounts its own
+   /static route at this same directory -- no cross-app import, no shared process,
+   just one file on disk instead of two copies that could drift). Plain CSS, no
+   build step, no preprocessor: AGENTS.md rule 4 and docs/ARCHITECTURE.md's "no
+   frontend toolchain" commitment both apply here as much as to any Python file.
+
+   What lives here vs. what stays in each app's own base.html:
+   - Tokens (this file, :root) -- every colour, size, and radius either app's CSS
+     ever references. Existing colour variable NAMES are unchanged from before
+     this file existed (--affirm, --attention, --neutral, --accent, --bg, --text,
+     --text-dim, --surface, --border) -- dozens of templates already reference
+     them; renaming would be pure, risky churn for a repaint 9b might redo anyway.
+   - Base component classes genuinely identical between the two apps before this
+     pass (verified by diff, not assumed): the lightbox, the working-spinner
+     keyframes, [hidden], box-sizing reset, the plain .message treatment. Moving
+     these here is the actual fix for the duplication this milestone exists to
+     close -- both base.html files had byte-identical copies of most of this.
+   - What stays in each app's own base.html, deliberately: layout that is
+     genuinely different by design, not by accident -- k12ta.web's full-viewport
+     centred .screen for a child's kiosk-style tablet view vs. k12ta.keys' scrolling
+     document layout for a parent working through a dense form. "One design,
+     deliberately not two products" (docs/ROADMAP.md's M9) means one token set and
+     one visual language, not that every screen shape must be identical -- the two
+     audiences named in that same section are real and their layouts should look
+     it, while sharing every colour, spacing, and radius decision underneath.
+*/
+
+:root {
+  /* ---- Colour --------------------------------------------------------- */
+  /* An affirmative family (calm teal, not a scoreboard green), an attention
+     family (muted amber-brown, never alarm red), and a neutral family for
+     "come back to this one, it's not a verdict." Colour is always the third
+     signal, after a distinct glyph and an explicit label -- never the only one. */
+  --bg: #12141a;
+  --text: #f4f4f6;
+  --text-dim: #b8bcc4;
+  --surface: #1b1e26;
+  --border: #2c2f38;
+  --accent: #ffd166;
+  --accent-active: #f2b705;
+  --affirm: #4ecdc4;
+  --affirm-bg: #1a3c30;
+  --attention: #c98f5e;
+  --attention-bg: #3a2a20;
+  --neutral: #8b93a1;
+  --neutral-bg: #262a33;
+
+  /* ---- Type scale ------------------------------------------------------
+     New in this pass -- neither app had a named scale before, just ad hoc
+     rem values (0.78rem, 0.8rem, 0.85rem, 0.9rem... measured across both
+     base.html files, all clustering around these seven stops). Existing
+     hardcoded sizes are not retrofitted to these by this pass (9b's job,
+     screen by screen) -- new and touched CSS should reach for these instead
+     of a new one-off number. */
+  --text-xs: 0.8rem;
+  --text-sm: 0.92rem;
+  --text-base: 1rem;
+  --text-md: 1.15rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 1.75rem;
+
+  /* ---- Spacing ----------------------------------------------------------
+     New in this pass, same reasoning as the type scale above. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* ---- Radius ------------------------------------------------------------
+     Four stops covering every radius value already in use across both apps
+     (6px inputs, 8px cards/buttons, 10px larger cards/photos, 20px the
+     child app's big tap targets) -- named so a new screen picks one of four
+     deliberate choices instead of inventing a fifth. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 20px;
+
+  /* ---- State --------------------------------------------------------------
+     New in this pass. Neither app had a visible focus indicator before --
+     a real accessibility gap for anyone navigating by keyboard or switch
+     access, not a cosmetic omission. See the :focus-visible rule below. */
+  --focus-ring: 0 0 0 3px rgba(255, 209, 102, 0.45);
+  --transition-fast: 120ms ease;
+}
+
+/* ---- Base reset and behaviour shared by both apps ------------------------ */
+* { box-sizing: border-box; }
+
+/* [hidden] must win over any class rule, always -- a live bug (docs/PROGRESS.md,
+   M2) found that an author rule with equal specificity to the browser's default
+   [hidden] rule silently defeats hidden="" regardless of specificity, because
+   author rules always beat the user-agent stylesheet. Both apps hit this
+   independently for their own working-state spinner; fixed once, here. */
+[hidden] { display: none !important; }
+
+/* Accessibility baseline (docs/ROADMAP.md's M9): every interactive element gets
+   a visible focus ring, and every button-shaped control meets the 44x44px
+   minimum target size WCAG recommends -- neither existed before this pass.
+   Deliberately scoped to buttons and button-styled links, not every <input> --
+   k12ta.keys' dense review tables (e.g. confirm.html's answer grid) are a real,
+   already-made "denser and more scannable" tradeoff (docs/ROADMAP.md's M9, "two
+   audiences"); forcing every text field to 44px would quietly undo that for a
+   guideline aimed at one-tap targets, not typed-into fields. min-height has no
+   effect on a plain, un-styled <a> (default display: inline, per spec), so
+   ordinary inline text links are unaffected -- this only reaches links already
+   styled to look like a button. */
+:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+button, .button-link, a.big-button { min-height: 44px; }
+
+/* The plain, undecorated message paragraph both apps use for body copy that
+   isn't a boxed callout (k12ta.web's screen copy, k12ta.keys' explanatory
+   text) -- identical in both base.html files before this pass. */
+.message { font-size: var(--text-lg); line-height: 1.5; }
+
+/* The working-state spinner: identical CSS and identical reasoning in both
+   apps (a slow model call with no on-screen acknowledgement is
+   indistinguishable from a stalled connection) -- one keyframe animation,
+   used by k12ta.web's .checklist-item.active and k12ta.keys' .working-spinner,
+   each still defining its own element shape around this shared animation. */
+@keyframes working-spin { to { transform: rotate(360deg); } }
+
+/* Click-to-enlarge (parent feedback, 2026-08-30): any <img data-lightbox> opens
+   at its real stored resolution, capped only by the viewport, never upscaled.
+   Byte-identical in both base.html files before this pass -- the exact kind of
+   duplication this milestone exists to close. */
+img[data-lightbox] { cursor: zoom-in; }
+.lightbox-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 500;
+  display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+}
+.lightbox-overlay img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+.lightbox-close {
+  position: absolute; top: 1rem; right: 1.2rem; font-size: 2rem; line-height: 1;
+  color: var(--text); background: none; border: none; cursor: pointer;
+}

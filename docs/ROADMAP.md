@@ -1776,6 +1776,35 @@ Done when: both apps share one stylesheet and one token set, every screen in the
 above has been through the pass including its empty and failure states, and the capture
 path still takes two taps — measured, not assumed.
 
+**9a shipped 2026-08-31, 9b not started.** `src/k12ta/design/tokens.css` is one
+physical file, mounted at `/static` independently by both apps
+(`fastapi.staticfiles.StaticFiles`, no new dependency), proven byte-identical by a
+direct test rather than assumed from matching values kept in sync by hand. It carries
+colour (the existing palette, names unchanged — dozens of templates already reference
+them, and renaming was judged pure churn for a repaint 9b might redo), a new type
+scale, spacing scale, and radius scale, plus the CSS that was genuinely
+byte-identical between the two apps' `base.html` before this pass (the lightbox, the
+working-spinner keyframes, `[hidden]`, the base reset) — moved here once, not kept as
+two copies. New in this pass, not a consolidation of something old: a visible
+`:focus-visible` ring and a 44×44px minimum on button-shaped controls specifically
+(not every `<input>` — `min-height` is a no-op on plain inline `<a>` by spec, and a
+blanket rule on every text field would have quietly undone `k12ta.keys`' own
+deliberate "denser and more scannable" tradeoff for its review tables). Both apps'
+`base.html` keep only what is genuinely different by design — the child app's
+full-viewport centred kiosk `.screen`, the parent app's scrolling document layout —
+now referencing the shared tokens instead of hardcoded values. Full suite, browser
+suite, and `mypy --strict` all green with no other template touched; capture's
+tap count is unaffected structurally (no interaction changed, only where its CSS
+comes from). **Not done, left for 9b or later:** retrofitting the new type/spacing/
+radius scale into any screen beyond `base.html` itself (every hardcoded rem value
+elsewhere is untouched), merging `_photo_source.html`'s two copies (a real, separately
+scoped case M9a's own text names — deferred because unifying its button sizing
+between the child app's large tap targets and the parent app's normal-sized ones
+needs its own small design decision, not a mechanical extraction), the lightbox's
+HTML/JS (only its CSS was shared, per this milestone's literal scope), and a
+deliberate pass over every screen's empty/failure state — today's states are honest
+(`AGENTS.md` rule 11) but not yet audited as one coherent system.
+
 ### Later, in priority order — not milestones, not scheduled
 
 1. Second persona for the younger child, as a parent-run routine with streaks and no
