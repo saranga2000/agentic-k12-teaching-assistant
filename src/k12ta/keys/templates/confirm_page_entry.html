@@ -3,7 +3,7 @@
 {% block content %}
 <p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}/evaluations">&larr; {{ source.label }}</a></p>
 <h1>Is this page {{ page_number }}?</h1>
-<img class="key-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ capture_id }}/image" alt="{{ student.display_name }}'s photo">
+<img class="key-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ capture_id }}/image" alt="{{ student.display_name }}'s photo" data-lightbox>
 
 {% if preview %}
 <div class="message">

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Add a child{% endblock %}
+{% block content %}
+<p><a href="/">&larr; Children</a></p>
+<h1>Add a child</h1>
+
+{% if errors %}
+<div class="message">
+  <ul>
+    {% for error in errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<form method="post" action="/students/new">
+  <label for="display_name">Name</label>
+  <input type="text" name="display_name" id="display_name" value="{{ values.display_name }}">
+
+  <label for="grade_level">Grade</label>
+  <input type="text" name="grade_level" id="grade_level" value="{{ values.grade_level_raw }}" placeholder="0 for kindergarten">
+
+  <div class="actions">
+    <button type="submit">Add child</button>
+  </div>
+</form>
+{% endblock %}

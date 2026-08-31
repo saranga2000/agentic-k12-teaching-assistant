@@ -4,6 +4,12 @@
 <p><a href="/keys/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
 <h1>Page identity — {{ source.label }}</h1>
 
+{% if is_unconfirmed %}
+<p class="message attention">{{ student.display_name }} guessed this while photographing a page &mdash; nobody
+  has checked it against the book yet. Check it below: Save unchanged to confirm it as-is, or fix
+  anything wrong and Save to correct it. Correcting it will automatically re-check every page already
+  graded under this guess, and {{ student.display_name }} will be told that happened.</p>
+{% endif %}
 <p class="message">
   Which printed markers, together, tell one page of this source apart from another?
   {% if schema %}Editing this creates a new version — mappings confirmed under the

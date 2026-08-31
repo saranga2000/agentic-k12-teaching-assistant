@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Children{% endblock %}
 {% block content %}
+{% if review_queue %}
+<h2>Needs your attention</h2>
+<ul class="review-queue">
+  {% for item in review_queue %}
+  <li>
+    <a href="/keys/{{ item.student.student_id }}/{{ item.source.source_id }}/evaluations">
+      {{ item.student.display_name }} — {{ item.source.label }}
+    </a>
+    <span class="review-queue-count">{{ item.pending_count }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
 {% if rows %}
   {% for row in rows %}
   <h2>{{ row.student.display_name }}</h2>
@@ -12,10 +25,25 @@
   </ul>
   {% else %}
   <p class="message">No enrollments configured for {{ row.student.display_name }} yet.</p>
+  {% if row.program_requested_at %}
+  <p class="message program-requested-badge">{{ row.student.display_name }} asked for a program to be added.</p>
+  {% endif %}
   {% endif %}
   <p><a class="button-link" href="/keys/{{ row.student.student_id }}/enrollments/new">+ Add an enrollment</a></p>
   {% endfor %}
 {% else %}
   <p class="message">{{ no_students_message }}</p>
 {% endif %}
+<p><a class="button-link" href="/students/new">+ Add a child</a></p>
+<style>
+  .review-queue { list-style: none; padding: 0; margin: 0 0 1.5rem; }
+  .review-queue li {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--surface);
+  }
+  .review-queue-count {
+    background: var(--attention-bg); color: var(--attention); font-weight: 700;
+    border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.9rem;
+  }
+</style>
 {% endblock %}

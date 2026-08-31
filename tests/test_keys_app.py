@@ -35,6 +35,8 @@ from k12ta.store import (
     captures,
     content,
     db,
+    disputes,
+    identity_corrections,
     key_page_images,
     migrate,
     page_identities,
@@ -42,13 +44,14 @@ from k12ta.store import (
     page_identity_schemas,
     policy_override_audit,
     policy_overrides,
+    program_requests,
     quota,
     sessions,
     students,
 )
-from k12ta.transcribe.base import FailureKind
+from k12ta.transcribe.base import FailureKind, PageIdentityExtraction, TranscriptionResult
 from k12ta.transcribe.key_page import KeyPageEntry, KeyPageResult
-from tests.fakes import FakeKeyTranscriber
+from tests.fakes import FakeKeyTranscriber, FakeTranscriber
 
 
 def _jpeg_bytes(size: tuple[int, int], color: tuple[int, int, int]) -> bytes:
@@ -124,6 +127,132 @@ def _seed_marcus(conn: sqlite3.Connection) -> None:
             coach_name="Coach",
         ),
     )
+
+
+def test_home_shows_a_badge_when_a_child_has_requested_a_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap A (docs/USER_WORKFLOWS.md): the child app's request-program tap
+    must be visible here without drilling into anything -- the whole point
+    is a parent sees it on the one screen they already open daily."""
+    _seed_marcus(conn)
+
+    before = client.get("/")
+    assert before.status_code == 200
+    assert "asked for a program to be added" not in before.text
+
+    program_requests.request_program(conn, "s-marcus", "2026-08-30T09:00:00+00:00")
+
+    after = client.get("/")
+    assert "Marcus asked for a program to be added." in after.text
+
+
+def test_student_setup_screen_renders_a_blank_form(client: TestClient) -> None:
+    response = client.get("/students/new")
+    assert response.status_code == 200
+    assert 'name="display_name"' in response.text
+    assert 'name="grade_level"' in response.text
+
+
+def test_submit_student_setup_creates_a_child_and_redirects_home(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap E (docs/USER_WORKFLOWS.md): a student only ever came into
+    existence via scripts/seed_dev_data.py before this -- now the web app
+    can do it, deriving a student_id from the typed name the same way an
+    enrollment derives a source_id from its label."""
+    response = client.post(
+        "/students/new",
+        data={"display_name": "Priya", "grade_level": "3"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+    created = students.get_student(conn, "priya")
+    assert created is not None
+    assert created.display_name == "Priya"
+    assert created.grade_level == 3
+
+
+def test_submit_student_setup_disambiguates_a_repeated_name(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Two children sharing a first name must never collide on student_id --
+    same reasoning as _unique_source_id for enrollments."""
+    client.post("/students/new", data={"display_name": "Priya", "grade_level": "3"})
+    client.post("/students/new", data={"display_name": "Priya", "grade_level": "6"})
+
+    assert students.get_student(conn, "priya") is not None
+    assert students.get_student(conn, "priya_2") is not None
+
+
+def test_submit_student_setup_rejects_a_missing_name_or_bad_grade(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    response = client.post("/students/new", data={"display_name": "", "grade_level": "3"})
+    assert response.status_code == 200
+    assert "Name is required." in response.text
+
+    response = client.post("/students/new", data={"display_name": "Priya", "grade_level": "17"})
+    assert response.status_code == 200
+    assert "Grade must be a number from 0" in response.text
+
+    assert students.list_students(conn) == []
+
+
+def test_home_review_queue_lists_every_child_and_program_with_something_pending(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap G (docs/USER_WORKFLOWS.md): a cross-child, cross-program rollup on
+    the landing page itself, not only visible after drilling into one
+    enrollment -- pure aggregation of sessions.list_pending_for_source."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Needs your attention" in response.text
+    assert 'href="/keys/s-marcus/summer_bridge/evaluations"' in response.text
+    assert "Marcus — Summer bridge workbook" in response.text
+
+
+def test_home_review_queue_is_absent_when_nothing_is_pending(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Needs your attention" not in response.text
+
+
+def test_home_does_not_show_a_stale_request_once_a_source_exists(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A program request only makes sense while there is nothing enrolled
+    yet -- once a parent adds a source, the badge must disappear on its own,
+    with no separate "clear the request" step needed."""
+    _seed_marcus_with_source(conn)
+    program_requests.request_program(conn, "s-marcus", "2026-08-30T09:00:00+00:00")
+
+    response = client.get("/")
+
+    assert "asked for a program to be added" not in response.text
 
 
 def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
@@ -247,7 +376,7 @@ def test_enrollment_setup_screen_for_unknown_student_is_404(client: TestClient) 
     assert client.get("/keys/does-not-exist/enrollments/new").status_code == 404
 
 
-def test_submit_enrollment_setup_creates_the_source_and_redirects_to_its_detail_page(
+def test_submit_enrollment_setup_creates_the_source_and_redirects_to_describe_its_structure(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
     _seed_marcus(conn)
@@ -267,7 +396,7 @@ def test_submit_enrollment_setup_creates_the_source_and_redirects_to_its_detail_
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/keys/s-marcus/rsm"
+    assert response.headers["location"] == "/keys/s-marcus/rsm/identity-schema"
     row = content.get_content_source(conn, "s-marcus", "rsm")
     assert row is not None
     assert row.label == "RSM"
@@ -363,7 +492,7 @@ def test_submit_enrollment_setup_dedupes_a_colliding_source_id(
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/keys/s-marcus/summer_bridge_2"
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge_2/identity-schema"
     row = content.get_content_source(conn, "s-marcus", "summer_bridge_2")
     assert row is not None
     assert row.subject == "reading"
@@ -836,6 +965,280 @@ def test_resubmitting_an_unchanged_schema_does_not_bump_the_version(
         page_identities.get_page_number(conn, "s-marcus", "summer_bridge", "Day 1\x1fSection 1", v1)
         == 13
     )
+
+
+def _seed_unconfirmed_bootstrap_schema(conn: sqlite3.Connection) -> None:
+    """Gap O (docs/USER_WORKFLOWS.md): the state right after a child confirms
+    a brand-new program's app-guessed structure -- one schema version, not
+    yet parent-authored, with one confirmed mapping and one resolved
+    capture, so a parent's correction has something real to re-check."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn,
+        "s-marcus",
+        "summer_bridge",
+        [("chapter", "chapter", "CH.4")],
+        provenance="unconfirmed",
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            composite_key=build_composite_key(["CH.4"]),
+            schema_version=1,
+            confirmed_at="2026-08-30T08:00:00+00:00",
+            source="unconfirmed",
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-30T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            assignment_id="a-1",
+            started_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-1",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.97,
+            page_number=1,
+            needs_human_cause="no_key_for_page",
+        ),
+    )
+
+
+def test_identity_schema_screen_shows_a_banner_when_unconfirmed(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_unconfirmed_bootstrap_schema(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/identity-schema")
+
+    assert response.status_code == 200
+    assert "Marcus guessed this" in response.text
+
+
+def test_identity_schema_screen_has_no_banner_once_parent_authored(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/identity-schema")
+
+    assert "guessed this" not in response.text
+
+
+def test_submit_identity_schema_unchanged_confirms_an_unconfirmed_schema_in_place(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap O: re-submitting the pre-filled form exactly as-is is the whole
+    "confirm as-is" action -- no new version, and since the capture already
+    graded correctly under this schema, nothing needs re-checking."""
+    _seed_unconfirmed_bootstrap_schema(conn)
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "1",
+            "component_name_0": "chapter",
+            "component_label_0": "chapter",
+            "component_example_0": "CH.4",
+        },
+    )
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "parent"
+    )
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 1
+    assert identity_corrections.get_correction(conn, "s-marcus", "summer_bridge") is None
+
+
+def test_submit_identity_schema_changed_corrects_an_unconfirmed_schema_and_notifies(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap O: a real correction to a not-yet-confirmed schema is the one
+    trigger in this whole app where a regrade fires automatically
+    (replay_source) and the child is left a notice -- see
+    docs/USER_WORKFLOWS.md §3.5 for why every other regrade stays manual."""
+    _seed_unconfirmed_bootstrap_schema(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-30T09:00:00+00:00",
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "1",
+            "component_name_0": "lesson",
+            "component_label_0": "Lesson",
+            "component_example_0": "Lesson 4",
+        },
+    )
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "parent"
+    )
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 2
+    # replay_source ran: the capture, already resolved to page_number=1, is
+    # re-decided against the key added above, with zero re-transcription.
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-1")
+    assert graded[0].outcome == "correct"
+    assert identity_corrections.get_correction(conn, "s-marcus", "summer_bridge") is not None
+
+
+def test_submit_identity_schema_changed_on_an_already_parent_schema_does_not_auto_regrade(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The general rule, unchanged: an ordinary later edit to an already
+    parent-authored schema stays exactly as manual as it always was --
+    replay_source only ever fires for the one narrow Gap O trigger above."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    page_identities.upsert_identity(
+        conn,
+        page_identities.PageIdentityRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            composite_key=build_composite_key(["Day 5"]),
+            schema_version=1,
+            confirmed_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            assignment_id="a-1",
+            captured_at="2026-08-30T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-1",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            assignment_id="a-1",
+            started_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-1",
+            capture_id="c-1",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.97,
+            page_number=1,
+            needs_human_cause="no_key_for_page",
+        ),
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=1,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-30T09:00:00+00:00",
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/identity-schema",
+        data={
+            "component_count": "1",
+            "component_name_0": "lesson",
+            "component_label_0": "Lesson",
+            "component_example_0": "Lesson 4",
+        },
+    )
+
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 2
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-1")
+    assert graded[0].outcome == "needs_human"  # untouched -- no auto-regrade fired
+    assert identity_corrections.get_correction(conn, "s-marcus", "summer_bridge") is None
 
 
 def test_identity_schema_for_unknown_student_or_source_is_404(client: TestClient) -> None:
@@ -2451,6 +2854,446 @@ def test_evaluations_screen_offers_a_verdict_form_for_needs_person_rows_too(
     assert "key says" not in response.text
 
 
+def test_evaluations_screen_offers_a_verdict_form_for_low_confidence_rows_too(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback (2026-08-30): "Transcription could not be read" used
+    to have no way to act on it at all, even though the model's own
+    tentative reading was shown right there -- confusing and a dead end."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-low-conf",
+        problem_id="2",
+        cause="low_confidence",
+        page_number=15,
+        prompt_text="12 + 7",
+        student_answer_raw="l9",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'value="c-low-conf"' in response.text
+    assert 'name="student_answer_raw" value="l9"' in response.text
+    assert "wasn't confident reading this one" in response.text
+
+
+def test_submit_answer_verdict_corrects_a_misread_answer_before_judging_it(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-low-conf",
+        problem_id="2",
+        cause="low_confidence",
+        page_number=15,
+        prompt_text="12 + 7",
+        student_answer_raw="l9",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-low-conf",
+            "capture_id": "c-low-conf",
+            "problem_id": "2",
+            "verdict": "correct",
+            "student_answer_raw": "19",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-low-conf")
+    assert graded[0].outcome == "correct"
+    problems = captures.list_problems_for_capture(conn, "s-marcus", "c-low-conf")
+    assert problems[0].student_answer_raw == "19"
+
+
+def test_submit_answer_verdict_with_a_blank_correction_leaves_the_transcription_alone(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-low-conf",
+        problem_id="2",
+        cause="low_confidence",
+        page_number=15,
+        prompt_text="12 + 7",
+        student_answer_raw="19",
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-low-conf",
+            "capture_id": "c-low-conf",
+            "problem_id": "2",
+            "verdict": "correct",
+            "student_answer_raw": "   ",
+        },
+    )
+
+    problems = captures.list_problems_for_capture(conn, "s-marcus", "c-low-conf")
+    assert problems[0].student_answer_raw == "19"  # unchanged
+
+
+def test_evaluations_screen_offers_mark_correct_and_save_as_key_for_no_key_rows(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback (2026-08-30): a question with no key at all had no way
+    to act on it -- a parent reading the child's own answer, confirming it's
+    right, and teaching it as the key for next time is exactly the missing
+    action."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-no-key",
+        problem_id="10",
+        cause="no_key_for_page",
+        page_number=14,
+        prompt_text="bird : nest :: rabbit : ___",
+        student_answer_raw="burrow",
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'name="key_answer_text" value="burrow"' in response.text
+    assert 'name="page_number" value="14"' in response.text
+    assert "save as key" in response.text.lower()
+
+
+def test_submit_answer_verdict_saves_a_new_key_entry_and_judges_it(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-no-key",
+        problem_id="10",
+        cause="no_key_for_page",
+        page_number=14,
+        prompt_text="bird : nest :: rabbit : ___",
+        student_answer_raw="burrow",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-no-key",
+            "capture_id": "c-no-key",
+            "problem_id": "10",
+            "verdict": "correct",
+            "key_answer_text": "burrow",
+            "page_number": "14",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-no-key")
+    assert graded[0].outcome == "correct"
+    entry = answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 14, "10")
+    assert entry is not None
+    assert entry.answer_text == "burrow"
+    assert entry.source == "manual"
+
+
+def test_submit_answer_verdict_saves_a_key_even_when_marking_incorrect(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A parent may know the real answer and mark THIS instance wrong while
+    still teaching the correct key for future pages."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-no-key",
+        problem_id="10",
+        cause="no_key_for_page",
+        page_number=14,
+        prompt_text="bird : nest :: rabbit : ___",
+        student_answer_raw="field",
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-no-key",
+            "capture_id": "c-no-key",
+            "problem_id": "10",
+            "verdict": "incorrect",
+            "key_answer_text": "burrow",
+            "page_number": "14",
+        },
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-no-key")
+    assert graded[0].outcome == "incorrect"
+    entry = answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 14, "10")
+    assert entry is not None
+    assert entry.answer_text == "burrow"
+
+
+def test_submit_answer_verdict_without_a_key_answer_behaves_as_before(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """No key_answer_text/page_number supplied -- the plain verdict path for
+    answer_differs_from_key/needs_person/low_confidence must be unaffected."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        expected_answer="quadrilateral",
+        student_answer_raw="rhombus",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-differs",
+            "capture_id": "c-differs",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-differs")
+    assert graded[0].outcome == "correct"
+    # No key row was ever created for page 15's problem 1 by this path.
+    assert answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 15, "1") is None
+
+
+def test_submit_answer_verdict_with_a_conflicting_key_holds_back_and_does_not_judge(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-no-key",
+        problem_id="10",
+        cause="no_key_for_page",
+        page_number=14,
+        prompt_text="bird : nest :: rabbit : ___",
+        student_answer_raw="burrow",
+    )
+    # A key already exists for this exact page/problem by the time the parent
+    # submits -- genuinely rare for NO_KEY_FOR_PAGE, but must still be held
+    # back like any other conflicting write in this app, not silently lost.
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=14,
+            problem_number="10",
+            answer_text="den",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-no-key",
+            "capture_id": "c-no-key",
+            "problem_id": "10",
+            "verdict": "correct",
+            "key_answer_text": "burrow",
+            "page_number": "14",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "These don't match" in response.text
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-no-key")
+    assert graded[0].outcome == "needs_human"  # untouched -- not judged yet
+
+
+def test_evaluations_screen_offers_a_reassign_page_control(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback (2026-08-30): a capture that resolved to the wrong
+    page (a real bug found in the household's own data -- the same physical
+    page photographed twice landed on two different page numbers) needs a
+    direct way to say "this is actually page N.\""""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-1", problem_id="1", cause="no_key_for_page", page_number=19
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/reassign-page"' in response.text
+    assert "currently page 19" in response.text
+    assert 'value="c-1"' in response.text
+
+
+def test_submit_reassign_page_regrades_against_the_new_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-1",
+        problem_id="1",
+        cause="no_key_for_page",
+        page_number=19,
+        student_answer_raw="19",
+    )
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=17,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/reassign-page",
+        data={"capture_id": "c-1", "session_id": "sess-c-1", "page_number": "17"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-1")
+    assert graded[0].page_number == 17
+    assert graded[0].outcome == "correct"  # regraded from the already-stored transcription
+
+
+def test_submit_reassign_page_rejects_a_non_positive_page_number(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-1", problem_id="1", cause="no_key_for_page", page_number=19
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/reassign-page",
+        data={"capture_id": "c-1", "session_id": "sess-c-1", "page_number": "0"},
+    )
+
+    assert response.status_code == 400
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-1")
+    assert graded[0].page_number == 19  # untouched
+
+
 def test_evaluations_screen_offers_an_inline_fix_for_an_ambiguous_problem_id(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -2643,6 +3486,66 @@ def test_answer_keys_screen_lists_entries_grouped_by_page(
     assert "19" in response.text
 
 
+def test_answer_keys_screen_shows_the_key_photo_when_one_is_on_file(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Parent feedback (2026-08-30): this screen used to be text-only, with
+    no way to check the listed answers against the actual scanned page."""
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="4",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+    image_path = tmp_path / "key.jpg"
+    image_path.write_bytes(b"a key scan")
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            image_path=str(image_path),
+            confirmed_at="2026-08-22T00:00:00+00:00",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/answer-keys")
+
+    assert response.status_code == 200
+    assert 'src="/keys/s-marcus/summer_bridge/key-image/15"' in response.text
+    assert "data-lightbox" in response.text
+
+
+def test_answer_keys_screen_shows_no_photo_when_none_is_on_file(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="4",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/answer-keys")
+
+    assert "key-image" not in response.text
+
+
 def test_answer_keys_screen_with_nothing_on_file_says_so_plainly(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -2773,6 +3676,277 @@ def test_submit_answer_verdict_rejects_a_value_that_is_not_a_verdict(
     assert response.status_code == 400
     graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-differs")
     assert graded[0].outcome == "needs_human"  # untouched
+
+
+def _seed_decisive_incorrect_problem(
+    conn: sqlite3.Connection,
+    *,
+    capture_id: str = "c-incorrect",
+    problem_id: str = "1",
+    page_number: int | None = 15,
+) -> None:
+    """Gap B/K/L (docs/USER_WORKFLOWS.md): a row the grader already decided,
+    unlike _seed_pending_problem's needs_human rows -- what a dispute
+    actually contests."""
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id=capture_id,
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id=capture_id,
+            problem_id=problem_id,
+            prompt_text="12 + 7",
+            student_answer_raw="18",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id=f"sess-{capture_id}",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id=f"sess-{capture_id}",
+            capture_id=capture_id,
+            problem_id=problem_id,
+            outcome="incorrect",
+            grader_confidence=0.95,
+            expected_answer="19",
+            page_number=page_number,
+        ),
+    )
+
+
+def test_evaluations_screen_shows_open_disputes_above_pending_review(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap K (docs/USER_WORKFLOWS.md): child-escalated items are their own
+    section, prioritized above the app-requested queue -- checked by
+    position in the raw HTML, not just presence."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I carried the 1 correctly",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=21
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "Marcus disputed these" in response.text
+    assert "I carried the 1 correctly" in response.text
+    dispute_pos = response.text.index("Marcus disputed these")
+    pending_pos = response.text.index("<h2>Pending review</h2>")
+    assert dispute_pos < pending_pos
+
+
+def test_evaluations_screen_has_no_dispute_section_when_nothing_is_disputed(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert "disputed these" not in response.text
+
+
+def test_submit_dispute_resolution_upheld_leaves_the_grade_incorrect(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/resolve-dispute",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "resolution": "upheld",
+            "comment": "The key really does say 19 here.",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
+    assert graded[0].outcome == "incorrect"  # untouched
+    row = disputes.get(conn, "s-marcus", "sess-c-incorrect", "c-incorrect", "1")
+    assert row is not None
+    assert row.resolution == "upheld"
+    assert row.resolution_comment == "The key really does say 19 here."
+    assert disputes.list_open_for_source(conn, "s-marcus", "summer_bridge") == []
+
+
+def test_submit_dispute_resolution_overturned_flips_the_grade_to_correct(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/resolve-dispute",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "resolution": "overturned",
+            "comment": "You're right, good catch!",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
+    assert graded[0].outcome == "correct"
+
+
+def test_submit_dispute_resolution_rejects_a_blank_comment(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/resolve-dispute",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "resolution": "upheld",
+            "comment": "   ",
+        },
+    )
+
+    assert response.status_code == 400
+    row = disputes.get(conn, "s-marcus", "sess-c-incorrect", "c-incorrect", "1")
+    assert row is not None
+    assert row.resolved_at is None  # untouched
+
+
+def test_submit_dispute_resolution_rejects_an_invalid_resolution_value(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/resolve-dispute",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "resolution": "maybe",
+            "comment": "a comment",
+        },
+    )
+
+    assert response.status_code == 400
 
 
 def test_enrollment_detail_surfaces_stale_mapping_count_after_a_schema_change(
@@ -3087,6 +4261,401 @@ def test_confirm_screen_shows_a_discovery_panel_when_the_scan_found_markers_and_
     assert 'value="day"' in html
     assert 'name="identity_0_0"' in html
     assert 'value="Day 5"' in html
+
+
+def test_upload_merges_identity_markers_found_on_an_optional_example_page(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeKeyTranscriber,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gap I (docs/USER_WORKFLOWS.md): a parent's optional second photo of a
+    plain exercise page can surface a marker the isolated key page never
+    showed -- exactly the real RSM gap (some answer-key editions print no
+    chapter/lesson banner at all). The key page's own finding ("day") still
+    comes first; the example page's finding ("chapter") fills a real gap,
+    not a name already covered."""
+    _seed_marcus_with_source(conn)
+    transcriber.result = KeyPageResult(
+        entries=(
+            KeyPageEntry(
+                page_number=17,
+                identity_values={"day": "Day 5"},
+                problem_number="1",
+                answer_text="8 m",
+                ungradeable_reason=None,
+                confidence=0.95,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+    page_transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=200,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"chapter": ("CH.4",)}, confidence=0.9),
+        )
+    )
+    monkeypatch.setattr(keys_app, "get_page_transcriber", lambda _settings: page_transcriber)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={
+            "photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg"),
+            "example_page": ("example.jpg", A_KEY_PHOTO, "image/jpeg"),
+        },
+    )
+
+    html = _final_html(response)
+    assert 'name="schema_name_0"' in html
+    assert 'value="day"' in html
+    assert 'name="schema_name_1"' in html
+    assert 'value="chapter"' in html
+    assert 'name="identity_1_0"' in html
+    assert 'value="CH.4"' in html
+    assert len(page_transcriber.calls) == 1
+    # Both photos are real quota-spending calls.
+    assert quota.get_count(conn, date.today()) == 2
+
+
+def test_upload_does_not_call_the_page_transcriber_when_a_schema_already_exists(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeKeyTranscriber,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once a schema exists, discovery never runs at all -- an example page's
+    markers have nothing left to add, and calling the page transcriber
+    anyway would spend quota for no reason."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    transcriber.result = KeyPageResult(
+        entries=(
+            KeyPageEntry(
+                page_number=17,
+                identity_values={"day": "Day 5"},
+                problem_number="1",
+                answer_text="8 m",
+                ungradeable_reason=None,
+                confidence=0.95,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+    page_transcriber = FakeTranscriber()
+    monkeypatch.setattr(keys_app, "get_page_transcriber", lambda _settings: page_transcriber)
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={
+            "photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg"),
+            "example_page": ("example.jpg", A_KEY_PHOTO, "image/jpeg"),
+        },
+    )
+
+    assert page_transcriber.calls == []
+    assert quota.get_count(conn, date.today()) == 1
+
+
+def test_upload_screen_offers_the_example_page_field_only_before_a_schema_exists(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    before = client.get("/keys/s-marcus/summer_bridge/upload")
+    assert 'name="example_page"' in before.text
+
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    after = client.get("/keys/s-marcus/summer_bridge/upload")
+    assert 'name="example_page"' not in after.text
+
+
+# --- Gap: "waiting on a key" / "wrong key" inline fix (parent feedback, 2026-08-30) --
+
+
+def test_evaluations_screen_links_to_fix_or_add_a_key_for_an_identified_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-1", problem_id="1", cause="no_key_for_page", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert (
+        "/keys/s-marcus/summer_bridge/answers/manual-entry?page_number=15&redirect_to="
+        in response.text
+    )
+    assert "/keys/s-marcus/summer_bridge/upload?redirect_to=" in response.text
+
+
+def test_evaluations_screen_has_no_key_fix_link_without_a_resolved_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-1", problem_id="1", cause="unknown_page", page_number=None
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert "answers/manual-entry?page_number=" not in response.text
+
+
+def test_manual_answers_screen_prefills_page_number_from_the_query_string(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry"
+        "?page_number=15&redirect_to=/keys/s-marcus/summer_bridge/evaluations"
+    )
+
+    assert response.status_code == 200
+    assert 'id="page_number" value="15"' in response.text
+    assert (
+        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
+    )
+
+
+def test_submit_manual_answers_with_redirect_to_returns_there_on_a_clean_save(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback (2026-08-30): fixing a key inline from evaluations must
+    not dead-end on a bare confirmation screen."""
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "15",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "redirect_to": "/keys/s-marcus/summer_bridge/evaluations",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/evaluations"
+    assert answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 15, "1") is not None
+
+
+def test_submit_manual_answers_ignores_an_external_redirect(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "15",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "redirect_to": "//evil.example.com/",
+        },
+        follow_redirects=False,
+    )
+
+    # Falls back to the pre-existing dead end rather than an open redirect.
+    assert response.status_code == 200
+    assert "saved" in response.text.lower()
+
+
+def test_submit_manual_answers_with_a_conflict_carries_redirect_to_into_resolve(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/answers/manual-entry",
+        data={
+            "row_count": "1",
+            "page_number": "15",
+            "problem_number_0": "1",
+            "answer_text_0": "20",  # disagrees with what's on file
+            "redirect_to": "/keys/s-marcus/summer_bridge/evaluations",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "These don't match" in response.text
+    assert (
+        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
+    )
+
+
+def test_submit_resolve_with_redirect_to_returns_there(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            page_number=15,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-13T09:00:00+00:00",
+        ),
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/resolve",
+        data={
+            "row_count": "1",
+            "page_number_0": "15",
+            "problem_number_0": "1",
+            "new_answer_text_0": "20",
+            "resolution_0": "used_new",
+            "redirect_to": "/keys/s-marcus/summer_bridge/evaluations",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/evaluations"
+    entry = answer_keys.get_entry(conn, "s-marcus", "summer_bridge", 15, "1")
+    assert entry is not None
+    assert entry.answer_text == "20"
+
+
+def test_upload_screen_carries_redirect_to_into_the_form(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get(
+        "/keys/s-marcus/summer_bridge/upload?redirect_to=/keys/s-marcus/summer_bridge/evaluations"
+    )
+
+    assert response.status_code == 200
+    assert (
+        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in response.text
+    )
+
+
+def test_submit_upload_with_redirect_to_carries_it_into_the_confirm_screen(
+    client: TestClient,
+    conn: sqlite3.Connection,
+    transcriber: FakeKeyTranscriber,
+) -> None:
+    """The full scan -> confirm chain: a parent adding a key by photo from
+    evaluations.html must land back there once she saves, same as the
+    manual-entry path."""
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+    transcriber.result = KeyPageResult(
+        entries=(
+            KeyPageEntry(
+                page_number=15,
+                identity_values={"day": "Day 5"},
+                problem_number="1",
+                answer_text="19",
+                ungradeable_reason=None,
+                confidence=0.95,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        data={"redirect_to": "/keys/s-marcus/summer_bridge/evaluations"},
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+
+    html = _final_html(response)
+    assert (
+        'name="redirect_to" value="/keys/s-marcus/summer_bridge/evaluations"' in html
+    )
+
+
+def test_submit_confirm_with_redirect_to_returns_there_on_a_clean_save(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/confirm",
+        data={
+            "row_count": "1",
+            "image_path": "",
+            "page_number_0": "15",
+            "identity_day_0": "Day 5",
+            "identity_day_original_0": "Day 5",
+            "problem_number_0": "1",
+            "answer_text_0": "19",
+            "answer_text_original_0": "19",
+            "redirect_to": "/keys/s-marcus/summer_bridge/evaluations",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/evaluations"
 
 
 def test_confirm_screen_shows_a_discovery_panel_with_blank_rows_even_when_nothing_was_found(
@@ -3842,11 +5411,12 @@ def test_upload_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     assert 'id="photo-input"' in text
     assert 'id="upload-button"' in text
 
-    # The last <script> block is upload.html's own -- the page now also
-    # includes _photo_source.html's script earlier (the Take Photo/Upload a
-    # Photo chooser), so the first block is no longer the right one to check.
-    script_block = text.split("<script>")[-1].split("</script>")[0]
-    assert "fetch(" in script_block
+    # upload.html's own script is the one with the fetch() call -- neither
+    # the first (_photo_source.html's Take Photo/Upload a Photo chooser) nor
+    # the last (base.html's click-to-enlarge lightbox, appended after this
+    # page's own content) is the right block to check.
+    script_blocks = [b.split("</script>")[0] for b in text.split("<script>")[1:]]
+    script_block = next(b for b in script_blocks if "fetch(" in b)
     disable_index = script_block.index("input.disabled = true")
     fetch_index = script_block.index("fetch(")
     assert disable_index < fetch_index

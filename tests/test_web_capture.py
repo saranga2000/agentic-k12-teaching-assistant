@@ -26,6 +26,8 @@ from k12ta.store import (
     answer_keys,
     content,
     db,
+    disputes,
+    identity_corrections,
     migrate,
     page_identities,
     page_identity_resolutions,
@@ -318,6 +320,45 @@ def test_program_picker_for_unknown_student_is_404(client: TestClient) -> None:
     assert client.get("/student/does-not-exist").status_code == 404
 
 
+def _seed_student_only(conn: sqlite3.Connection, student_id: str = "s-marcus") -> None:
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id=student_id,
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+
+
+def test_program_picker_with_zero_sources_offers_to_notify_a_grown_up(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap A (docs/USER_WORKFLOWS.md): the empty state now has a way to reach
+    the parent app, in-app only. Re-requesting doesn't error, and the tap
+    itself is idempotent to render (see submit_program_request)."""
+    _seed_student_only(conn)
+
+    before = client.get("/student/s-marcus")
+    assert before.status_code == 200
+    assert 'action="/student/s-marcus/request-program"' in before.text
+    assert "Your grown-up has been asked." not in before.text
+
+    submitted = client.post("/student/s-marcus/request-program", follow_redirects=False)
+    assert submitted.status_code == 303
+    assert submitted.headers["location"] == "/student/s-marcus"
+
+    after = client.get("/student/s-marcus")
+    assert "Your grown-up has been asked." in after.text
+    assert 'action="/student/s-marcus/request-program"' not in after.text
+
+
+def test_request_program_for_unknown_student_is_404(client: TestClient) -> None:
+    assert client.post("/student/does-not-exist/request-program").status_code == 404
+
+
 def test_source_home_offers_add_a_page_and_my_pages(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -328,6 +369,34 @@ def test_source_home_offers_add_a_page_and_my_pages(
     assert response.status_code == 200
     assert 'href="/capture/s-marcus?source_id=summer_bridge"' in response.text
     assert 'href="/student/s-marcus/summer_bridge/pages"' in response.text
+
+
+def test_source_home_shows_and_dismisses_an_identity_correction_notice(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap O (docs/USER_WORKFLOWS.md): the one place a child sees "a grown-up
+    changed how pages are identified for this program" -- set by a parent's
+    correction, cleared by her own "Got it" tap."""
+    _seed_one_source(conn)
+
+    before = client.get("/student/s-marcus/summer_bridge")
+    assert "changed how pages are identified" not in before.text
+
+    identity_corrections.record_correction(
+        conn, "s-marcus", "summer_bridge", "2026-08-30T10:00:00+00:00"
+    )
+    with_notice = client.get("/student/s-marcus/summer_bridge")
+    assert "changed how pages are identified" in with_notice.text
+    assert 'action="/student/s-marcus/summer_bridge/dismiss-correction"' in with_notice.text
+
+    dismissed = client.post(
+        "/student/s-marcus/summer_bridge/dismiss-correction", follow_redirects=False
+    )
+    assert dismissed.status_code == 303
+    assert identity_corrections.get_correction(conn, "s-marcus", "summer_bridge") is None
+
+    after = client.get("/student/s-marcus/summer_bridge")
+    assert "changed how pages are identified" not in after.text
 
 
 def test_source_home_shows_how_many_are_waiting_on_a_grownup(
@@ -730,12 +799,12 @@ def test_capture_screen_has_immediate_feedback_and_a_disable_on_submit_wire_up(
     assert 'id="take-photo-button"' in text
     assert 'id="photo-input"' in text
 
-    # The last <script> block is _capture_checklist.html's -- capture.html now
-    # also includes _photo_source.html's own script earlier on the page (the
-    # Take Photo/Upload a Photo chooser), so this can no longer assume the
-    # checklist's script is the first one.
-    script_block = text.split("<script>")[-1].split("</script>")[0]
-    assert "fetch(" in script_block
+    # _capture_checklist.html's script is the one with the fetch() call --
+    # neither the first (_photo_source.html's Take Photo/Upload a Photo
+    # chooser) nor the last (base.html's click-to-enlarge lightbox, appended
+    # after this page's own content) is the right block to check.
+    script_blocks = [b.split("</script>")[0] for b in text.split("<script>")[1:]]
+    script_block = next(b for b in script_blocks if "fetch(" in b)
     assert ".requestSubmit(" not in script_block
     disable_index = script_block.index("input.disabled = true")
     fetch_index = script_block.index("fetch(")
@@ -1011,8 +1080,8 @@ def test_post_capture_when_transcription_fails_offers_retake_and_keeps_the_photo
     # Same duplicate-request risk as the initial capture: a slow retake with no
     # feedback invites a second tap. Same fix required here.
     assert 'id="checklist" class="checklist" hidden' in final["html"]
-    script_block = final["html"].split("<script>")[-1].split("</script>")[0]
-    assert "fetch(" in script_block
+    script_blocks = [b.split("</script>")[0] for b in final["html"].split("<script>")[1:]]
+    script_block = next(b for b in script_blocks if "fetch(" in b)
     assert ".requestSubmit(" not in script_block
     assert _step_statuses(response, "read") == ["started", "failed"]
 
@@ -1456,6 +1525,216 @@ def test_session_results_offers_a_free_text_ask_for_unknown_page(
 
     assert response.status_code == 200
     assert "preview-page-entry" in response.text
+
+
+def _seed_no_schema_session_with_a_guess(
+    conn: sqlite3.Connection, *, source_id: str = "rsm"
+) -> None:
+    """Gap O (docs/USER_WORKFLOWS.md): a brand-new program's first capture --
+    UNKNOWN_PAGE, but this photo's own extraction found something, unlike
+    the bare test_session_results_offers_a_free_text_ask_for_unknown_page
+    case above."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id=source_id,
+            label="RSM",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=True,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id=source_id,
+            created_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-bootstrap",
+            assignment_id="a-1",
+            captured_at="2026-08-30T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-bootstrap",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.97,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-bootstrap",
+            assignment_id="a-1",
+            started_at="2026-08-30T08:00:00+00:00",
+            ended_at="2026-08-30T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-bootstrap",
+            capture_id="c-bootstrap",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.97,
+            needs_human_cause="unknown_page",
+        ),
+    )
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id=source_id,
+            capture_id="c-bootstrap",
+            outcome="no_schema",
+            resolved_page_number=None,
+            created_at="2026-08-30T08:00:00+00:00",
+            seen_values_json=json.dumps({"chapter": "CH.4", "printed_page": "13"}),
+        ),
+    )
+
+
+def test_session_results_offers_a_schema_guess_ask_for_a_brand_new_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_no_schema_session_with_a_guess(conn)
+
+    response = client.get("/session/s-marcus/sess-bootstrap")
+
+    assert response.status_code == 200
+    assert "brand-new program" in response.text
+    assert 'action="/session/s-marcus/sess-bootstrap/bootstrap-schema"' in response.text
+    assert 'value="chapter"' in response.text
+    assert 'value="CH.4"' in response.text
+    assert 'value="printed_page"' in response.text
+    assert 'value="13"' in response.text
+    assert "preview-page-entry" not in response.text  # not the bare PageNumberAsk
+
+
+def test_submit_schema_guess_confirmed_unchanged_saves_an_unconfirmed_schema_and_grades(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_no_schema_session_with_a_guess(conn)
+
+    response = client.post(
+        "/session/s-marcus/sess-bootstrap/bootstrap-schema",
+        data={
+            "capture_id": "c-bootstrap",
+            "component_count": "2",
+            "component_include_0": "1",
+            "component_name_0": "chapter",
+            "component_label_0": "chapter",
+            "component_value_0": "CH.4",
+            "component_include_1": "1",
+            "component_name_1": "printed_page",
+            "component_label_1": "printed_page",
+            "component_value_1": "13",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/session/s-marcus/sess-bootstrap"
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "rsm")
+        == "unconfirmed"
+    )
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "rsm")
+    assert [c.component_name for c in schema] == ["chapter", "printed_page"]
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-bootstrap")
+    # Regraded, not left on the original unknown_page refusal -- identity
+    # resolved to a real page_number, honestly still needs a key (none exists
+    # for this brand-new source yet), never a guessed grade.
+    assert graded[0].page_number == 1
+    assert graded[0].needs_human_cause == "no_key_for_page"
+    mapping = page_identities.get_page_number(
+        conn, "s-marcus", "rsm", build_composite_key(["CH.4", "13"]), schema_version=1
+    )
+    assert mapping == 1
+
+    after = client.get("/session/s-marcus/sess-bootstrap")
+    assert "First guess" in after.text  # the provisional notice
+
+
+def test_submit_schema_guess_with_a_dropped_component_omits_it(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_no_schema_session_with_a_guess(conn)
+
+    client.post(
+        "/session/s-marcus/sess-bootstrap/bootstrap-schema",
+        data={
+            "capture_id": "c-bootstrap",
+            "component_count": "2",
+            "component_include_0": "1",
+            "component_name_0": "chapter",
+            "component_label_0": "chapter",
+            "component_value_0": "CH.4",
+            "component_include_1": "0",  # unchecked: printed_page was wrong, drop it
+            "component_name_1": "printed_page",
+            "component_label_1": "printed_page",
+            "component_value_1": "13",
+        },
+    )
+
+    schema = page_identity_schemas.get_current_schema(conn, "s-marcus", "rsm")
+    assert [c.component_name for c in schema] == ["chapter"]
+
+
+def test_submit_schema_guess_with_nothing_kept_saves_no_schema(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_no_schema_session_with_a_guess(conn)
+
+    client.post(
+        "/session/s-marcus/sess-bootstrap/bootstrap-schema",
+        data={
+            "capture_id": "c-bootstrap",
+            "component_count": "2",
+            "component_include_0": "0",
+            "component_name_0": "chapter",
+            "component_label_0": "chapter",
+            "component_value_0": "CH.4",
+            "component_include_1": "0",
+            "component_name_1": "printed_page",
+            "component_label_1": "printed_page",
+            "component_value_1": "13",
+        },
+    )
+
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "rsm") == 0
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-bootstrap")
+    assert graded[0].outcome == "needs_human"  # untouched -- the ask reappears next visit
 
 
 def test_capture_image_serves_the_real_file(
@@ -1925,6 +2204,156 @@ def test_results_page_shows_the_answer_in_full_mode(
     assert "19_SECRET" in response.text
 
 
+def test_session_result_offers_a_dispute_button_on_an_incorrect_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap B (docs/USER_WORKFLOWS.md): unlike "Remind a grown-up" (which
+    never appears on an already-scored row), a dispute button must be
+    reachable on exactly the incorrect rows a child might contest."""
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert 'action="/student/s-marcus/dispute"' in response.text
+    assert 'name="reason"' in response.text
+
+
+def test_submit_dispute_files_it_and_redirects_back(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.post(
+        "/student/s-marcus/dispute",
+        data={
+            "session_id": "sess-synthetic",
+            "capture_id": "c-synthetic",
+            "problem_id": "1",
+            "reason": "I carried the 1 correctly",
+            "redirect_to": "/session/s-marcus/sess-synthetic",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/session/s-marcus/sess-synthetic"
+    row = disputes.get(conn, "s-marcus", "sess-synthetic", "c-synthetic", "1")
+    assert row is not None
+    assert row.reason == "I carried the 1 correctly"
+
+    after = client.get("/session/s-marcus/sess-synthetic")
+    assert "Sent to your grown-up." in after.text
+    assert 'action="/student/s-marcus/dispute"' not in after.text
+
+
+def test_submit_dispute_rejects_a_blank_reason(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.post(
+        "/student/s-marcus/dispute",
+        data={
+            "session_id": "sess-synthetic",
+            "capture_id": "c-synthetic",
+            "problem_id": "1",
+            "reason": "   ",
+            "redirect_to": "/session/s-marcus/sess-synthetic",
+        },
+    )
+
+    assert response.status_code == 400
+    assert disputes.get(conn, "s-marcus", "sess-synthetic", "c-synthetic", "1") is None
+
+
+def test_submit_dispute_rejects_an_external_redirect(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """redirect_to is client-supplied -- must never become an open redirect."""
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.post(
+        "/student/s-marcus/dispute",
+        data={
+            "session_id": "sess-synthetic",
+            "capture_id": "c-synthetic",
+            "problem_id": "1",
+            "reason": "a real reason",
+            "redirect_to": "//evil.example.com/",
+        },
+    )
+
+    assert response.status_code == 400
+    assert disputes.get(conn, "s-marcus", "sess-synthetic", "c-synthetic", "1") is None
+
+
+def test_a_resolved_dispute_shows_the_parents_comment_and_no_longer_offers_a_button(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-synthetic",
+        capture_id="c-synthetic",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+    disputes.resolve(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-synthetic",
+        capture_id="c-synthetic",
+        problem_id="1",
+        resolution="overturned",
+        resolution_comment="You're right, good catch!",
+        resolved_at="2026-08-13T10:00:00+00:00",
+    )
+    sessions.overturn_dispute_to_correct(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-synthetic",
+        capture_id="c-synthetic",
+        problem_id="1",
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert "good catch!" in response.text
+    assert "A grown-up looked at this" in response.text
+    assert 'action="/student/s-marcus/dispute"' not in response.text
+    assert "Correct!" in response.text  # the overturn actually changed the grade
+
+
+def test_results_page_links_back_to_add_another_page(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap C (docs/USER_WORKFLOWS.md): the results screen was a dead end --
+    it must now hand the student back to the capture flow for the same
+    source, not just leave her stranded."""
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert 'href="/capture/s-marcus?source_id=summer_bridge"' in response.text
+
+
 def _seed_whole_page_recapture(conn: sqlite3.Connection, *, second_guess: str) -> None:
     """The point-3 scenario: two problems photographed together, only one
     revised, the whole page re-photographed as a second capture. Both problems'
@@ -2053,6 +2482,50 @@ def test_a_second_new_wrong_guess_is_also_suppressed(
     # Not the ordinary first-attempt incorrect message either -- suppression, not
     # a second helping of the same generic wording.
     assert response.text.count("This one needs another look.") == 1
+
+
+def test_my_pages_groups_a_recaptured_page_into_one_item_with_an_attempt_count(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Gap M (docs/USER_WORKFLOWS.md): retaking the whole page without
+    changing either answer must not render as two separate-looking graded
+    rows per question -- one item per (page, problem), tagged with how many
+    times it was really attempted, showing the most recent capture's photo."""
+    _seed_whole_page_recapture(conn, second_guess="18")  # unchanged on both problems
+
+    response = client.get("/student/s-marcus/rsm/pages")
+
+    assert response.status_code == 200
+    assert response.text.count("Page 5") == 2  # one per problem, not per capture
+    assert response.text.count("Tried 2 times") == 2
+    assert "/captures/s-marcus/c-second/image" in response.text
+    assert "/captures/s-marcus/c-first/image" not in response.text
+
+
+def test_my_pages_does_not_tag_a_genuinely_single_attempt(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The other half of Gap M's guarantee: a page graded from exactly one
+    capture must render with no attempt-count note at all, not "Tried 1 times"."""
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+    sessions.update_graded_problem_after_identity_resolution(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-synthetic",
+        capture_id="c-synthetic",
+        problem_id="1",
+        outcome="incorrect",
+        expected_answer="19",
+        page_number=5,
+        needs_human_cause=None,
+    )
+
+    response = client.get("/student/s-marcus/summer_bridge/pages")
+
+    assert response.status_code == 200
+    assert "Tried" not in response.text
 
 
 @pytest.mark.parametrize(

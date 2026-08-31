@@ -1,0 +1,20 @@
+<!-- Gap B/L (docs/USER_WORKFLOWS.md): a child's contest of an "incorrect"
+     verdict, and the parent's eventual answer to it. Shared by session_result.html
+     and my_pages.html so a dispute looks and behaves identically wherever a
+     student sees it. Params via `with`: session_id, capture_id, problem_id,
+     dispute (StudentResultView.dispute -- None, an open DisputeRow, or a
+     resolved one), redirect_to (where filing one should return the student). -->
+{% if dispute is none %}
+<form method="post" action="/student/{{ student.student_id }}/dispute" class="dispute-form">
+  <input type="hidden" name="session_id" value="{{ session_id }}">
+  <input type="hidden" name="capture_id" value="{{ capture_id }}">
+  <input type="hidden" name="problem_id" value="{{ problem_id }}">
+  <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+  <input type="text" name="reason" class="dispute-reason" placeholder="Why do you think this is right?" required maxlength="200">
+  <button type="submit" class="dispute-button">I think this is right</button>
+</form>
+{% elif dispute.resolved_at is none %}
+<p class="dispute-status">Sent to your grown-up.</p>
+{% else %}
+<p class="dispute-status dispute-resolved">A grown-up looked at this: {{ dispute.resolution_comment }}</p>
+{% endif %}

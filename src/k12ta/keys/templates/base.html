@@ -139,9 +139,47 @@
   .summary-bar strong { font-size: 1.15rem; }
   .summary-bar a { color: var(--text); text-decoration: none; }
   .summary-bar a:hover { text-decoration: underline; }
+  /* Click-to-enlarge (parent feedback, 2026-08-30): every photo a parent has
+     to actually read -- a capture, a key scan -- is shown small so several
+     fit on screen at once. Any <img data-lightbox> opens here at its real
+     stored resolution (the image routes never resize, see k12ta.keys.app.
+     pending_capture_image/key_page_image), capped only by the viewport, never
+     upscaled past its native size. */
+  img[data-lightbox] { cursor: zoom-in; }
+  .lightbox-overlay {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); z-index: 500;
+    display: flex; align-items: center; justify-content: center; cursor: zoom-out;
+  }
+  .lightbox-overlay img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+  .lightbox-close {
+    position: absolute; top: 1rem; right: 1.2rem; font-size: 2rem; line-height: 1;
+    color: var(--text); background: none; border: none; cursor: pointer;
+  }
 </style>
 </head>
 <body>
 {% block content %}{% endblock %}
+<div id="lightbox-overlay" class="lightbox-overlay" hidden>
+  <button type="button" class="lightbox-close" aria-label="Close">&times;</button>
+  <img id="lightbox-image" alt="">
+</div>
+<script>
+  (function () {
+    var overlay = document.getElementById("lightbox-overlay");
+    var image = document.getElementById("lightbox-image");
+    document.addEventListener("click", function (event) {
+      var target = event.target.closest("img[data-lightbox]");
+      if (target) {
+        image.src = target.src;
+        overlay.hidden = false;
+        return;
+      }
+      if (!overlay.hidden) overlay.hidden = true;
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") overlay.hidden = true;
+    });
+  })();
+</script>
 </body>
 </html>

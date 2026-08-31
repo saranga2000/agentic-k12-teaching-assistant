@@ -13,15 +13,18 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable, Sequence
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
+from pathlib import Path
 from uuid import uuid4
 
 from k12ta.config import Settings
 from k12ta.ingest.capture import normalize_orientation
 from k12ta.store import quota
+from k12ta.transcribe.base import Transcriber
 from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber
 
 logger = logging.getLogger(__name__)
@@ -145,3 +148,63 @@ def transcribe_key_page(
         return KeyIngestionOutcome.transcribe_failed(result.failure)
 
     return KeyIngestionOutcome.transcribed(result.entries, normalized)
+
+
+def discover_identity_from_example_page(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    get_transcriber: Callable[[], Transcriber],
+    image_bytes: bytes,
+) -> Mapping[str, str]:
+    """Gap I (docs/USER_WORKFLOWS.md): a parent's optional second photo
+    alongside a key scan -- an ordinary exercise page, no answers needed --
+    for identity markers that show there but not on the isolated key page. A
+    real gap the RSM material demonstrated: some answer-key editions print no
+    chapter/lesson banner at all, while the matching exercise page does.
+
+    Reuses the same student-side `Transcriber` discovery mode
+    `k12ta.pipeline.process.process_capture` already relies on
+    (`identity_schema=()` means "report whatever markers are there"), never a
+    second, easier-to-drift-from extraction path. Quota-gated exactly like
+    the key page's own call, in the same order (quota check, then normalize,
+    then record, then transcribe) -- this is a second real request, not a
+    free extra.
+
+    Best-effort only: any failure (quota exhausted, an unreadable photo, a
+    rate limit, a transcribe error) returns an empty mapping rather than
+    raising -- this rides along with a key upload that must still succeed or
+    fail entirely on its own terms, regardless of what this bonus call finds.
+    The image is never persisted: unlike a key scan or a student capture,
+    nothing downstream ever needs to look at it again once this call returns.
+    """
+    today = date.today()
+    if quota.get_count(conn, today) >= settings.daily_request_limit:
+        logger.info("example-page discovery skipped: daily quota exhausted")
+        return {}
+
+    try:
+        normalized = normalize_orientation(image_bytes)
+    except Exception as exc:
+        logger.info("example-page discovery normalize failed: %s: %s", type(exc).__name__, exc)
+        return {}
+
+    quota.record_request(conn, today)
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:
+        handle.write(normalized)
+        tmp_path = Path(handle.name)
+    try:
+        result = get_transcriber().transcribe(str(tmp_path))
+    except Exception as exc:
+        logger.info("example-page discovery transcribe failed: %s: %s", type(exc).__name__, exc)
+        return {}
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    if result.failure is not None:
+        logger.info("example-page discovery transcribe outcome=failed reason=%s", result.failure)
+        return {}
+
+    return {
+        name: values[0] for name, values in result.page_identity.candidates.items() if values
+    }

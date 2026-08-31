@@ -2,11 +2,12 @@
 {% block title %}Confirm — {{ source.label }}{% endblock %}
 {% block content %}
 <h1>Confirm — {{ source.label }} — {{ student.display_name }}</h1>
-<img class="key-photo" src="{{ photo_data_uri }}" alt="Scanned key page">
+<img class="key-photo" src="{{ photo_data_uri }}" alt="Scanned key page" data-lightbox>
 
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/confirm">
   <input type="hidden" name="row_count" value="{{ entries|length }}">
   <input type="hidden" name="image_path" value="{{ image_path }}">
+  {% if redirect_to %}<input type="hidden" name="redirect_to" value="{{ redirect_to }}">{% endif %}
 
   {% if not schema %}
   <div class="identity-schema-editor">

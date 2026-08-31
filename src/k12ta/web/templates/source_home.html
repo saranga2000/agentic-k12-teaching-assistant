@@ -3,6 +3,14 @@
 {% block content %}
 <div class="screen">
   <div class="assignment-chip">{{ source.label }}</div>
+  {% if identity_correction_at %}
+  <div class="message correction-notice">
+    <p>A grown-up changed how pages are identified for this program. Some of your earlier results may have changed too &mdash; check My pages.</p>
+    <form method="post" action="/student/{{ student.student_id }}/{{ source.source_id }}/dismiss-correction">
+      <button type="submit">Got it</button>
+    </form>
+  </div>
+  {% endif %}
   <a class="big-button" href="/capture/{{ student.student_id }}?source_id={{ source.source_id }}">Add a page</a>
   <a class="big-button secondary" href="/student/{{ student.student_id }}/{{ source.source_id }}/pages">
     My pages
@@ -15,5 +23,7 @@
     background: var(--surface); color: var(--text);
   }
   .pending-badge { display: block; font-size: 0.95rem; font-weight: 500; margin-top: 0.4rem; }
+  .correction-notice { max-width: 420px; text-align: center; margin-bottom: 1rem; }
+  .correction-notice p { margin: 0 0 0.6rem; }
 </style>
 {% endblock %}

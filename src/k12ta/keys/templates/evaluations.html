@@ -7,6 +7,33 @@
 <h2>Recent sessions</h2>
 <p class="message">Session history is not shown here yet.</p>
 
+{% if open_disputes %}
+<h2 class="dispute-queue-heading">{{ student.display_name }} disputed these</h2>
+<p class="message attention">{{ open_disputes|length }} {{ "item" if open_disputes|length == 1 else "items" }}
+  {{ student.display_name }} thinks {{ "is" if open_disputes|length == 1 else "are" }} graded wrong &mdash;
+  answer before anything else below.</p>
+<ul class="pending-list">
+  {% for item in open_disputes %}
+  <li>
+    {% if item.page_number %}<span class="cause-label">Page {{ item.page_number }}</span>{% endif %}
+    <span class="question-number">Q{{ item.problem_id }}</span>
+    &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote
+    &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;
+    {% if item.expected_answer %}&mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}
+    <p class="dispute-reason-quote">&ldquo;{{ item.reason }}&rdquo; &mdash; {{ student.display_name }}</p>
+    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/resolve-dispute" class="dispute-resolution-form">
+      <input type="hidden" name="session_id" value="{{ item.session_id }}">
+      <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
+      <input type="hidden" name="problem_id" value="{{ item.problem_id }}">
+      <input type="text" name="comment" placeholder="Explain your decision (required)" required>
+      <button type="submit" name="resolution" value="overturned">{{ student.display_name }} was right</button>
+      <button type="submit" name="resolution" value="upheld">Incorrect stands</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 <h2>Pending review</h2>
 {% if now_gradable_count > 0 %}
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/regrade-pending">
@@ -55,11 +82,32 @@
     {% endif %}
   </div>
   <div class="capture-group-images">
-    <img class="capture-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ group.capture_id }}/image" alt="{{ student.display_name }}'s photo">
+    <img class="capture-photo" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ group.capture_id }}/image" alt="{{ student.display_name }}'s photo" data-lightbox>
     {% if group.has_key_image %}
-    <img class="capture-photo key-photo-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/key-image/{{ group.page_number }}" alt="The answer key for this page">
+    <img class="capture-photo key-photo-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/key-image/{{ group.page_number }}" alt="The answer key for this page" data-lightbox>
     {% endif %}
   </div>
+  {% if group.page_number %}
+  {% set here = "/keys/" ~ student.student_id ~ "/" ~ source.source_id ~ "/evaluations" %}
+  <p class="key-fix-links">
+    <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry?page_number={{ group.page_number }}&redirect_to={{ here | urlencode }}">Add or fix this page's answer key by hand</a>
+    &middot;
+    <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/upload?redirect_to={{ here | urlencode }}">Scan a key page</a>
+  </p>
+  <details class="reassign-page">
+    <summary>Wrong page? (currently page {{ group.page_number }})</summary>
+    <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/reassign-page" class="page-entry-ask">
+      <input type="hidden" name="capture_id" value="{{ group.capture_id }}">
+      <input type="hidden" name="session_id" value="{{ group.session_id }}">
+      <input type="number" name="page_number" min="1" placeholder="real page number" required>
+      <button type="submit">Move this capture</button>
+    </form>
+    <p class="message">Re-decides every answer on this photo against the page you pick, using what was already
+      read &mdash; no new photo needed. This only fixes this one capture; if the same page keeps getting
+      misread, teach its markers properly on the
+      <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/identity/manual-entry">page mapping screen</a>.</p>
+  </details>
+  {% endif %}
   <ul class="pending-list">
     {% for item in group.items %}
     <li>
@@ -79,14 +127,29 @@
       <span class="question-number">Q{{ item.row.problem_id }}</span>
       {% endif %}
       &ldquo;{{ item.row.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw | humanize_math }}&rdquo;
-      {% if item.row.needs_human_cause in ("answer_differs_from_key", "needs_person") %}
+      {% if item.row.needs_human_cause in ("answer_differs_from_key", "needs_person", "low_confidence") %}
       {% if item.row.expected_answer %}&mdash; key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;{% endif %}
-      <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict">
+      {% if item.row.needs_human_cause == "low_confidence" %}
+      <p class="message">The model wasn't confident reading this one &mdash; confirm what's below is right, fix it, or clear it and type what {{ student.display_name }} actually wrote.</p>
+      {% endif %}
+      <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict" class="verdict-form">
         <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
         <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
         <input type="hidden" name="problem_id" value="{{ item.row.problem_id }}">
+        <input type="text" name="student_answer_raw" value="{{ item.row.student_answer_raw }}" aria-label="What {{ student.display_name }} wrote">
         <button type="submit" name="verdict" value="correct">Mark correct</button>
         <button type="submit" name="verdict" value="incorrect">Mark incorrect</button>
+      </form>
+      {% elif item.row.needs_human_cause == "no_key_for_page" and group.page_number %}
+      <p class="message">No answer key exists for this question yet &mdash; confirm, fix, or type the real answer below to save it as the key and judge this one in the same step.</p>
+      <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict" class="verdict-form">
+        <input type="hidden" name="session_id" value="{{ item.row.session_id }}">
+        <input type="hidden" name="capture_id" value="{{ item.row.capture_id }}">
+        <input type="hidden" name="problem_id" value="{{ item.row.problem_id }}">
+        <input type="hidden" name="page_number" value="{{ group.page_number }}">
+        <input type="text" name="key_answer_text" value="{{ item.row.student_answer_raw }}" aria-label="Answer key for this question">
+        <button type="submit" name="verdict" value="correct">Mark correct &amp; save as key</button>
+        <button type="submit" name="verdict" value="incorrect">Mark incorrect &amp; save as key</button>
       </form>
       {% endif %}
     </li>
@@ -135,4 +198,23 @@
 <p class="message">No repeated attempts yet.</p>
 {% endif %}
 {% endif %}
+<style>
+  .key-fix-links { margin: 0.3rem 0 0.8rem; font-size: 0.9rem; }
+  .key-fix-links a { color: var(--text-dim); }
+  .reassign-page { margin: 0 0 0.8rem; font-size: 0.9rem; color: var(--text-dim); }
+  .reassign-page summary { cursor: pointer; }
+  .reassign-page form { margin: 0.5rem 0; }
+  .reassign-page input[type="number"] { width: 8rem; }
+  .dispute-reason-quote { margin: 0.3rem 0; font-style: italic; color: var(--text-dim); }
+  .verdict-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.4rem; }
+  .verdict-form input[type="text"] {
+    flex: 1; min-width: 10rem; padding: 0.35rem 0.6rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .dispute-resolution-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.3rem; }
+  .dispute-resolution-form input[type="text"] {
+    flex: 1; min-width: 14rem; padding: 0.4rem 0.6rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+</style>
 {% endblock %}

@@ -43,6 +43,9 @@ _EXPECTED_TABLES = {
     "capture_duplicates",
     "policy_overrides",
     "policy_override_audit_log",
+    "program_requests",
+    "disputes",
+    "identity_corrections",
 }
 
 

@@ -78,6 +78,28 @@ def get_seen_values_for_capture(
     return None if row is None else row[0]
 
 
+def get_outcome_for_capture(
+    conn: sqlite3.Connection, student_id: str, capture_id: str
+) -> str | None:
+    """This capture's resolution outcome (one of PageIdentityOutcome's
+    values), or None if there isn't a resolution row at all. Gap O
+    (docs/USER_WORKFLOWS.md): distinguishes a genuinely bare UNKNOWN_PAGE
+    ask (NO_MARKERS, BELOW_FLOOR, NO_MAPPING -- a real schema exists, this
+    photo just didn't resolve against it) from the one case eligible for a
+    bootstrap-schema guess (NO_SCHEMA -- nothing to resolve against at all
+    yet). Only NO_SCHEMA rows are ever eligible; see k12ta.web.app.
+    _resolve_pending_identities."""
+    cur = conn.execute(
+        """
+        SELECT outcome FROM page_identity_resolutions
+        WHERE student_id = ? AND capture_id = ?
+        """,
+        (student_id, capture_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else str(row[0])
+
+
 def get_schema_version_for_capture(
     conn: sqlite3.Connection, student_id: str, capture_id: str
 ) -> int | None:

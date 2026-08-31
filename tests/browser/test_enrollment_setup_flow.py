@@ -1,7 +1,9 @@
 """M3.1: the content source ("enrollment") setup flow. Drives the real form --
-picker -> "+ Add an enrollment" -> fill in every field -> submit -> lands on the
-real enrollment detail page for the source it just created, queried directly off
-the same SQLite file the server wrote to.
+picker -> "+ Add an enrollment" -> fill in every field -> submit -> lands on
+that source's page-identity screen (Gap H, docs/USER_WORKFLOWS.md: enroll and
+describe structure as one continuous flow, not a separately-linked, easily-
+skipped step), for the source it just created, queried directly off the same
+SQLite file the server wrote to.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ def test_add_enrollment_end_to_end_creates_a_real_content_source(
     page.fill("#typical_session_minutes", "45")
     page.click('button:has-text("Add enrollment")')
 
-    expect(page).to_have_url(f"{keys_server.base_url}/keys/{_STUDENT_ID}/rsm")
+    expect(page).to_have_url(f"{keys_server.base_url}/keys/{_STUDENT_ID}/rsm/identity-schema")
 
     row = content.get_content_source(keys_server.connection(), _STUDENT_ID, "rsm")
     assert row is not None

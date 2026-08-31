@@ -25,6 +25,7 @@ from k12ta.domain.attempts import PastAttempt, already_disclosed
 from k12ta.domain.policy import FeedbackRules
 from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.pipeline.process import AMBIGUOUS_PROBLEM_ID_PREFIX
+from k12ta.store.disputes import DisputeRow
 from k12ta.store.sessions import GradedProblemRow
 
 # One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
@@ -259,6 +260,14 @@ class StudentResultView:
     page alongside the verdict, the same reasoning `k12ta.web.app.capture_image`
     already applies (scoped by `student_id`, nothing to leak by exposing the id
     itself)."""
+    dispute: DisputeRow | None = None
+    """Gap B/L (docs/USER_WORKFLOWS.md): the child's own dispute of this row,
+    if any -- None on every row that was never disputed (the overwhelming
+    majority). Safe to expose in full: the child's own reason, and, once
+    resolved, the parent's own comment addressed to her. A caller looks this
+    up (k12ta.store.disputes.get) and passes it through; this function never
+    reaches into that table itself, same "caller supplies context, this
+    function only interprets it" split as `prior_attempts`."""
 
 
 def render_student_result(
@@ -268,6 +277,7 @@ def render_student_result(
     *,
     rules: FeedbackRules,
     prior_attempts: Sequence[PastAttempt],
+    dispute: DisputeRow | None = None,
 ) -> StudentResultView:
     """Turn one graded problem into the only thing a student sees for it.
     `rules` and `prior_attempts` are both required and keyword-only -- there is
@@ -316,6 +326,7 @@ def render_student_result(
         glyph=_BUCKET_GLYPH[bucket],
         message=message,
         capture_id=row.capture_id,
+        dispute=dispute,
     )
 
 

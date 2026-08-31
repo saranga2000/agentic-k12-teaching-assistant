@@ -126,6 +126,32 @@ def insert_problem(conn: sqlite3.Connection, row: ProblemRow) -> None:
     conn.commit()
 
 
+def update_student_answer_raw(
+    conn: sqlite3.Connection,
+    student_id: str,
+    capture_id: str,
+    problem_id: str,
+    student_answer_raw: str,
+) -> None:
+    """A parent's correction of a misread transcription -- distinct from
+    k12ta.store.sessions.apply_human_verdict, which only ever changes the
+    *verdict*, never what the model transcribed. Parent feedback (2026-08-30):
+    a low-confidence read is shown alongside its raw transcription rather
+    than a blank, and a parent who can see the physical page needs a way to
+    fix a misread character before judging it, not just accept or reject it
+    as transcribed. Trusted the same way a parent's own typed answer-key
+    value already is (k12ta.store.answer_keys.AnswerKeyEntryRow.source) --
+    a human reading the real page corrected the model's guess."""
+    conn.execute(
+        """
+        UPDATE problems SET student_answer_raw = ?
+        WHERE student_id = ? AND capture_id = ? AND problem_id = ?
+        """,
+        (student_answer_raw, student_id, capture_id, problem_id),
+    )
+    conn.commit()
+
+
 def list_problems_for_capture(
     conn: sqlite3.Connection, student_id: str, capture_id: str
 ) -> list[ProblemRow]:

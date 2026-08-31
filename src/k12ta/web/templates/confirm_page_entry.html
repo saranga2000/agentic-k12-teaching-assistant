@@ -3,7 +3,7 @@
 {% block content %}
 <div class="screen confirm-page-entry">
   <p class="message">Is this page {{ page_number }}?</p>
-  <img class="entry-photo" src="/captures/{{ student.student_id }}/{{ capture_id }}/image" alt="Your photo">
+  <img class="entry-photo" src="/captures/{{ student.student_id }}/{{ capture_id }}/image" alt="Your photo" data-lightbox>
   {% if preview %}
   <div class="entry-preview">
     <p class="message">This is what I'll grade your answers against:</p>

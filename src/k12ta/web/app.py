@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import re
 import sqlite3
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -47,11 +48,14 @@ from k12ta.store import (
     captures,
     content,
     db,
+    disputes,
+    identity_corrections,
     migrate,
     page_identities,
     page_identity_resolutions,
     page_identity_schemas,
     policy_overrides,
+    program_requests,
     sessions,
     students,
 )
@@ -173,8 +177,31 @@ def program_picker(
     return templates.TemplateResponse(
         request,
         "program_picker.html",
-        {"student": student, "sources": sources, "no_programs_message": NO_PROGRAMS_MESSAGE},
+        {
+            "student": student,
+            "sources": sources,
+            "no_programs_message": NO_PROGRAMS_MESSAGE,
+            "program_requested_at": (
+                program_requests.get_requested_at(conn, student_id) if not sources else None
+            ),
+        },
     )
+
+
+@app.post("/student/{student_id}/request-program")
+def submit_program_request(
+    student_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Gap A (docs/USER_WORKFLOWS.md): a child's own "ask a grown-up to add a
+    program" tap from the zero-sources empty state. In-app only, same honest
+    limitation as submit_reminder -- no email/SMS infra exists to page anyone,
+    this only sets a flag k12ta.keys' home() can show as a badge."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    program_requests.request_program(conn, student_id, datetime.now(UTC).isoformat())
+    return RedirectResponse(f"/student/{student_id}", status_code=303)
 
 
 @app.get("/student/{student_id}/{source_id}", response_class=HTMLResponse)
@@ -199,8 +226,34 @@ def source_home(
     return templates.TemplateResponse(
         request,
         "source_home.html",
-        {"student": student, "source": source, "pending_count": pending_count},
+        {
+            "student": student,
+            "source": source,
+            "pending_count": pending_count,
+            # Gap O (docs/USER_WORKFLOWS.md): the one place a child sees "a
+            # grown-up changed how pages are identified here" -- seen on
+            # every visit to this source's hub, not buried in My pages.
+            "identity_correction_at": identity_corrections.get_correction(
+                conn, student_id, source_id
+            ),
+        },
     )
+
+
+@app.post("/student/{student_id}/{source_id}/dismiss-correction")
+def submit_dismiss_correction(
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Gap O: the child's own "Got it" tap acknowledging an identity
+    correction notice. A no-op, not an error, when there is nothing to
+    dismiss (identity_corrections.dismiss_correction's own contract)."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    identity_corrections.dismiss_correction(conn, student_id, source_id)
+    return RedirectResponse(f"/student/{student_id}/{source_id}", status_code=303)
 
 
 @dataclass(frozen=True)
@@ -220,6 +273,13 @@ class MyPageItem:
     capture_id: str
     session_id: str
     reminder_requested_at: str | None
+    attempt_count: int = 1
+    """Gap M (docs/USER_WORKFLOWS.md): how many captures produced a decisive
+    (correct/incorrect) verdict for this exact (page_number, problem_id), so a
+    child who retakes an already-graded page sees one item with a "tried N
+    times" note instead of N separate-looking rows for the same question.
+    Only computed for the graded bucket in my_pages() -- see that function's
+    own comment for why waiting/to-look-at stay ungrouped."""
 
 
 _WAITING_ON_GROWNUP_BUCKETS = frozenset({"waiting_on_key", "needs_a_person"})
@@ -279,8 +339,9 @@ def my_pages(
             for a in identity_attempts
             if a.capture_id != g.capture_id
         )
+        dispute = disputes.get(conn, student_id, g.session_id, g.capture_id, g.problem_id)
         view = render_student_result(
-            g, prompt_text, answer, rules=rules, prior_attempts=prior_attempts
+            g, prompt_text, answer, rules=rules, prior_attempts=prior_attempts, dispute=dispute
         )
         items.append(
             MyPageItem(
@@ -292,11 +353,39 @@ def my_pages(
             )
         )
 
+    # Gap M (docs/USER_WORKFLOWS.md): `items` is still in the chronological
+    # order list_all_graded_for_source returned it in, so the last item seen
+    # for a given (page_number, problem_id) is the most recent capture's --
+    # exactly the one worth showing. Scoped to the graded bucket only:
+    # page_number is always set for correct/incorrect (GradedProblemRow's own
+    # invariant), so the grouping key is unambiguous there. waiting/to-look-at
+    # rows can have no page_number at all (a capture still waiting on
+    # identity), and collapsing them by problem_id alone risks conflating two
+    # genuinely different physical pages -- left ungrouped, unchanged.
+    attempt_counts: dict[tuple[int, str], int] = {}
+    latest_graded_by_key: dict[tuple[int, str], MyPageItem] = {}
+    for item in items:
+        if item.view.display_bucket not in ("correct", "incorrect"):
+            continue
+        assert item.page_number is not None
+        key = (item.page_number, item.view.problem_id)
+        attempt_counts[key] = attempt_counts.get(key, 0) + 1
+        latest_graded_by_key[key] = item
+
+    graded_items = sorted(
+        (
+            replace(item, attempt_count=attempt_counts[key])
+            for key, item in latest_graded_by_key.items()
+        ),
+        key=lambda item: _problem_sort_key(item.view.problem_id),
+    )
     items.sort(key=lambda item: _problem_sort_key(item.view.problem_id))
-    graded_items = [i for i in items if i.view.display_bucket in ("correct", "incorrect")]
     to_look_at_items = [i for i in items if i.view.display_bucket in _TO_LOOK_AT_BUCKETS]
     waiting_items = [i for i in items if i.view.display_bucket in _WAITING_ON_GROWNUP_BUCKETS]
 
+    is_provisional = page_identity_schemas.get_current_schema_provenance(
+        conn, student_id, source_id
+    ) not in (None, "parent")
     return templates.TemplateResponse(
         request,
         "my_pages.html",
@@ -306,6 +395,7 @@ def my_pages(
             "graded_items": graded_items,
             "to_look_at_items": to_look_at_items,
             "waiting_items": waiting_items,
+            "is_provisional": is_provisional,
         },
     )
 
@@ -335,6 +425,46 @@ def submit_reminder(
         requested_at=datetime.now(UTC).isoformat(),
     )
     return RedirectResponse(f"/student/{student_id}/{source_id}/pages", status_code=303)
+
+
+@app.post("/student/{student_id}/dispute")
+def submit_dispute(
+    student_id: str,
+    session_id: str = Form(...),
+    capture_id: str = Form(...),
+    problem_id: str = Form(...),
+    reason: str = Form(...),
+    redirect_to: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Gap B (docs/USER_WORKFLOWS.md): a child's own "I think this is right"
+    contest of an already-graded incorrect verdict -- distinct from
+    submit_reminder above, which only ever appears on a row the grader
+    itself refused to call. A short reason is required (household decision:
+    not a one-tap action); a blank one is refused rather than silently
+    filed as an empty dispute. `redirect_to` is supplied by the template
+    that rendered the button (session_result.html or my_pages.html), so
+    filing a dispute returns the student to wherever she was, not a fixed
+    screen neither caller may actually want."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    if not reason.strip():
+        raise HTTPException(400, "a reason is required")
+    if not redirect_to.startswith("/") or redirect_to.startswith("//"):
+        # A same-app relative path only -- refuses a tampered request rather
+        # than ever redirecting this app's own response somewhere external.
+        raise HTTPException(400, "invalid redirect")
+    disputes.file_dispute(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        reason=reason.strip(),
+        disputed_at=datetime.now(UTC).isoformat(),
+    )
+    return RedirectResponse(redirect_to, status_code=303)
 
 
 @app.get("/capture/{student_id}", response_class=HTMLResponse)
@@ -593,24 +723,42 @@ class PageNumberAsk:
     capture_id: str
 
 
+@dataclass(frozen=True)
+class SchemaGuessAsk:
+    """Gap O (docs/USER_WORKFLOWS.md): the bootstrap-schema ask, shown
+    instead of a bare PageNumberAsk exactly when this capture's identity
+    resolution was NO_SCHEMA (a genuinely brand-new program) and its own
+    photo extraction found something to propose. `guessed_components` is
+    (component_name, guessed_value) pairs, in the order the model reported
+    them -- the child edits or drops each value before confirming; nothing
+    here is trusted as final until she submits it."""
+
+    capture_id: str
+    guessed_components: tuple[tuple[str, str], ...]
+
+
 def _resolve_pending_identities(
     conn: sqlite3.Connection,
     student_id: str,
     session_id: str,
     source_id: str,
     graded: list[sessions.GradedProblemRow],
-) -> tuple[list[IdentityAsk], list[PageNumberAsk]]:
+) -> tuple[list[IdentityAsk], list[PageNumberAsk], list[SchemaGuessAsk]]:
     """For every distinct capture in this session still needing a pick or an
     ask (PARTIAL_PAGE_MARKERS or UNKNOWN_PAGE), returns what to show --
-    constrained picks with real candidates as IdentityAsk, everything else
-    missing (not contradictory) as PageNumberAsk -- after opportunistically
-    applying anything that's become auto-resolvable since capture time (e.g.
-    a parent has since scanned enough pages that only one candidate remains
-    for this photo's known components). Always re-derives fresh from the
-    current page_identities table on every call; nothing computed at
-    capture time is trusted here."""
+    constrained picks with real candidates as IdentityAsk, a Gap O bootstrap
+    guess as SchemaGuessAsk when this capture's own outcome was NO_SCHEMA and
+    found something to propose, everything else missing (not contradictory)
+    as PageNumberAsk -- after opportunistically applying anything that's
+    become auto-resolvable since capture time (e.g. a parent has since
+    scanned enough pages that only one candidate remains for this photo's
+    known components). Always re-derives fresh from the current
+    page_identities table on every call; nothing computed at capture time is
+    trusted here except SchemaGuessAsk's own proposed values, which the
+    child still has to confirm or correct before anything is saved."""
     identity_asks: list[IdentityAsk] = []
     page_number_asks: list[PageNumberAsk] = []
+    schema_guess_asks: list[SchemaGuessAsk] = []
     seen_captures: set[str] = set()
     for row in graded:
         if row.needs_human_cause not in (
@@ -623,8 +771,23 @@ def _resolve_pending_identities(
         seen_captures.add(row.capture_id)
 
         if row.needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value:
-            # Nothing was extracted at all -- there is no candidates concept
-            # to even attempt here, ask directly.
+            outcome = page_identity_resolutions.get_outcome_for_capture(
+                conn, student_id, row.capture_id
+            )
+            guess_json = page_identity_resolutions.get_seen_values_for_capture(
+                conn, student_id, row.capture_id
+            )
+            if outcome == page_identity.PageIdentityOutcome.NO_SCHEMA.value and guess_json:
+                schema_guess_asks.append(
+                    SchemaGuessAsk(
+                        capture_id=row.capture_id,
+                        guessed_components=tuple(json.loads(guess_json).items()),
+                    )
+                )
+                continue
+            # Nothing was extracted at all, or a schema exists but nothing
+            # matched it -- there is no candidates concept to even attempt
+            # here, ask directly.
             page_number_asks.append(PageNumberAsk(capture_id=row.capture_id))
             continue
 
@@ -689,7 +852,7 @@ def _resolve_pending_identities(
                 ),
             )
         )
-    return identity_asks, page_number_asks
+    return identity_asks, page_number_asks, schema_guess_asks
 
 
 @app.post("/session/{student_id}/{session_id}/resolve-identity")
@@ -766,6 +929,92 @@ def submit_identity_pick(
 
 def _get(data: dict[str, list[str]], key: str, default: str = "") -> str:
     return data.get(key, [default])[0]
+
+
+def _normalize_component_name(raw: str) -> str:
+    """Same shape as k12ta.keys.app's own helper of this name -- a stable
+    internal key derived from whatever the model guessed, lowercase,
+    non-alphanumeric runs collapsed to a single underscore."""
+    return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+
+
+@app.post("/session/{student_id}/{session_id}/bootstrap-schema")
+async def submit_schema_guess(
+    request: Request,
+    student_id: str,
+    session_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Gap O (docs/USER_WORKFLOWS.md): the child's confirm-or-correct answer
+    to a SchemaGuessAsk -- the one place a schema is ever saved with
+    provenance="unconfirmed" (page_identity_schemas.save_new_schema), a
+    first mapping minted and saved alongside it
+    (page_identities.upsert_identity, source="unconfirmed"), and this
+    capture regraded against it. Only ever reachable when this source had
+    NO_SCHEMA at all (see docs/USER_WORKFLOWS.md §3.2 for why that scope
+    boundary is the entire safety argument): no answer key can exist yet for
+    a page nothing has ever mapped to, so the worst this produces is an
+    honest NO_KEY_FOR_PAGE, never a confident wrong grade.
+
+    A submission with nothing kept (every row unchecked, or checked with a
+    blank name or value) saves nothing -- the ask keeps showing next visit,
+    same "not sure" honesty as the identity-pick and page-number-ask flows
+    beside it."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    session = sessions.get_session(conn, student_id, session_id)
+    if session is None:
+        raise HTTPException(404, "no such session")
+    assignment = content.get_assignment(conn, student_id, session.assignment_id)
+    assert assignment is not None  # a session's assignment can't vanish once created
+    source = content.get_content_source(conn, student_id, assignment.source_id)
+    assert source is not None  # an assignment's source can't vanish once created
+
+    data = parse_qs((await request.body()).decode())
+    capture_id = _get(data, "capture_id")
+    count = int(_get(data, "component_count", "0"))
+    components: list[tuple[str, str, str]] = []
+    for i in range(count):
+        if _get(data, f"component_include_{i}") != "1":
+            continue
+        raw_name = _get(data, f"component_name_{i}").strip()
+        value = _get(data, f"component_value_{i}").strip()
+        name = _normalize_component_name(raw_name)
+        if not name or not value:
+            continue
+        label = _get(data, f"component_label_{i}").strip() or raw_name
+        components.append((name, label, value))
+
+    if components:
+        now = datetime.now(UTC).isoformat()
+        version = page_identity_schemas.save_new_schema(
+            conn,
+            student_id,
+            source.source_id,
+            [(name, label, value) for name, label, value in components],
+            provenance="unconfirmed",
+        )
+        composite_key = page_identity.build_composite_key([value for _, _, value in components])
+        page_number, _ = page_identities.resolve_or_assign_page_number(
+            conn, student_id, source.source_id, composite_key, version
+        )
+        page_identities.upsert_identity(
+            conn,
+            page_identities.PageIdentityRow(
+                student_id=student_id,
+                source_id=source.source_id,
+                page_number=page_number,
+                composite_key=composite_key,
+                schema_version=version,
+                confirmed_at=now,
+                source="unconfirmed",
+            ),
+        )
+        regrade_capture_for_resolved_identity(
+            conn, student_id, session_id, capture_id, source.source_id, page_number
+        )
+    return RedirectResponse(f"/session/{student_id}/{session_id}", status_code=303)
 
 
 _PAGE_ENTRY_PREVIEW_COUNT = 3
@@ -977,10 +1226,18 @@ def session_results(
     had_partial = any(
         g.needs_human_cause == NeedsHumanCause.PARTIAL_PAGE_MARKERS.value for g in graded
     )
-    identity_asks, page_number_asks = _resolve_pending_identities(
+    identity_asks, page_number_asks, schema_guess_asks = _resolve_pending_identities(
         conn, student_id, session_id, source.source_id, graded
     )
     identity_schema = page_identity_schemas.get_current_schema(conn, student_id, source.source_id)
+    # Gap O (docs/USER_WORKFLOWS.md): safe to compute from the current
+    # version alone -- see page_identity_schemas.get_current_schema_
+    # provenance's own docstring for why a source can never have an
+    # already-parent-confirmed later version sitting on top of an
+    # unconfirmed one.
+    is_provisional = page_identity_schemas.get_current_schema_provenance(
+        conn, student_id, source.source_id
+    ) not in (None, "parent")
     if had_partial:
         # _resolve_pending_identities may have just regraded a capture in
         # place (the opportunistic auto-resolve case) -- reload so the page
@@ -1015,6 +1272,7 @@ def session_results(
             for a in identity_attempts
             if a.capture_id != g.capture_id
         )
+        dispute = disputes.get(conn, student_id, g.session_id, g.capture_id, g.problem_id)
         items.append(
             render_student_result(
                 g,
@@ -1022,6 +1280,7 @@ def session_results(
                 answer,
                 rules=rules,
                 prior_attempts=prior_attempts,
+                dispute=dispute,
             )
         )
 
@@ -1037,11 +1296,14 @@ def session_results(
         {
             "student": student,
             "session_id": session_id,
+            "source_id": source.source_id,
             "items": items,
             "summary": summary,
             "no_problems_message": NO_PROBLEMS_FOUND_MESSAGE,
             "identity_asks": identity_asks,
             "page_number_asks": page_number_asks,
+            "schema_guess_asks": schema_guess_asks,
             "identity_schema": identity_schema,
+            "is_provisional": is_provisional,
         },
     )

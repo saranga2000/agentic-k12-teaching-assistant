@@ -1209,3 +1209,70 @@ def test_capture_for_a_source_with_no_schema_at_all_refuses_as_unknown_page(
     assert graded[0].needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value
     counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
     assert counts == {"no_schema": 1}
+
+
+def test_no_schema_with_nothing_extracted_persists_no_guess(tmp_path: Path) -> None:
+    """The ordinary case above, checked explicitly against Gap O's own new
+    field: a plain success result with no identity_values has nothing for
+    k12ta.web.app's bootstrap-schema ask to offer, and must not pretend
+    otherwise."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # no schema
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(result=_success_result(0.99))
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    seen_json = page_identity_resolutions.get_seen_values_for_capture(
+        conn, student_id, graded[0].capture_id
+    )
+    assert seen_json is None
+
+
+def test_no_schema_with_something_extracted_persists_the_guess_for_the_bootstrap_ask(
+    tmp_path: Path,
+) -> None:
+    """Gap O (docs/USER_WORKFLOWS.md): a brand-new program's first photo
+    still resolves to UNKNOWN_PAGE (nothing to grade against yet -- schema
+    bootstrapping never guesses at a grade), but whatever the model found is
+    now kept for k12ta.web.app's SchemaGuessAsk to build from, the same
+    persisted field PARTIAL_PAGE_MARKERS already uses for its own ask."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # no schema
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="42", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(
+                candidates={"chapter": ("CH.4",), "printed_page": ("13", "13")}, confidence=0.9
+            ),
+        )
+    )
+
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].needs_human_cause == NeedsHumanCause.UNKNOWN_PAGE.value
+    counts = page_identity_resolutions.count_outcomes_for_source(conn, student_id, "summer_bridge")
+    assert counts == {"no_schema": 1}
+    seen_json = page_identity_resolutions.get_seen_values_for_capture(
+        conn, student_id, graded[0].capture_id
+    )
+    assert seen_json is not None
+    assert json.loads(seen_json) == {"chapter": "CH.4", "printed_page": "13"}

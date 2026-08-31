@@ -6,6 +6,13 @@
   <a class="big-button" href="/student/{{ student.student_id }}/{{ source.source_id }}">{{ source.label }}</a>
   {% else %}
   <p class="message">{{ no_programs_message }}</p>
+  {% if program_requested_at %}
+  <p class="message program-request-sent">Your grown-up has been asked.</p>
+  {% else %}
+  <form method="post" action="/student/{{ student.student_id }}/request-program">
+    <button type="submit" class="big-button secondary">Ask a grown-up to add one</button>
+  </form>
+  {% endif %}
   {% endfor %}
 </div>
 {% endblock %}

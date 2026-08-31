@@ -32,7 +32,7 @@
   {% for ask in page_number_asks %}
   <div class="identity-ask page-number-ask">
     <p class="message">What page is this?</p>
-    <img class="page-number-ask-photo" src="/captures/{{ student.student_id }}/{{ ask.capture_id }}/image" alt="Your photo">
+    <img class="page-number-ask-photo" src="/captures/{{ student.student_id }}/{{ ask.capture_id }}/image" alt="Your photo" data-lightbox>
     <form method="post" action="/session/{{ student.student_id }}/{{ session_id }}/preview-page-entry">
       <input type="hidden" name="capture_id" value="{{ ask.capture_id }}">
       {% if identity_schema|length >= 2 %}
@@ -46,6 +46,34 @@
     </form>
   </div>
   {% endfor %}
+  {% endif %}
+  {% if schema_guess_asks %}
+  {% for ask in schema_guess_asks %}
+  <div class="identity-ask schema-guess-ask">
+    <p class="message">This looks like a brand-new program! Here's my best guess at what's on this page &mdash;
+      fix anything that's wrong, uncheck anything that isn't real, then confirm.</p>
+    <img class="page-number-ask-photo" src="/captures/{{ student.student_id }}/{{ ask.capture_id }}/image" alt="Your photo" data-lightbox>
+    <form method="post" action="/session/{{ student.student_id }}/{{ session_id }}/bootstrap-schema" class="schema-guess-form">
+      <input type="hidden" name="capture_id" value="{{ ask.capture_id }}">
+      <input type="hidden" name="component_count" value="{{ ask.guessed_components|length }}">
+      {% for name, value in ask.guessed_components %}
+      <div class="schema-guess-row">
+        <label>
+          <input type="checkbox" name="component_include_{{ loop.index0 }}" value="1" checked>
+          <input type="hidden" name="component_name_{{ loop.index0 }}" value="{{ name }}">
+          <input type="hidden" name="component_label_{{ loop.index0 }}" value="{{ name }}">
+          {{ name }}:
+        </label>
+        <input type="text" name="component_value_{{ loop.index0 }}" value="{{ value }}">
+      </div>
+      {% endfor %}
+      <button type="submit" class="identity-ask-option">Confirm</button>
+    </form>
+  </div>
+  {% endfor %}
+  {% endif %}
+  {% if is_provisional %}
+  <p class="message provisional-notice">First guess &mdash; a grown-up hasn't checked how pages are identified for this program yet.</p>
   {% endif %}
   {% if items %}
   <div class="results-summary">
@@ -71,13 +99,18 @@
     <tbody>
       {% for item in items %}
       <tr class="outcome-{{ item.outcome | replace('_', '-') }} bucket-{{ item.display_bucket | replace('_', '-') }}">
-        <td class="col-photo"><img class="result-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy"></td>
+        <td class="col-photo"><img class="result-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox></td>
         <td class="col-number">{{ item.display_number }}</td>
         <td class="col-question">{{ item.prompt_text | humanize_math }}</td>
         <td class="col-answer">{{ item.student_answer_raw | humanize_math }}</td>
         <td class="col-result outcome-label">
           <span class="outcome-glyph">{{ item.glyph }}</span>
           <span class="outcome-note">{{ item.message }}</span>
+          {% if item.display_bucket == 'incorrect' or item.dispute %}
+          {% with session_id=session_id, capture_id=item.capture_id, problem_id=item.problem_id, dispute=item.dispute, redirect_to="/session/" ~ student.student_id ~ "/" ~ session_id %}
+          {% include "_dispute_control.html" %}
+          {% endwith %}
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
@@ -86,6 +119,7 @@
   {% else %}
   <p class="message">{{ no_problems_message }}</p>
   {% endif %}
+  <p class="results-next"><a href="/capture/{{ student.student_id }}?source_id={{ source_id }}">+ Add another page</a></p>
 </div>
 <style>
   .results { justify-content: flex-start; padding-top: 3rem; align-items: stretch; }
@@ -156,5 +190,27 @@
     flex: 1; font-size: 1.05rem; padding: 0.55rem 0.8rem; border-radius: 10px;
     border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
   }
+  .schema-guess-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; }
+  .schema-guess-row label { display: flex; align-items: center; gap: 0.4rem; }
+  .schema-guess-row input[type="text"] {
+    flex: 1; font-size: 1rem; padding: 0.4rem 0.6rem; border-radius: 8px;
+    border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
+  }
+  .provisional-notice {
+    width: 100%; max-width: 720px; margin: 0 auto 1rem; text-align: center;
+    font-style: italic; color: var(--text-dim);
+  }
+  .results-next { width: 100%; max-width: 720px; margin: 1.5rem auto 0; text-align: center; }
+  .results-next a { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.05rem; }
+  .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+  .dispute-reason {
+    flex: 1; min-width: 10rem; font-size: 0.9rem; padding: 0.35rem 0.6rem; border-radius: 8px;
+    border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
+  }
+  .dispute-button {
+    font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 8px; border: none;
+    background: var(--neutral); color: var(--text); cursor: pointer; font-weight: 600;
+  }
+  .dispute-status { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
 </style>
 {% endblock %}

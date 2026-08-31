@@ -871,26 +871,12 @@ conversation that follows it.
 
 ### Gaps, named for the prioritization conversation
 
-| Gap | What | Depends on | Where it plausibly lands |
-|---|---|---|---|
-| A | Child's empty-state "no programs" alerts the parent in-app; real email/text explicitly deferred | none | small, standalone |
-| B | Child can dispute/escalate a verdict into its own parent-visible queue item | none | the structural gap everything else here hangs off |
-| C | A link back to "add a page" from the results screen | none | trivial, any time |
-| E | Parent can register a new child from the web app | none | surprising this is missing; standalone |
-| F | Per-child performance dashboard | mastery model (M4) | already scheduled, unchanged |
-| G | Cross-child/cross-program review queue on the landing page | none (pure aggregation) | could land well before M4 |
-| H | Enroll + describe structure as one flow | none | UX sequencing, no new data model |
-| I | Combined example-exercise + example-key upload to bootstrap discovery | none structurally, but bigger than H | its own scoped task |
-| J | Conversational structure-inference agent | H, I | its own milestone, not a feature — parent's own framing, agreed |
-| K | Review queue: child-escalated items surfaced/prioritized above app-requested | B | pairs naturally with B |
-| L | Parent's verdict can carry an optional comment shown to the child | B (for real payoff) | pairs naturally with B/K |
-
-**Not decided yet — next conversation:** which of these (grouped as B+K+L, since
-they're one coherent "child escalates → parent resolves with an explanation" loop;
-E standalone; G standalone; H+I together, since I is really "a stronger version of
-H's structure-description step"; A and C as small standalone items; J deferred as
-its own future milestone) should be pulled forward now, versus riding along with
-M4, M5, or M6. Recorded here rather than decided unilaterally.
+**Superseded by `docs/USER_WORKFLOWS.md` §7**, the live-status gap register —
+read it there, not here, to avoid two copies drifting apart. All five groups
+**shipped 2026-08-30**: Group 1 (C, A, M) → Group 2 (E, G) → Group 3 (H, I) →
+Group 4 (B, K, L) → Group 5 (O, the identity-bootstrap/auto-regrade design).
+F excluded (needs M4); J reprioritized to P1, the only gap from this critique
+still open.
 
 ## M3. Assignment policy engine wired in, with integrity evals
 **3 evenings. Ships before term starts. Non-negotiable date.**

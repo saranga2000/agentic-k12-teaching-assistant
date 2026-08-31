@@ -83,22 +83,86 @@ def save_new_schema(
     student_id: str,
     source_id: str,
     components: Sequence[tuple[str, str, str | None]],
+    provenance: str = "parent",
 ) -> int:
     """Insert `components` (component_name, label, example, in the desired display
     order) as the next schema_version for this source -- 1 if none existed, one
     past whatever the current version was otherwise. Returns the new version.
     Never touches a prior version's rows: a schema is revisable, not a one-shot
     commitment, and an old version must stay exactly as it was so mappings
-    confirmed under it remain honestly attributable, not silently reinterpreted."""
+    confirmed under it remain honestly attributable, not silently reinterpreted.
+
+    `provenance` (Gap O, docs/USER_WORKFLOWS.md) is "parent" for every
+    ordinary caller -- k12ta.web.app's bootstrap-schema submission is the one
+    exception, passing "unconfirmed" for a child/app-proposed first schema
+    that hasn't been reviewed. Recorded on every row of this version (a
+    version-level fact, not a per-component one) purely so
+    get_current_schema_provenance can read it back without a second table."""
     next_version = get_current_version(conn, student_id, source_id) + 1
     for position, (component_name, label, example) in enumerate(components):
         conn.execute(
             """
             INSERT INTO page_identity_schemas
-                (student_id, source_id, schema_version, component_name, label, example, position)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (student_id, source_id, schema_version, component_name, label, example,
+                 position, provenance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (student_id, source_id, next_version, component_name, label, example, position),
+            (
+                student_id,
+                source_id,
+                next_version,
+                component_name,
+                label,
+                example,
+                position,
+                provenance,
+            ),
         )
     conn.commit()
     return next_version
+
+
+def get_current_schema_provenance(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> str | None:
+    """"parent" or "unconfirmed" for the source's current schema version, or
+    None if it has no schema at all yet. Gap O: this is what decides whether
+    a result graded under this schema is shown to the child as provisional,
+    and whether k12ta.keys's identity_schema_screen shows the "not yet
+    checked" banner. Safe to compute from the current version alone -- see
+    docs/USER_WORKFLOWS.md §3.4: bootstrapping only ever happens at
+    schema_version 1 (NO_SCHEMA), so a source can never have an already-
+    parent-confirmed later version sitting on top of an unconfirmed one; the
+    moment a parent acts on version 1, every later version is "parent" too."""
+    version = get_current_version(conn, student_id, source_id)
+    if version == 0:
+        return None
+    cur = conn.execute(
+        """
+        SELECT provenance FROM page_identity_schemas
+        WHERE student_id = ? AND source_id = ? AND schema_version = ?
+        LIMIT 1
+        """,
+        (student_id, source_id, version),
+    )
+    row = cur.fetchone()
+    return None if row is None else str(row[0])
+
+
+def confirm_current_schema(conn: sqlite3.Connection, student_id: str, source_id: str) -> None:
+    """Gap O: a parent accepting a child/app-proposed schema exactly as-is --
+    flips the current version's provenance to "parent" in place, no new
+    version, no regrade needed (every capture already graded under this
+    schema graded correctly; only the trust label changes). A no-op, not an
+    error, when the source has no schema or is already parent-authored."""
+    version = get_current_version(conn, student_id, source_id)
+    if version == 0:
+        return
+    conn.execute(
+        """
+        UPDATE page_identity_schemas SET provenance = 'parent'
+        WHERE student_id = ? AND source_id = ? AND schema_version = ?
+        """,
+        (student_id, source_id, version),
+    )
+    conn.commit()

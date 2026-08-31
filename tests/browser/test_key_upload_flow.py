@@ -174,6 +174,35 @@ def test_upload_through_working_state_confirm_to_a_real_answer_key_row(
     assert entries[0].answer_text == "8 m"
 
 
+def test_clicking_the_confirm_screens_photo_opens_and_closes_the_lightbox(
+    page: Page,
+    keys_server: LiveServer,
+    stub_key_transcriber: FakeKeyTranscriber,
+) -> None:
+    """Parent feedback (2026-08-30): a photo shown at thumbnail size on the
+    confirm screen was previously unreadable at anything but its small CSS
+    size. This is real client-side JS (base.html's lightbox script), so only
+    Playwright can catch a regression here -- TestClient never executes it."""
+    _seed_student_with_source(keys_server.connection())
+    stub_key_transcriber.result = _success_result()
+
+    page.goto(f"{keys_server.base_url}/keys/{_STUDENT_ID}/{_SOURCE_ID}/upload")
+    page.locator("#photo-input").set_input_files(str(KEY_PAGE_DENSE_IMAGE))
+    page.click("#upload-button")
+    photo = page.locator("img.key-photo[data-lightbox]")
+    expect(photo).to_be_visible(timeout=5000)
+
+    expect(page.locator("#lightbox-overlay")).to_be_hidden()
+    photo.click()
+    expect(page.locator("#lightbox-overlay")).to_be_visible()
+    expect(page.locator("#lightbox-image")).to_have_js_property(
+        "src", photo.get_attribute("src")
+    )
+
+    page.locator("#lightbox-overlay").click()
+    expect(page.locator("#lightbox-overlay")).to_be_hidden()
+
+
 def _result_with_unresolved_identifier() -> KeyPageResult:
     """The model read the answer fine but couldn't read the page heading at all --
     a real, not contrived, shape: a thumb over the corner, a faded banner. No

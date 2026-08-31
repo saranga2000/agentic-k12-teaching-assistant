@@ -4,13 +4,16 @@
 <div class="screen pages-screen">
   <p><a href="/student/{{ student.student_id }}/{{ source.source_id }}">&larr; {{ source.label }}</a></p>
   <h1>My pages</h1>
+  {% if is_provisional %}
+  <p class="message provisional-notice">First guesses &mdash; a grown-up hasn't checked how pages are identified for this program yet.</p>
+  {% endif %}
 
   <h2>Waiting on a grown-up</h2>
   {% if waiting_items %}
   <ul class="pages-list">
     {% for item in waiting_items %}
     <li>
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy">
+      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
       <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
       &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
       {% if item.reminder_requested_at %}
@@ -35,7 +38,7 @@
   <ul class="pages-list">
     {% for item in to_look_at_items %}
     <li>
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy">
+      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
       <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
       &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo; &mdash; {{ item.view.message }}
     </li>
@@ -50,10 +53,18 @@
   <ul class="pages-list">
     {% for item in graded_items %}
     <li class="outcome-{{ item.view.outcome | replace('_', '-') }}">
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy">
+      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
       <span class="pages-page">Page {{ item.page_number }}</span>
       &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
       <span class="pages-glyph">{{ item.view.glyph }}</span> {{ item.view.message }}
+      {% if item.attempt_count > 1 %}
+      <span class="pages-attempts">Tried {{ item.attempt_count }} times</span>
+      {% endif %}
+      {% if item.view.display_bucket == 'incorrect' or item.view.dispute %}
+      {% with session_id=item.session_id, capture_id=item.capture_id, problem_id=item.view.problem_id, dispute=item.view.dispute, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
+      {% include "_dispute_control.html" %}
+      {% endwith %}
+      {% endif %}
     </li>
     {% endfor %}
   </ul>
@@ -83,5 +94,17 @@
     background: var(--accent); color: #12141a; cursor: pointer; font-weight: 600;
   }
   .pages-reminded { margin-left: 0.6rem; color: var(--text-dim); font-size: 0.95rem; }
+  .pages-attempts { margin-left: 0.6rem; color: var(--text-dim); font-size: 0.9rem; }
+  .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+  .dispute-reason {
+    flex: 1; min-width: 10rem; font-size: 0.9rem; padding: 0.35rem 0.6rem; border-radius: 8px;
+    border: 1px solid var(--surface); background: var(--bg); color: var(--text);
+  }
+  .dispute-button {
+    font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 8px; border: none;
+    background: var(--surface); color: var(--text); cursor: pointer; font-weight: 600;
+  }
+  .dispute-status { margin: 0.4rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
+  .provisional-notice { font-style: italic; color: var(--text-dim); }
 </style>
 {% endblock %}

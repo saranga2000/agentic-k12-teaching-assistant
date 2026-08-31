@@ -6,10 +6,21 @@
 <p>Photograph or choose a page of the answer key. One photo can cover several
 workbook pages, so a whole key is usually 6-8 photos.</p>
 <form id="upload-form" method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/upload" enctype="multipart/form-data">
+  {% if redirect_to %}<input type="hidden" name="redirect_to" value="{{ redirect_to }}">{% endif %}
   {% with input_id="photo-input" %}
   {% include "_photo_source.html" %}
   {% endwith %}
   <p id="no-photo-error" class="message" hidden>Take or choose a photo first.</p>
+  {% if not has_schema %}
+  <div id="example-page-field">
+    <p class="message">
+      Also have an example exercise page (no answers needed)? It can help us find page
+      markers this answer key alone doesn't show. Optional.
+    </p>
+    <label for="example-page-input">Example exercise page (optional)</label>
+    <input type="file" name="example_page" id="example-page-input" accept="image/*">
+  </div>
+  {% endif %}
   <div class="actions">
     <button id="upload-button" type="submit">Upload page</button>
   </div>
@@ -29,6 +40,7 @@ workbook pages, so a whole key is usually 6-8 photos.</p>
     var workingDetail = document.getElementById("working-detail");
     var submitError = document.getElementById("submit-error");
     var noPhotoError = document.getElementById("no-photo-error");
+    var exampleField = document.getElementById("example-page-field");
     var defaultDetailText = workingDetail.textContent;
 
     // The response is newline-delimited JSON, not one HTML blob: zero or more
@@ -81,6 +93,12 @@ workbook pages, so a whole key is usually 6-8 photos.</p>
       button.disabled = true;
       input.disabled = true;
       submitError.hidden = true;
+      // Hidden, not just disabled: its helper text shares .message with the
+      // working-state paragraph below, and the two coexisting made an
+      // unrelated ".message:visible" assertion elsewhere ambiguous. Inert
+      // once the request is in flight either way -- the file it names, if
+      // any, is already captured in the FormData sent above.
+      if (exampleField) { exampleField.hidden = true; }
       workingDetail.textContent = defaultDetailText;
       working.hidden = false;
       // fetch() keeps this page in control for the whole wait, unlike a plain form
@@ -95,6 +113,7 @@ workbook pages, so a whole key is usually 6-8 photos.</p>
           working.hidden = true;
           button.disabled = false;
           input.disabled = false;
+          if (exampleField) { exampleField.hidden = false; }
           submitError.hidden = false;
         });
     });

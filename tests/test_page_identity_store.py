@@ -730,6 +730,125 @@ def test_get_schema_at_version_is_empty_for_a_version_never_saved() -> None:
     assert page_identity_schemas.get_schema_at_version(conn, "s-marcus", "summer_bridge", 5) == ()
 
 
+# --- Gap O: schema provenance (docs/USER_WORKFLOWS.md) ----------------------------
+
+
+def test_provenance_is_none_when_no_schema_exists_yet() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        is None
+    )
+
+
+def test_save_new_schema_defaults_to_parent_provenance() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")]
+    )
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "parent"
+    )
+
+
+def test_save_new_schema_records_an_explicit_provenance() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")], provenance="unconfirmed"
+    )
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "unconfirmed"
+    )
+
+
+def test_provenance_tracks_whichever_version_is_current() -> None:
+    """A later, ordinary parent-authored version overrides an earlier
+    unconfirmed one -- provenance is a property of the current version, not
+    something that lingers from an older one."""
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")], provenance="unconfirmed"
+    )
+
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("lesson", "Lesson", "Lesson 5")]
+    )
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "parent"
+    )
+
+
+def test_confirm_current_schema_flips_provenance_in_place_without_a_new_version() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_schemas.save_new_schema(
+        conn, "s-marcus", "summer_bridge", [("day", "Day", "Day 5")], provenance="unconfirmed"
+    )
+
+    page_identity_schemas.confirm_current_schema(conn, "s-marcus", "summer_bridge")
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        == "parent"
+    )
+    assert page_identity_schemas.get_current_version(conn, "s-marcus", "summer_bridge") == 1
+
+
+def test_confirm_current_schema_is_a_no_op_with_no_schema_at_all() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    page_identity_schemas.confirm_current_schema(conn, "s-marcus", "summer_bridge")  # no raise
+
+    assert (
+        page_identity_schemas.get_current_schema_provenance(conn, "s-marcus", "summer_bridge")
+        is None
+    )
+
+
+# --- Gap O: page_identity_resolutions.get_outcome_for_capture ---------------------
+
+
+def test_get_outcome_for_capture_round_trips() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+    page_identity_resolutions.insert_resolution(
+        conn,
+        page_identity_resolutions.PageIdentityResolutionRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            capture_id="c-1",
+            outcome="no_schema",
+            resolved_page_number=None,
+            created_at="2026-08-30T09:00:00+00:00",
+        ),
+    )
+
+    assert (
+        page_identity_resolutions.get_outcome_for_capture(conn, "s-marcus", "c-1") == "no_schema"
+    )
+
+
+def test_get_outcome_for_capture_is_none_when_never_resolved() -> None:
+    conn = _migrated_connection()
+    _seed_marcus_with_summer_bridge(conn)
+
+    assert page_identity_resolutions.get_outcome_for_capture(conn, "s-marcus", "c-1") is None
+
+
 # --- backfill_page_number_schema --------------------------------------------------
 
 

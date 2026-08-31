@@ -14,11 +14,15 @@ from PIL import Image
 
 from k12ta.config import Settings
 from k12ta.llm.base import DataRetention
-from k12ta.pipeline.key_ingestion import KeyIngestionStatus, transcribe_key_page
+from k12ta.pipeline.key_ingestion import (
+    KeyIngestionStatus,
+    discover_identity_from_example_page,
+    transcribe_key_page,
+)
 from k12ta.store import db, migrate, quota
-from k12ta.transcribe.base import FailureKind
+from k12ta.transcribe.base import FailureKind, PageIdentityExtraction, TranscriptionResult
 from k12ta.transcribe.key_page import KeyPageEntry, KeyPageResult
-from tests.fakes import FakeKeyTranscriber
+from tests.fakes import FakeKeyTranscriber, FakeTranscriber
 
 TODAY = date.today()
 
@@ -225,3 +229,91 @@ def test_shares_the_capture_pipelines_daily_quota_table(tmp_path: Path) -> None:
 
     second = transcribe_key_page(conn, settings, lambda: transcriber, _sideways_portrait_jpeg())
     assert second.status is KeyIngestionStatus.QUOTA_EXHAUSTED
+
+
+def _page_result(candidates: dict[str, tuple[str, ...]] = {}) -> TranscriptionResult:  # noqa: B006
+    return TranscriptionResult(
+        items=(),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=200,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+        page_identity=PageIdentityExtraction(candidates=candidates, confidence=0.9),
+    )
+
+
+def test_discover_identity_returns_the_first_value_per_candidate_name(tmp_path: Path) -> None:
+    """Gap I (docs/USER_WORKFLOWS.md): an ordinary exercise page's own
+    identity candidates, in the exact shape k12ta.keys.app._discover_
+    identity_components expects to merge with a key scan's findings."""
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=_page_result({"chapter": ("CH.4",), "printed_page": ("13", "13")})
+    )
+
+    found = discover_identity_from_example_page(
+        conn, settings, lambda: transcriber, _sideways_portrait_jpeg()
+    )
+
+    assert dict(found) == {"chapter": "CH.4", "printed_page": "13"}
+    assert quota.get_count(conn, TODAY) == 1
+
+
+def test_discover_identity_returns_nothing_when_quota_is_already_exhausted(
+    tmp_path: Path,
+) -> None:
+    conn = _migrated_connection()
+    settings = _settings(tmp_path, daily_request_limit=1)
+    quota.record_request(conn, TODAY)
+    transcriber = FakeTranscriber(result=_page_result({"chapter": ("CH.4",)}))
+
+    found = discover_identity_from_example_page(
+        conn, settings, lambda: transcriber, _sideways_portrait_jpeg()
+    )
+
+    assert dict(found) == {}
+    assert transcriber.calls == []
+    assert quota.get_count(conn, TODAY) == 1  # unchanged
+
+
+def test_discover_identity_swallows_a_transcribe_failure(tmp_path: Path) -> None:
+    """A best-effort bonus signal: any failure here must never surface as an
+    error, only as "nothing extra found" -- the key upload it rides along
+    with must still succeed or fail entirely on its own terms."""
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=100,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            failure="simulated unreadable",
+            failure_kind=FailureKind.UNREADABLE,
+        )
+    )
+
+    found = discover_identity_from_example_page(
+        conn, settings, lambda: transcriber, _sideways_portrait_jpeg()
+    )
+
+    assert dict(found) == {}
+    assert quota.get_count(conn, TODAY) == 1  # the attempt still counted, same as a key page
+
+
+def test_discover_identity_swallows_an_unreadable_file(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(result=_page_result({"chapter": ("CH.4",)}))
+
+    found = discover_identity_from_example_page(
+        conn, settings, lambda: transcriber, b"not an image"
+    )
+
+    assert dict(found) == {}
+    assert transcriber.calls == []
+    assert quota.get_count(conn, TODAY) == 0  # never consumed: the model was never called

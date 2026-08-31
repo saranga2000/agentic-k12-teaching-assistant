@@ -303,6 +303,26 @@ def process_capture(
                     # matches from page_identities rather than trusting
                     # anything computed here to still be current.
                     seen_values_json = json.dumps(partial.seen_values)
+        elif resolution.outcome is page_identity.PageIdentityOutcome.NO_SCHEMA:
+            # Gap O (docs/USER_WORKFLOWS.md): nothing to resolve against yet,
+            # but whatever this photo's own extraction found is worth keeping
+            # -- it's the proposed schema k12ta.web.app offers the child to
+            # confirm or correct, the one case where a genuinely brand-new
+            # program is worth guessing about rather than an outright refusal
+            # (see docs/ARCHITECTURE.md's confidence/escalation philosophy:
+            # this doesn't relax it, since no key can exist yet for a page
+            # that has no schema at all -- the worst a wrong guess produces
+            # here is an honest NO_KEY_FOR_PAGE, never a confident wrong
+            # grade). First non-empty value per candidate name, same
+            # first-wins reduction k12ta.keys.app._discover_identity_
+            # components already applies to a parent's key-scan discovery.
+            guessed = {
+                name: values[0]
+                for name, values in result.page_identity.candidates.items()
+                if values
+            }
+            if guessed:
+                seen_values_json = json.dumps(guessed)
 
         page_identity_resolutions.insert_resolution(
             conn,

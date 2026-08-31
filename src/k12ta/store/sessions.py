@@ -187,6 +187,38 @@ def apply_human_verdict(
     conn.commit()
 
 
+def overturn_dispute_to_correct(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+) -> None:
+    """Gap B/L (docs/USER_WORKFLOWS.md): a parent's resolution of a child's
+    dispute, when the child was right -- flips an already-decided incorrect
+    verdict to correct. Distinct from apply_human_verdict just above: that
+    resolves a row the grader never called at all (needs_human); this
+    corrects one it already did call. needs_human_cause/needs_human_detail
+    are left untouched -- already NULL on any decided row, nothing to clear.
+    Caller (k12ta.store.disputes.resolve) owns recording the dispute's own
+    resolution alongside this; this function only ever touches the grade."""
+    conn.execute(
+        """
+        UPDATE graded_problems SET outcome = 'correct'
+        WHERE student_id = :student_id AND session_id = :session_id
+            AND capture_id = :capture_id AND problem_id = :problem_id
+        """,
+        {
+            "student_id": student_id,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "problem_id": problem_id,
+        },
+    )
+    conn.commit()
+
+
 def request_reminder(
     conn: sqlite3.Connection,
     *,

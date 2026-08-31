@@ -7,6 +7,7 @@ Pick which answer is right for each one below.</p>
 
 <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/resolve">
   <input type="hidden" name="row_count" value="{{ conflicts|length }}">
+  {% if redirect_to %}<input type="hidden" name="redirect_to" value="{{ redirect_to }}">{% endif %}
   {% for c in conflicts %}
   <fieldset>
     <legend>Page {{ c.page_number }}, problem {{ c.problem_number }}</legend>

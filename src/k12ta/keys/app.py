@@ -16,7 +16,7 @@ import re
 import secrets
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +26,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from k12ta.config import Settings, load_dotenv
+from k12ta.config import COACH_NAME_PLACEHOLDER, Settings, load_dotenv
 from k12ta.domain.attempts import PastAttempt, attempt_number
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.domain.text import humanize_math_text
@@ -37,10 +37,11 @@ from k12ta.llm import build_vision_model
 from k12ta.pipeline.key_ingestion import (
     KeyIngestionOutcome,
     KeyIngestionStatus,
+    discover_identity_from_example_page,
     save_key_page_image,
     transcribe_key_page,
 )
-from k12ta.pipeline.process import regrade_capture_for_resolved_identity
+from k12ta.pipeline.process import regrade_capture_for_resolved_identity, replay_source
 from k12ta.store import (
     answer_key_audit,
     answer_keys,
@@ -48,6 +49,8 @@ from k12ta.store import (
     captures,
     content,
     db,
+    disputes,
+    identity_corrections,
     key_page_images,
     migrate,
     page_identities,
@@ -55,10 +58,13 @@ from k12ta.store import (
     page_identity_schemas,
     policy_override_audit,
     policy_overrides,
+    program_requests,
     sessions,
     students,
 )
+from k12ta.transcribe.base import Transcriber
 from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber, VisionLLMKeyTranscriber
+from k12ta.transcribe.vision_llm import VisionLLMTranscriber
 
 QUOTA_EXHAUSTED_MESSAGE = (
     "Today's reading budget is used up. Try again tomorrow, or raise K12TA_DAILY_REQUEST_LIMIT."
@@ -96,6 +102,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: KeyTranscriber | None = None
+_page_transcriber: Transcriber | None = None
 
 
 def get_settings() -> Settings:
@@ -125,6 +132,22 @@ def get_transcriber(settings: Settings) -> KeyTranscriber:
             vision_model, provider=settings.llm_provider, model=settings.llm_model
         )
     return _transcriber
+
+
+def get_page_transcriber(settings: Settings) -> Transcriber:
+    """Gap I (docs/USER_WORKFLOWS.md): the same student-side `Transcriber`
+    k12ta.web.app uses, for the optional "also upload an example exercise
+    page" discovery bonus in submit_upload -- a different provider adapter
+    from get_transcriber above (that one reads answers off a key page; this
+    one reads a plain exercise page the way a student capture would). Same
+    reuse-one-instance-per-process reasoning as get_transcriber."""
+    global _page_transcriber
+    if _page_transcriber is None:
+        vision_model = build_vision_model(settings)
+        _page_transcriber = VisionLLMTranscriber(
+            vision_model, provider=settings.llm_provider, model=settings.llm_model
+        )
+    return _page_transcriber
 
 
 def _get(data: dict[str, list[str]], key: str, default: str = "") -> str:
@@ -167,14 +190,158 @@ def home(
     architecture": this is what a parent actually opens the app for, once daily
     progress (M5) exists to put here; until then it's the enrollment list."""
     rows = [
-        {"student": student, "sources": content.list_content_sources(conn, student.student_id)}
+        _HomeRow(
+            student=student,
+            sources=(sources := content.list_content_sources(conn, student.student_id)),
+            program_requested_at=(
+                program_requests.get_requested_at(conn, student.student_id)
+                if not sources
+                else None
+            ),
+        )
         for student in students.list_students(conn)
     ]
+    # Gap G (docs/USER_WORKFLOWS.md): a cross-child, cross-program review
+    # queue, before drilling into any one enrollment -- pure aggregation of
+    # sessions.list_pending_for_source, which already exists per enrollment
+    # and was never rolled up. No mastery model needed, unlike Gap F.
+    review_queue = sorted(
+        (
+            _ReviewQueueItem(student=row.student, source=source, pending_count=pending_count)
+            for row in rows
+            for source in row.sources
+            if (
+                pending_count := len(
+                    sessions.list_pending_for_source(conn, row.student.student_id, source.source_id)
+                )
+            )
+            > 0
+        ),
+        key=lambda item: item.pending_count,
+        reverse=True,
+    )
     return templates.TemplateResponse(
         request,
         "home.html",
-        {"rows": rows, "no_students_message": NO_STUDENTS_MESSAGE},
+        {
+            "rows": rows,
+            "no_students_message": NO_STUDENTS_MESSAGE,
+            "review_queue": review_queue,
+        },
     )
+
+
+@dataclass(frozen=True)
+class _HomeRow:
+    student: students.StudentRow
+    sources: list[content.ContentSourceRow]
+    program_requested_at: str | None
+
+
+@dataclass(frozen=True)
+class _ReviewQueueItem:
+    """Gap G: one enrollment with at least one pending item, for the
+    landing page's cross-child rollup. Deliberately just a count, not the
+    full CaptureGroup breakdown evaluations_screen builds -- a landing page
+    only needs "go look here," not the detail that screen already owns."""
+
+    student: students.StudentRow
+    source: content.ContentSourceRow
+    pending_count: int
+
+
+@dataclass
+class _StudentFormInput:
+    """Gap E (docs/USER_WORKFLOWS.md): registering a child only ever happened
+    by hand-editing the database via scripts/seed_dev_data.py -- same shape
+    as _EnrollmentFormInput above, both the blank starting state and, on a
+    validation error, exactly what the parent typed. state_code and
+    coach_name are not asked here: neither drives any decision anywhere in
+    this codebase today (k12ta.config's COACH_NAME_PLACEHOLDER is what the
+    student actually sees until she names her own coach), so asking a parent
+    to fill in two fields nothing reads yet would be friction with no
+    payoff."""
+
+    display_name: str = ""
+    grade_level_raw: str = ""
+    grade_level: int | None = None
+
+
+def _parse_student_setup_form(
+    data: dict[str, list[str]],
+) -> tuple[_StudentFormInput, list[str]]:
+    grade_level_raw = _get(data, "grade_level").strip()
+    grade_level = int(grade_level_raw) if grade_level_raw.isdigit() else None
+    values = _StudentFormInput(
+        display_name=_get(data, "display_name").strip(),
+        grade_level_raw=grade_level_raw,
+        grade_level=grade_level,
+    )
+    errors = []
+    if not values.display_name:
+        errors.append("Name is required.")
+    if grade_level is None or not 0 <= grade_level <= 12:
+        errors.append("Grade must be a number from 0 (kindergarten) to 12.")
+    return values, errors
+
+
+def _normalize_student_id(raw: str) -> str:
+    """Same shape as _normalize_source_id -- a parent never types or sees a
+    student_id at all; it's derived from the name they did type."""
+    return re.sub(r"[^a-z0-9]+", "_", raw.strip().lower()).strip("_")
+
+
+def _unique_student_id(conn: sqlite3.Connection, base: str) -> str:
+    """`base` with a numeric suffix appended only if it collides with an
+    existing student -- two children sharing a first name must never surface
+    a database error. Same reasoning as _unique_source_id."""
+    candidate = base or "student"
+    suffix = 1
+    while students.get_student(conn, candidate) is not None:
+        suffix += 1
+        candidate = f"{base or 'student'}_{suffix}"
+    return candidate
+
+
+@app.get("/students/new", response_class=HTMLResponse)
+def student_setup_screen(request: Request) -> HTMLResponse:
+    """Gap E: the only intended way a student is created going forward --
+    scripts/seed_dev_data.py stays for dev fixtures only, same relationship
+    enrollment_setup_screen already has with hand-editing content sources."""
+    return templates.TemplateResponse(
+        request,
+        "student_setup.html",
+        {"values": _StudentFormInput(), "errors": []},
+    )
+
+
+@app.post("/students/new", response_model=None)
+async def submit_student_setup(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse | RedirectResponse:
+    data = parse_qs((await request.body()).decode())
+    values, errors = _parse_student_setup_form(data)
+    if errors:
+        return templates.TemplateResponse(
+            request,
+            "student_setup.html",
+            {"values": values, "errors": errors},
+        )
+    assert values.grade_level is not None  # guaranteed by the empty-errors check above
+
+    student_id = _unique_student_id(conn, _normalize_student_id(values.display_name))
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id=student_id,
+            display_name=values.display_name,
+            grade_level=values.grade_level,
+            state_code="",
+            coach_name=COACH_NAME_PLACEHOLDER,
+        ),
+    )
+    return RedirectResponse("/", status_code=303)
 
 
 def _require_student(conn: sqlite3.Connection, student_id: str) -> students.StudentRow:
@@ -322,7 +489,12 @@ async def submit_enrollment_setup(
             typical_session_minutes=values.minutes,
         ),
     )
-    return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
+    # Gap H (docs/USER_WORKFLOWS.md): straight into describing this source's
+    # page structure, not the enrollment landing page -- one continuous flow
+    # instead of a separately-linked, easily-skipped-indefinitely step.
+    # identity_schema_screen's own back-link is the skip: a parent who wants
+    # to describe structure later just navigates away without submitting.
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/identity-schema", status_code=303)
 
 
 def _group_by_problem(
@@ -639,30 +811,85 @@ def submit_regrade_pending(
 _VERDICTS = frozenset({"correct", "incorrect"})
 
 
-@app.post("/keys/{student_id}/{source_id}/answer-verdict")
+@app.post("/keys/{student_id}/{source_id}/answer-verdict", response_model=None)
 def submit_answer_verdict(
+    request: Request,
     student_id: str,
     source_id: str,
     session_id: str = Form(...),
     capture_id: str = Form(...),
     problem_id: str = Form(...),
     verdict: str = Form(...),
+    student_answer_raw: str | None = Form(None),
+    key_answer_text: str | None = Form(None),
+    page_number: int | None = Form(None),
     conn: sqlite3.Connection = Depends(get_conn),
-) -> RedirectResponse:
+) -> RedirectResponse | HTMLResponse:
     """A parent's one-tap verdict on any NEEDS_HUMAN row the grader deliberately
     would not call right or wrong itself (see k12ta.grading.needs_human.decide)
-    -- ANSWER_DIFFERS_FROM_KEY, where a key answer exists to disagree with, and
+    -- ANSWER_DIFFERS_FROM_KEY, where a key answer exists to disagree with,
     NEEDS_PERSON, where none does and a parent reads the child's own written
-    answer instead. Cause-agnostic on purpose: this is a direct write of a
+    answer instead, and, as of parent feedback 2026-08-30, LOW_CONFIDENCE,
+    where the model did transcribe something but wasn't sure enough of it to
+    grade automatically. Cause-agnostic on purpose: this is a direct write of a
     person's judgment, not another pass through decide(), and decide() is the
     one place that already knows which causes exist. A malformed verdict
     value is rejected rather than silently ignored: unlike a stale identity
     pick (k12ta.web.app.submit_identity_pick), there is no "current candidate
     set" to re-validate against here, so there is nothing to check but the
-    value itself."""
+    value itself.
+
+    `student_answer_raw`, if given and non-blank, corrects the stored
+    transcription before the verdict is applied -- evaluations.html always
+    submits this pre-filled with what's on file, so a parent confirms it
+    unchanged, fixes a misread character, or clears and retypes it entirely,
+    all through the same two buttons. See k12ta.store.captures.
+    update_student_answer_raw for why this is trusted the same way a parent's
+    own typed answer-key entry already is.
+
+    `key_answer_text` + `page_number` (parent feedback 2026-08-30) are
+    NO_KEY_FOR_PAGE's own variant: there is no key to disagree with yet, so
+    evaluations.html offers a field to type the real answer and teach it as
+    the key, in the same tap that judges this one instance. Goes through
+    _save_answer_entry, the same never-silently-overwrite path every other
+    key write in this app uses -- NO_KEY_FOR_PAGE means no entry exists yet,
+    so a conflict here should be rare, but is handled exactly like any other:
+    held back and shown on resolve.html rather than risking a wrong key
+    silently beating a right one. The verdict is applied only once the key
+    write has a clear outcome (no conflict) -- a held-back conflict leaves
+    this row exactly as it was, to judge again once resolved."""
     _require_student_and_source(conn, student_id, source_id)
     if verdict not in _VERDICTS:
         raise HTTPException(400, "verdict must be 'correct' or 'incorrect'")
+    if student_answer_raw is not None and student_answer_raw.strip():
+        captures.update_student_answer_raw(
+            conn, student_id, capture_id, problem_id, student_answer_raw.strip()
+        )
+    if key_answer_text is not None and key_answer_text.strip() and page_number is not None:
+        now = datetime.now(UTC).isoformat()
+        conflict = _save_answer_entry(
+            conn,
+            student_id,
+            source_id,
+            page_number,
+            problem_id,
+            key_answer_text.strip(),
+            None,
+            "manual",
+            now,
+        )
+        if conflict is not None:
+            student, source = _require_student_and_source(conn, student_id, source_id)
+            return templates.TemplateResponse(
+                request,
+                "resolve.html",
+                {
+                    "student": student,
+                    "source": source,
+                    "conflicts": [conflict],
+                    "redirect_to": f"/keys/{student_id}/{source_id}/evaluations",
+                },
+            )
     sessions.apply_human_verdict(
         conn,
         student_id=student_id,
@@ -818,6 +1045,12 @@ def evaluations_screen(
     resolved = sessions.list_resolved_for_source(conn, student_id, source_id)
     summary = _summarize_enrollment(pending, capture_groups, resolved)
     identity_schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
+    # Gap K (docs/USER_WORKFLOWS.md): child-escalated items, surfaced and
+    # prioritized above the app-requested queue below -- rendered first in
+    # evaluations.html, not merged into capture_groups (a dispute is on an
+    # already-decided row, not a needs_human one; the two queues are
+    # different in kind, not just in urgency).
+    open_disputes = disputes.list_open_for_source(conn, student_id, source_id)
 
     return templates.TemplateResponse(
         request,
@@ -827,6 +1060,7 @@ def evaluations_screen(
             "source": source,
             "show_repeated_attempts": not rules.reveal_final_answer,
             "repeated_problems": repeated_problems,
+            "open_disputes": open_disputes,
             "capture_groups": capture_groups,
             "now_gradable_count": now_gradable_count,
             "summary": summary,
@@ -835,6 +1069,58 @@ def evaluations_screen(
             "identity_schema": identity_schema,
         },
     )
+
+
+_DISPUTE_RESOLUTIONS = frozenset({"upheld", "overturned"})
+
+
+@app.post("/keys/{student_id}/{source_id}/resolve-dispute")
+def submit_dispute_resolution(
+    student_id: str,
+    source_id: str,
+    session_id: str = Form(...),
+    capture_id: str = Form(...),
+    problem_id: str = Form(...),
+    resolution: str = Form(...),
+    comment: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Gap L (docs/USER_WORKFLOWS.md): a parent's answer to a child's
+    dispute -- "upheld" (the incorrect verdict stands) or "overturned" (the
+    child was right, k12ta.store.sessions.overturn_dispute_to_correct flips
+    the grade in the same action). A comment is required here specifically
+    (household decision: mandatory for a dispute, unlike an ordinary
+    NEEDS_HUMAN verdict where one stays optional) -- a blank one is refused
+    with a loud 400, not silently dropped, since the entire point of this
+    action is the explanation the child will see. Resolving twice is a
+    silent no-op (disputes.resolve's own contract): the parent's word is
+    final, so a second attempt at the same item changes nothing rather than
+    erroring on a stale page."""
+    _require_student_and_source(conn, student_id, source_id)
+    if resolution not in _DISPUTE_RESOLUTIONS:
+        raise HTTPException(400, "invalid resolution")
+    if not comment.strip():
+        raise HTTPException(400, "a comment is required")
+    resolved_at = datetime.now(UTC).isoformat()
+    changed = disputes.resolve(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        resolution=resolution,
+        resolution_comment=comment.strip(),
+        resolved_at=resolved_at,
+    )
+    if changed and resolution == "overturned":
+        sessions.overturn_dispute_to_correct(
+            conn,
+            student_id=student_id,
+            session_id=session_id,
+            capture_id=capture_id,
+            problem_id=problem_id,
+        )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
 @app.get("/keys/{student_id}/{source_id}/answer-keys", response_class=HTMLResponse)
@@ -854,7 +1140,11 @@ def answer_keys_screen(
     for entry in entries:
         by_page.setdefault(entry.page_number, []).append(entry)
     pages = [
-        (page_number, sorted(rows, key=lambda e: _problem_number_sort_key(e.problem_number)))
+        (
+            page_number,
+            sorted(rows, key=lambda e: _problem_number_sort_key(e.problem_number)),
+            key_page_images.get_image_path(conn, student_id, source_id, page_number),
+        )
         for page_number, rows in sorted(by_page.items())
     ]
     return templates.TemplateResponse(
@@ -1069,6 +1359,47 @@ def submit_mark_duplicate(
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
+@app.post("/keys/{student_id}/{source_id}/reassign-page")
+def submit_reassign_page(
+    student_id: str,
+    source_id: str,
+    capture_id: str = Form(...),
+    session_id: str = Form(...),
+    page_number: int = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """Parent feedback (2026-08-30): the residual risk docs/ARCHITECTURE.md's
+    "asking when exactly one component is missing" section names explicitly
+    -- a student's (or a parent's) pick among real, already-confirmed
+    candidates can still be the wrong one, and the system has no way to
+    detect that on its own. Found on real household data: the same physical
+    page, photographed twice, resolved to two different page numbers because
+    one of those picks disagreed with the other. This is the fix: a parent
+    who can see the actual page and the actual answer key knows definitively
+    which page this capture really belongs to, and can say so directly.
+
+    Deliberately just a thin call to regrade_capture_for_resolved_identity --
+    the exact same zero-model-call, re-decide-from-stored-transcription
+    primitive every other "identity is now known, grade against it" path in
+    this app already uses (a student's constrained pick, a parent adding a
+    key). The only difference is this capture already had a page_number;
+    that function has no opinion about what it was before, so overriding an
+    existing (wrong) one works identically to resolving a previously-unknown
+    one. Deliberately does not touch page_identities -- this corrects one
+    capture's own assignment, not the underlying composite -> page mapping
+    that produced the wrong pick in the first place (k12ta.store.
+    page_identities.upsert_identity, via the manual-mapping screen, is the
+    tool for that, if the same misread would keep happening to future
+    captures of this same page)."""
+    _require_student_and_source(conn, student_id, source_id)
+    if page_number <= 0:
+        raise HTTPException(400, "page_number must be positive")
+    regrade_capture_for_resolved_identity(
+        conn, student_id, session_id, capture_id, source_id, page_number
+    )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+
+
 @app.post("/keys/{student_id}/{source_id}/set-problem-number")
 def submit_problem_number(
     student_id: str,
@@ -1248,8 +1579,20 @@ def identity_schema_screen(
     schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
     rows = [(c.component_name, c.label, c.example) for c in schema]
     rows += [("", "", "")] * _BLANK_SCHEMA_ROWS
+    provenance = page_identity_schemas.get_current_schema_provenance(conn, student_id, source_id)
     return templates.TemplateResponse(
-        request, "identity_schema.html", {"student": student, "source": source, "rows": rows}
+        request,
+        "identity_schema.html",
+        {
+            "student": student,
+            "source": source,
+            "rows": rows,
+            # Gap O (docs/USER_WORKFLOWS.md): "unconfirmed" only ever means
+            # a child/app proposed this schema and no parent has acted on it
+            # yet -- the banner and this screen's own Save button are the
+            # whole confirm-or-correct action, no separate button needed.
+            "is_unconfirmed": provenance not in (None, "parent"),
+        },
     )
 
 
@@ -1291,15 +1634,47 @@ async def submit_identity_schema(
     rule) -- that cost must only be paid for an actual change. This was not
     hypothetical: an identical resubmission against the real household database
     produced two byte-identical schema versions and stranded 40 confirmed
-    mappings under the first one."""
+    mappings under the first one.
+
+    Gap O (docs/USER_WORKFLOWS.md): this is also the whole "confirm or
+    correct a child/app-proposed schema" action -- no separate button. If
+    the current schema isn't yet parent-authored ("unconfirmed" -- always
+    exactly version 1, see get_current_schema_provenance's own docstring for
+    why), saving it unchanged confirms it in place (confirm_current_schema,
+    no new version, nothing to regrade: every capture already graded under
+    it graded correctly). Saving it *changed* is a correction: the new
+    version is always "parent" (a parent just submitted it), and because the
+    version it replaces was never trusted, every already-resolved capture
+    for this source is automatically re-decided against the fixed structure
+    (k12ta.pipeline.process.replay_source) and the child is left a notice
+    (k12ta.store.identity_corrections) -- the one place in this whole app a
+    regrade fires without a parent separately choosing to trigger it, and
+    only because closing this exact loop is a promise already made to the
+    child the moment a provisional result was shown to her (see
+    docs/USER_WORKFLOWS.md §3.5 for why every *other* regrade trigger stays
+    manual)."""
     _require_student_and_source(conn, student_id, source_id)
     data = parse_qs((await request.body()).decode())
     components = _parse_standalone_schema_form(data)
     if components:
         current = page_identity_schemas.get_current_schema(conn, student_id, source_id)
         current_components = [(c.component_name, c.label, c.example) for c in current]
-        if components != current_components:
-            page_identity_schemas.save_new_schema(conn, student_id, source_id, components)
+        old_provenance = page_identity_schemas.get_current_schema_provenance(
+            conn, student_id, source_id
+        )
+        was_unconfirmed = old_provenance not in (None, "parent")
+        if components == current_components:
+            if was_unconfirmed:
+                page_identity_schemas.confirm_current_schema(conn, student_id, source_id)
+        else:
+            page_identity_schemas.save_new_schema(
+                conn, student_id, source_id, components, provenance="parent"
+            )
+            if was_unconfirmed:
+                replay_source(conn, student_id, source_id)
+                identity_corrections.record_correction(
+                    conn, student_id, source_id, datetime.now(UTC).isoformat()
+                )
     return RedirectResponse(f"/keys/{student_id}/{source_id}", status_code=303)
 
 
@@ -1383,13 +1758,24 @@ def manual_answers_screen(
     request: Request,
     student_id: str,
     source_id: str,
+    page_number: int | None = None,
+    redirect_to: str | None = None,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse:
     """M3.4: a parent types a page's answers directly, no photograph, no model
     call -- the bridge for a source with no printed answer key (RSM, Kumon).
     Unlike /identity/manual-entry, this renders with no schema too: a stored
     answer isn't useless without one, only unreachable from a future photo
-    until one exists (docs/ROADMAP.md's M3.4 note)."""
+    until one exists (docs/ROADMAP.md's M3.4 note).
+
+    `page_number` and `redirect_to` (parent feedback 2026-08-30) let
+    evaluations.html link straight here pre-filled for a specific page,
+    landing back on evaluations once saved instead of dead-ending on
+    saved.html -- see submit_manual_answers for the actual redirect and its
+    validation. Pre-fill is 0/1-component schemas only: a 2+-component
+    composite's values aren't known here from a bare page_number alone (the
+    surrogate is source-wide, not derived from the components), so a parent
+    linking in for one of those still retypes the identity fields."""
     student, source = _require_student_and_source(conn, student_id, source_id)
     schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
     return templates.TemplateResponse(
@@ -1401,6 +1787,8 @@ def manual_answers_screen(
             "schema": schema,
             "rows": range(_MANUAL_ANSWER_ROWS),
             "ungradeable_reasons": UNGRADEABLE_REASONS,
+            "prefill_page_number": page_number if len(schema) < 2 else None,
+            "redirect_to": redirect_to,
         },
     )
 
@@ -1422,13 +1810,32 @@ def _manual_answer_row(data: dict[str, list[str]], i: int) -> tuple[str, str | N
     return "", None, None
 
 
-@app.post("/keys/{student_id}/{source_id}/answers/manual-entry", response_class=HTMLResponse)
+def _safe_redirect_to(redirect_to: str) -> str | None:
+    """A same-app relative path only -- never lets this app's own response
+    redirect somewhere external. Parent feedback (2026-08-30): several
+    keys.app screens now accept an optional `redirect_to` so a parent fixing
+    something from evaluations.html lands back there instead of a bare
+    confirmation screen, same pattern k12ta.web.app.submit_dispute already
+    established. Blank or invalid input (including "" -- a form field that
+    was simply never supplied) is treated as "no redirect requested," not an
+    error -- the worst case is the existing saved.html dead end, not a
+    security concern, so there is nothing worth a loud 400 over here."""
+    if redirect_to and redirect_to.startswith("/") and not redirect_to.startswith("//"):
+        return redirect_to
+    return None
+
+
+@app.post(
+    "/keys/{student_id}/{source_id}/answers/manual-entry",
+    response_class=HTMLResponse,
+    response_model=None,
+)
 async def submit_manual_answers(
     request: Request,
     student_id: str,
     source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     """Always recorded source="manual" on every row saved, answers and identity
     alike -- these are a parent's own typed values, never the model's, same
     reasoning as submit_manual_mapping. The identity mapping, if this source
@@ -1515,12 +1922,20 @@ async def submit_manual_answers(
         else:
             conflicts.append(conflict)
 
+    redirect_to = _safe_redirect_to(_get(data, "redirect_to"))
     if conflicts:
         return templates.TemplateResponse(
             request,
             "resolve.html",
-            {"student": student, "source": source, "conflicts": conflicts},
+            {
+                "student": student,
+                "source": source,
+                "conflicts": conflicts,
+                "redirect_to": redirect_to,
+            },
         )
+    if redirect_to:
+        return RedirectResponse(redirect_to, status_code=303)
     return templates.TemplateResponse(
         request,
         "saved.html",
@@ -1533,24 +1948,51 @@ def upload_screen(
     request: Request,
     student_id: str,
     source_id: str,
+    redirect_to: str | None = None,
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> HTMLResponse:
+    """`redirect_to` (parent feedback 2026-08-30): lets evaluations.html link
+    straight here for a "waiting on an answer key" page, so a clean scan
+    lands back on evaluations instead of dead-ending on saved.html -- carried
+    through the whole upload -> confirm -> save chain (submit_upload,
+    _stream_upload_response, _render_upload_result, confirm.html,
+    submit_confirm), the same validated field throughout
+    (_safe_redirect_to)."""
     student, source = _require_student_and_source(conn, student_id, source_id)
+    has_schema = bool(page_identity_schemas.get_current_schema(conn, student_id, source_id))
     return templates.TemplateResponse(
-        request, "upload.html", {"student": student, "source": source}
+        request,
+        "upload.html",
+        {
+            "student": student,
+            "source": source,
+            "has_schema": has_schema,
+            "redirect_to": redirect_to,
+        },
     )
 
 
-def _discover_identity_components(entries: tuple[KeyPageEntry, ...]) -> list[tuple[str, str]]:
+def _discover_identity_components(
+    entries: tuple[KeyPageEntry, ...], extra: Mapping[str, str] | None = None
+) -> list[tuple[str, str]]:
     """Union of every identity component name seen across this scan's entries, in
     order of first appearance, each paired with the first non-empty example value
     found for it -- what the "set up this workbook's page identity" panel offers a
-    parent to choose from, when no schema exists yet for this source."""
+    parent to choose from, when no schema exists yet for this source.
+
+    `extra` is Gap I's bonus signal (docs/USER_WORKFLOWS.md): whatever
+    discover_identity_from_example_page found on a parent's optional second
+    photo of a plain exercise page. The key scan's own findings take
+    priority -- it's the artefact actually being confirmed this round --
+    `extra` only fills in names the key page itself never showed."""
     seen: dict[str, str] = {}
     for entry in entries:
         for name, value in entry.identity_values.items():
             if name not in seen and value:
                 seen[name] = value
+    for name, value in (extra or {}).items():
+        if name not in seen and value:
+            seen[name] = value
     return list(seen.items())
 
 
@@ -1583,6 +2025,8 @@ def _render_upload_result(
     outcome: KeyIngestionOutcome,
     conn: sqlite3.Connection,
     settings: Settings,
+    extra_identity: Mapping[str, str] | None = None,
+    redirect_to: str | None = None,
 ) -> str:
     """The same three outcomes submit_upload has always rendered, as a raw HTML
     string rather than a Response -- called from inside the streaming generator
@@ -1622,7 +2066,9 @@ def _render_upload_result(
     # marker a parent is about to define for the first time has no history of a
     # matching per-row field name to align with yet.
     panel_rows = (
-        [] if schema else _discovery_panel_rows(_discover_identity_components(outcome.entries))
+        []
+        if schema
+        else _discovery_panel_rows(_discover_identity_components(outcome.entries, extra_identity))
     )
     return templates.get_template("confirm.html").render(
         request=request,
@@ -1635,6 +2081,7 @@ def _render_upload_result(
         identifier_confidence_floor=CONFIDENCE_FLOOR,
         schema=schema,
         panel_rows=panel_rows,
+        redirect_to=redirect_to,
     )
 
 
@@ -1645,6 +2092,8 @@ def _stream_upload_response(
     conn: sqlite3.Connection,
     settings: Settings,
     image_bytes: bytes,
+    example_page_bytes: bytes | None = None,
+    redirect_to: str | None = None,
 ) -> Iterator[str]:
     """Newline-delimited JSON: zero or more `{"type": "progress", "chars": N}`
     lines while the model call is in flight, then exactly one `{"type": "final",
@@ -1674,7 +2123,20 @@ def _stream_upload_response(
             on_progress=on_progress,
             identity_schema=identity_schema,
         )
-        updates.put(("outcome", outcome))
+        # Gap I (docs/USER_WORKFLOWS.md): only worth the extra call when
+        # there's discovery to help with (no schema yet) and a parent
+        # actually supplied a second photo -- never on a targeted-schema
+        # upload, where an example page's markers have nothing left to add.
+        extra_identity: Mapping[str, str] = {}
+        if (
+            not schema
+            and example_page_bytes is not None
+            and outcome.status is KeyIngestionStatus.TRANSCRIBED
+        ):
+            extra_identity = discover_identity_from_example_page(
+                conn, settings, lambda: get_page_transcriber(settings), example_page_bytes
+            )
+        updates.put(("outcome", (outcome, extra_identity)))
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -1684,9 +2146,13 @@ def _stream_upload_response(
         if kind == "progress":
             yield json.dumps({"type": "progress", "chars": payload}) + "\n"
             continue
-        outcome = payload
+        assert isinstance(payload, tuple)
+        outcome, extra_identity = payload
         assert isinstance(outcome, KeyIngestionOutcome)
-        html = _render_upload_result(request, student, source, outcome, conn, settings)
+        assert isinstance(extra_identity, Mapping)
+        html = _render_upload_result(
+            request, student, source, outcome, conn, settings, extra_identity, redirect_to
+        )
         yield json.dumps({"type": "final", "html": html}) + "\n"
         break
     thread.join()
@@ -1698,6 +2164,8 @@ def submit_upload(
     student_id: str,
     source_id: str,
     photo: UploadFile = File(...),
+    example_page: UploadFile | None = File(None),
+    redirect_to: str | None = Form(None),
     conn: sqlite3.Connection = Depends(get_conn),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
@@ -1708,12 +2176,32 @@ def submit_upload(
     transcribe chain directly blocked every other request, including the one already
     in flight, for the call's whole duration. See test_upload_does_not_block_other_
     requests_while_transcribing in tests/test_keys_app.py. The response itself is
-    streamed too, for a different reason -- see _stream_upload_response."""
+    streamed too, for a different reason -- see _stream_upload_response.
+
+    `example_page` is Gap I's optional second photo (docs/USER_WORKFLOWS.md) --
+    an ordinary exercise page, no answers needed, uploaded alongside the key
+    page to help discovery see markers the isolated key page might not show.
+    An empty file field still arrives as an UploadFile with no filename, not
+    None -- checked here rather than left to _stream_upload_response, so that
+    module only ever sees "a real second photo" or nothing."""
     student, source = _require_student_and_source(conn, student_id, source_id)
     image_bytes = photo.file.read()
+    example_page_bytes = (
+        example_page.file.read() if example_page is not None and example_page.filename else None
+    )
+    safe_redirect_to = _safe_redirect_to(redirect_to) if redirect_to else None
 
     return StreamingResponse(
-        _stream_upload_response(request, student, source, conn, settings, image_bytes),
+        _stream_upload_response(
+            request,
+            student,
+            source,
+            conn,
+            settings,
+            image_bytes,
+            example_page_bytes,
+            safe_redirect_to,
+        ),
         media_type="application/x-ndjson",
     )
 
@@ -1895,13 +2383,15 @@ def _save_answer_entry(
     }
 
 
-@app.post("/keys/{student_id}/{source_id}/confirm", response_class=HTMLResponse)
+@app.post(
+    "/keys/{student_id}/{source_id}/confirm", response_class=HTMLResponse, response_model=None
+)
 async def submit_confirm(
     request: Request,
     student_id: str,
     source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     """Never silently overwrites a stored answer that disagrees with a new scan --
     a wrong key marks correct work wrong, the worst failure this system has. A new
     entry is stored immediately; an identical re-scan is a no-op; anything that
@@ -2030,13 +2520,21 @@ async def submit_confirm(
                 ),
             )
 
+    redirect_to = _safe_redirect_to(_get(data, "redirect_to"))
     if conflicts:
         return templates.TemplateResponse(
             request,
             "resolve.html",
-            {"student": student, "source": source, "conflicts": conflicts},
+            {
+                "student": student,
+                "source": source,
+                "conflicts": conflicts,
+                "redirect_to": redirect_to,
+            },
         )
 
+    if redirect_to:
+        return RedirectResponse(redirect_to, status_code=303)
     return templates.TemplateResponse(
         request,
         "saved.html",
@@ -2044,15 +2542,19 @@ async def submit_confirm(
     )
 
 
-@app.post("/keys/{student_id}/{source_id}/resolve", response_class=HTMLResponse)
+@app.post(
+    "/keys/{student_id}/{source_id}/resolve", response_class=HTMLResponse, response_model=None
+)
 async def submit_resolve(
     request: Request,
     student_id: str,
     source_id: str,
     conn: sqlite3.Connection = Depends(get_conn),
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     """The parent's explicit choice per conflicting row from `resolve.html`. Always
-    writes an audit row, whichever way it was resolved."""
+    writes an audit row, whichever way it was resolved. Shared by both callers that
+    can land here -- submit_manual_answers and submit_confirm -- so `redirect_to`
+    (parent feedback 2026-08-30) only needs handling once."""
     student, source = _require_student_and_source(conn, student_id, source_id)
     data = parse_qs((await request.body()).decode())
     row_count = int(_get(data, "row_count", "0"))
@@ -2105,6 +2607,9 @@ async def submit_resolve(
         )
         resolved += 1
 
+    redirect_to = _safe_redirect_to(_get(data, "redirect_to"))
+    if redirect_to:
+        return RedirectResponse(redirect_to, status_code=303)
     return templates.TemplateResponse(
         request,
         "saved.html",
