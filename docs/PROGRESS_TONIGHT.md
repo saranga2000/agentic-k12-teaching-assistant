@@ -85,24 +85,36 @@ running count logged below when that item starts.
       (tests/test_grading_evaluator.py, tests/test_pipeline.py), all model calls
       faked (tests/fakes.py's new FakeTextModel). Full suite + browser suite + mypy
       all green throughout.
-- [ ] 6b. M6 LIVE portion -- NOT STARTED. Deliberately held for explicit
-      confirmation before spending real API budget or touching real household data,
-      rather than run automatically at the end of an already-large offline pass. See
-      "Questions for the morning" below.
+- [x] 6b. M6 LIVE smoke test -- run, on explicit confirmation, and committed.
+      `scripts/keyless_smoke_test.py`, read-only against the real household DB
+      (sqlite3 ro URI). Only 3 real eligible pages existed (not 5 -- real data is
+      just that limited, not a bug). 6 live calls total, well under the 10-request
+      cap, no errors, no retries. Results + an honest by-hand read (the raw 0/3
+      "answer-generation accuracy" number is misleading -- see the report) in
+      `evals/results/2026-08-31-2240-keyless-smoke.md`. Real finding along the way:
+      an apparent pre-existing typo in the household's own confirmed key for page
+      17 (unrelated to the evaluator).
 
-Live model calls spent so far: 0 / 5
+Live model calls spent: 6 / 10 (this run's own cap; done, not resuming)
 
-## Current item: none -- all 6 items' offline work is complete and committed.
+## Current item: none -- all 6 items, including the live smoke test, are complete
+and committed.
 
-Every numbered item (1-5 fully, 6's offline half) is done, tested, and committed.
-Nothing further to do without either (a) a decision on the live smoke test (6b), or
-(b) new direction. Not proceeding to 6b without explicit confirmation -- see below.
+Nothing further to do without new direction. Real remaining gaps, all named rather
+than guessed at, are in "Questions for the morning" below (tier 3, multi-part
+splitting, the evaluator's flat 1.0 confidence, a possible key typo on page 17 worth
+a parent checking) -- none of them block anything currently shipped, since the
+evaluator stays off by default either way.
 
 ## Questions for the morning
 
-1. **Run the M6 live smoke test (6b)?** Real household data (Summer Bridge pages
-   with both a confirmed key and real child captures on disk), real API spend,
-   capped at 5 pages. Held for explicit confirmation rather than run automatically.
+1. **Page 17's answer key looks wrong.** `answer_key_entries` for Summer Bridge
+   page 17, problem 1, is on file as "1 19/40 cups of broth per serving" --
+   checked by hand, the actual arithmetic (4.75 / 10) is 19/40 (0.475), not
+   1 19/40 (1.475). The child's real answer (0.475) was already marked correct
+   historically, so this was presumably already caught and worked around once
+   (a parent override, most likely) -- but the key entry on file itself still
+   reads wrong. Worth a look; found by the smoke test, not investigated further.
 2. **A more specific NeedsHumanCause for an evaluator-gated INCORRECT?** Currently
    reuses whatever cause `decide` already gave the row (ANSWER_DIFFERS_FROM_KEY or
    NO_KEY_FOR_PAGE) rather than a new cause naming the evaluator's own involvement.
@@ -114,4 +126,10 @@ Nothing further to do without either (a) a decision on the live smoke test (6b),
    structural change (one transcribed item -> one graded_problems row today, always)
    -- needs its own design pass, not a decision made solo tonight.
 4. **Vision (tier 3) is not implemented.** `should_escalate_to_vision` exists and is
-   tested; nothing calls it yet.
+   tested; nothing calls it yet. The smoke test's page 15 (a spatial cross-section
+   question, no image access) is a real, concrete example of exactly the case it's
+   for.
+5. **Every live call in the smoke test reported confidence 1.0**, including one
+   whose own two independent solves disagreed with each other. Worth checking once
+   a larger run exists whether `prompts/evaluate_text.md` needs a stronger nudge to
+   actually calibrate this value, rather than default to the ceiling.

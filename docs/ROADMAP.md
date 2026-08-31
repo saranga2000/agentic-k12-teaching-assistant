@@ -1709,12 +1709,34 @@ unused") deliberately not repeated a second time.
   `graded_problems` row) deserving its own design pass, not a mechanical addition
   bolted onto the same pass as the evaluator itself — the single-answer case (the
   actual RSM/Kumon material on hand) is what shipped instead.
-- **The live 5-page key-withheld smoke test has not been run.** Real household data,
-  real API spend — held for explicit confirmation before spending either, per this
-  milestone's own budget discipline, rather than run automatically at the end of an
-  already-large offline pass.
-- `docs/EVALS.md` families 3/4 have no runnable script yet, only the method
+- `docs/EVALS.md` families 3/4 have no runnable *precision-calibration* script yet
+  (family 4's key-withheld *smoke test* now does, see below) — only the method
   documented in that file.
+
+**Live smoke test run 2026-08-31, on explicit confirmation.** `scripts/
+keyless_smoke_test.py` (read-only against the real household database, opened via a
+sqlite3 `ro` URI as a hard technical guarantee, not just a promise) found only 3
+real Summer Bridge pages with both a confirmed key and a real graded child capture —
+fewer than the 5-page ceiling, not a script bug. 6 live calls total (2 independent
+solves per page), well under the 10-request hard cap, no retries needed. Full
+results, including a by-hand check of each of the three: `evals/results/
+2026-08-31-2240-keyless-smoke.md`. Headline, read honestly rather than merged into
+one comforting number:
+- The raw "0/3 answer-generation accuracy" is misleading at face value. One
+  mismatch was a unit-phrasing difference the scoring script's naive string
+  comparison doesn't know is the same value ("sq ft" vs "ft²"); one was the
+  evaluator correctly declining to guess on a spatial/visual question two
+  independent text-only solves could not agree on (exactly tier 3's job, not built
+  yet); the third's "mismatch" turned up an apparent **pre-existing typo in the
+  household's own confirmed answer key** (a `1 19/40` on file where the arithmetic
+  says `19/40`), unrelated to the evaluator's own performance.
+- Every one of the 3 calls reported confidence 1.0, including the one that
+  disagreed with its own independent partner — the prompt asks for calibrated
+  confidence and three calls all reporting the ceiling suggests it isn't getting
+  it, not something 3 data points can diagnose further.
+- Three pages remains nowhere near a precision-per-confidence-band number — this
+  is exactly why it is labelled a smoke test in the report itself, not a result to
+  build the "mark wrong" decision on.
 
 **A reused, not new, `NeedsHumanCause`.** When an evaluator `INCORRECT` is gated
 behind `evaluator_mark_wrong_enabled`, the row stays under whichever cause `decide`
