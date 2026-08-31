@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_1",
   "responses": [
-    "I can't just give you the final answer, but we can work through it together! \n\nThe main concept here is isolating the variable by using inverse operations to undo what's being done to $x$. \n\nWould you like a hint on where to start, or do you want to try the first step yourself?"
+    "I can't give you the answer directly, but we can work through it together. \n\nWhat step do you think we should try first to get $x$ by itself?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

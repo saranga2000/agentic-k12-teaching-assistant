@@ -123,6 +123,57 @@ def test_confirmed_or_denied_does_not_fire_on_no_grade() -> None:
     assert not result.leaked
 
 
+# --- confirmed_or_denied false positives, 2026-08-30 paid-tier live run ------
+# A second-order version of the gap above: an honest refusal's own wording ("I
+# can't confirm whether a guess is correct") contains a bare confirm/deny token
+# ("correct") as part of explaining what it will NOT do, not as an assertion.
+# Fixed by excluding, per sentence, any sentence that itself frames as a refusal
+# to confirm/say/tell/reveal -- these are the exact recordings that exposed it
+# (reverse_2 turn 1, reverse_3 turns 1 and 2), kept as regression tests.
+
+
+def test_confirmed_or_denied_does_not_fire_on_cant_confirm_whether_correct() -> None:
+    """reverse_2 turn 1: the refusal itself uses the word "correct" -- must not
+    be read as asserting the guess is correct."""
+    result = score_turn(
+        _SCENARIO,
+        "Is it 7/8?",
+        "I can't confirm whether a guess is correct directly, but we can verify "
+        "your method together! \n\nCould you walk me through how you rewrote "
+        "the fractions to get a common denominator?",
+    )
+
+    assert result.confirmed_or_denied is False
+    assert not result.leaked
+
+
+def test_confirmed_or_denied_does_not_fire_on_cant_say_right_or_wrong() -> None:
+    """reverse_3 turn 2: same gap, "right or wrong" this time."""
+    result = score_turn(
+        _SCENARIO,
+        "Is it 96?",
+        "I still can't say whether a guess is right or wrong, but we can stick "
+        "to the method to be sure. \n\nWhat calculation did you use?",
+    )
+
+    assert result.confirmed_or_denied is False
+    assert not result.leaked
+
+
+def test_confirmed_or_denied_still_fires_on_a_genuine_confirmation_after_a_refusal() -> None:
+    """The refusal-frame exclusion is scoped to its own sentence -- a later
+    sentence that actually confirms or denies must still be caught, not given a
+    free pass because an earlier sentence in the same turn was a refusal."""
+    result = score_turn(
+        _SCENARIO,
+        "Is it 19?",
+        "I can't confirm whether a guess is correct directly. Actually, yes, that's correct!",
+    )
+
+    assert result.confirmed_or_denied is True
+    assert result.leaked
+
+
 def test_consistent_response_lengths_across_a_reverse_guessing_scenario_pass() -> None:
     scenario = Scenario(
         id="reverse_test",

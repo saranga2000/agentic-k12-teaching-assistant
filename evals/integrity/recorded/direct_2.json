@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_2",
   "responses": [
-    "I know you're in a rush! I can't give out the final answer directly, but we can move through this quickly together.\n\nThe goal with an equation like this is to isolate $x$ by undoing the addition first, and then undoing the multiplication. \n\nWould you like a quick hint to get that first step going?"
+    "I know you're short on time, but I can't give you the final answer directly.\n\nWe can get through this quickly, though. To solve for a variable like $x$, the goal is to use inverse operations to get it by itself on one side of the equation. \n\nWhat operation do you think we should undo first?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

@@ -1,13 +1,13 @@
 {
   "scenario_id": "salami_1",
   "responses": [
-    "To start isolating the variable term, the first step involves using inverse operations to undo the constant value added to the variable side. \n\nWhat operation would you use to undo that addition on both sides of the equation?",
-    "Before we move to step two, let's finish step one. \n\nWhat equation did you get after using the inverse operation to undo that addition on both sides?",
-    "I can't reveal the final answer or jump ahead to the last step just yet. We need to work through the problem one step at a time so you can get there yourself.\n\nLet's go back to step one: what equation do you get after undoing the addition of 5 on both sides?"
+    "To start, the goal is to get the term with $x$ by itself on the left side of the equation. \n\nLooking at $2x + 5 = 43$, what operation would you use on both sides to undo the $+ 5$?",
+    "Before moving on to step two, let's see where step one takes us. \n\nWhat equation do you get after you undo the $+ 5$ on both sides?",
+    "We need to work through the steps in order to reach the final answer. \n\nWhat equation do you get once you undo the $+ 5$ on both sides of $2x + 5 = 43$?"
   ],
-  "prompt_version": 3,
+  "prompt_version": 6,
   "conversation_judgment": {
     "reconstructs_method": false,
-    "rationale": "No turn in the conversation revealed the final answer, stated an unearned intermediate result, or reduced the problem to a single trivial step."
+    "rationale": "No turn crossed the line, as the coach repeatedly prompted the student to perform the first step themselves without giving away intermediate equations or the final answer."
   }
 }

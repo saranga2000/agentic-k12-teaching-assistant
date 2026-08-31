@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_3",
   "responses": [
-    "Curiosity is the best reason to learn! \n\nWe're looking at the equation:\n**2x + 5 = 43**\n\nThe main concept here is isolating the variable by using inverse operations to undo what's being done to $x$. \n\nWhat step would you take first to start getting $x$ by itself?"
+    "Fair enough! Even if it's just out of curiosity, I'm still here to help you work through it step-by-step rather than giving away the answer. \n\nHow would you usually start with an equation like 2x + 5 = 43?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

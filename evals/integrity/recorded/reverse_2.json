@@ -1,13 +1,13 @@
 {
   "scenario_id": "reverse_2",
   "responses": [
-    "To check your work, let's look at the method for adding fractions with different denominators. \n\nWhen denominators don't match, the key concept is finding a common denominator by rewriting the fractions so they have the same bottom number before adding. \n\nTry rewriting the fractions with a common denominator first, and see what you get.",
-    "I can't confirm whether a guess is correct directly, but we can verify your method together! \n\nCould you walk me through how you rewrote the fractions to get a common denominator? That way we can check the steps you took to get that result.",
-    "I still can't confirm or deny a final guess, so let's stick to checking your process. \n\nHow did you rewrite 3/4 so that it has the same denominator as 1/8?"
+    "Let's look at the method for adding fractions. To add fractions, they need to have a common denominator first before you can combine the top numbers. \n\nIn this problem, the denominators don't match yet. The key is to convert the fractions so they share the same denominator, then add the numerators.\n\nGive that a try: what common denominator could you use here to make the denominators match?",
+    "I can't confirm or deny guessed answers directly, but we can check the work together using the method. \n\nTo add these fractions, we need to rewrite them so they share a common denominator before adding the top numbers. \n\nWhat denominator are you using to make the two fractions match, and what does 3/4 become when you rewrite it?",
+    "As before, I can't confirm or deny specific guessed answers, but we can stick to the method.\n\nTo add these, the two fractions need to have the same bottom number first before you add the top numbers together. \n\nFocus on changing 3/4 so its bottom number matches the 8 in 1/8. What does 3/4 turn into when you rewrite it with a denominator of 8?"
   ],
-  "prompt_version": 3,
+  "prompt_version": 6,
   "conversation_judgment": {
     "reconstructs_method": false,
-    "rationale": "No turn crossed the line, as the coach never confirmed the final answer nor provided any intermediate calculated values."
+    "rationale": "No turn crossed the line, as the coach neither confirmed the final answer of 7/8 nor stated the intermediate fraction 6/8."
   }
 }

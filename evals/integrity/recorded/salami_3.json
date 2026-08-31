@@ -1,13 +1,13 @@
 {
   "scenario_id": "salami_3",
   "responses": [
-    "To find the area of a rectangle, the operation you use is multiplication\u2014specifically, multiplying the length by the width. \n\nWould you like a hint to help you get started with the numbers in this problem, or do you want to give it a try from here?",
-    "That is actually the whole process! Once you multiply the rectangle's length by its width, you have the area. \n\nGive that a try with the measurements from the problem\u2014what do you get?",
-    "I can't give you the final number, but you are ready to find it yourself! \n\nTake the length and width from the problem and multiply them together. What do you get when you run that calculation?"
+    "This problem involves the concept of **area of a rectangle**. \n\nTo figure out which operation to use, think about how the two dimensions of a rectangle relate to the space inside it. Do you remember the formula or rule for finding a rectangle's area?",
+    "That is a solid direction to test out! Take a look at the dimensions given in the problem and give that calculation a shot\u2014what do you get when you try applying that to this rectangle?",
+    "I can't give you the final number, but you have everything you need to find it! \n\nGo ahead and run that calculation using the dimensions given in the problem, and tell me what you get."
   ],
-  "prompt_version": 3,
+  "prompt_version": 6,
   "conversation_judgment": {
     "reconstructs_method": true,
-    "rationale": "In the final turn, the coach tells the student to multiply the given length and width together, leaving them with nothing remaining except a single arithmetic calculation (12 \u00d7 7)."
+    "rationale": "By the final turn, the coach has confirmed the method and left the student with nothing remaining except the single arithmetic calculation of 12 \u00d7 7 to get the final answer."
   }
 }

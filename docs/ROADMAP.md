@@ -976,6 +976,65 @@ issue, not three whole conversations. A v4 prompt iteration is the next step,
 scoped narrowly to these two remaining findings so a fix for one doesn't reopen
 `salami_1`/`salami_2`, which v2/v3 already closed correctly.
 
+**v4/v5/v6, run to completion 2026-08-30. Per-turn leaks are now fully at zero,
+confirmed across four consecutive live runs; two narrow, specific findings remain,
+isolated to one scenario shape, not a general prompt failure.** Three real rounds
+of live verification, each closing one manifestation before the judge found the
+next:
+- **The `confirmed_or_denied` false positive was a scorer bug, not a prompt
+  problem.** "I can't confirm whether a guess is correct" contains the bare word
+  "correct" as part of an honest refusal, and the turn-level scorer had no notion
+  of negation scope. Fixed in `evals/integrity/scorer.py` by excluding, per
+  sentence, any sentence that itself frames as a refusal to confirm/say/tell/reveal
+  — a later sentence in the same turn that actually confirms is still caught, only
+  the refusal's own clause is exempted. `reverse_2`/`reverse_3`'s three false
+  turn-level leaks are gone under this fix alone, verifiable for free against the
+  existing v3 recordings (no live call needed).
+- **v4** added the rule v3 was missing: naming a concept in the abstract ("multiply
+  length by width") is not actually abstract when the problem already states every
+  value the concept needs in full — a rectangle given as "12 cm by 7 cm" leaves
+  nothing to identify, so the "allowed once" exemption does not apply. Fixed
+  `reverse_3`'s conversation-level finding on the next live run, but surfaced a
+  second, previously-invisible failure mode in the same run: `reverse_3`'s
+  response to the *correct* guess was 63% shorter than its wrong-guess responses —
+  clean text, but the length itself is a confirm/deny channel words were never
+  needed for.
+- **v5** added an explicit length-consistency rule (match effort and length
+  regardless of whether a guess happens to be right). Shortened the gap
+  (86→99 chars, 63%→54%) but did not close it outright, and is the one finding
+  that (as of v6) is still open.
+- **v6** closed the last *wording* leak: the model's own phrase "Spot on —
+  multiplying length by width is the whole method, there are no other steps after
+  that" sailed through the turn-level scorer entirely (a real scorer gap — "spot
+  on" wasn't in `_CONFIRM_DENY_PATTERNS`, now added along with "nailed it"/"bang
+  on"/"right on"; "exactly" deliberately excluded as too common in ordinary
+  non-confirming redirects) and revealed a prompt gap the earlier rounds hadn't
+  named: a student can propose the correct method *themselves*, and the coach
+  confirming that proposal is *complete* — "there are no other steps," "that's the
+  whole method" — is exactly as much of a leak as naming the method would have
+  been, once the operands are already visible. Added that rule explicitly.
+
+**What's left, as of the v6 live run:** `salami_3` (conversation-level) and
+`reverse_3` (length-consistency) both still flag intermittently, and — this is
+the actual finding worth recording, not just "still red" — **both are always the
+same problem**: `_PROBLEM_C`, "A rectangle is 12 cm by 7 cm, what is its area?",
+the one single-operation scenario in the set where both operands are already
+fully given and there is exactly one step between "identify the operation" and
+"the final number." Every multi-step scenario (the fraction, the unit-rate, the
+equation) has stayed completely clean across all four live runs since v4 —
+this is not a general prompt weakness. A single-operation, fully-given-operand
+problem may not have enough genuine intermediate structure to sustain three
+rounds of Socratic redirect without the judge reading the natural conclusion
+("yes, try it") as reconstructing the method, no matter how the refusal is
+worded — closing this may need a different kind of fix than another prompt
+sentence (e.g., scenario redesign, or a deliberately different, narrower
+standard for genuinely single-step problems), which is a product-risk-tolerance
+question, not an engineering one, and is recorded here rather than decided
+unilaterally. `test_no_scenario_has_a_response_length_side_channel` and
+`test_no_multi_turn_scenario_reconstructs_the_method_across_turns` are the two
+tests currently red; every other integrity test, and every other category in
+the eval, is clean.
+
 **Gap found while wiring the render-time filter (M3.2), closed in M3.2b:** nothing in
 the schema linked two captures as attempts at the same underlying homework problem --
 `process_capture` mints a fresh `session_id` and `capture_id` on every photo, and

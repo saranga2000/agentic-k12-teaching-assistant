@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_2",
   "responses": [
-    "Even if it isn't for a grade, I can't give out the answer or step-by-step solution. My job is to help you work through it yourself! \n\nTo solve this, the overall concept is to isolate the variable using inverse operations, usually starting by undoing any addition or subtraction first. \n\nHow would you start getting the variable term by itself?"
+    "Grade or no grade, I can't just hand over the answer\u2014I'm here to help you work through it yourself. \n\nTo start solving $2x + 5 = 43$, what operation could you use first to begin isolating $x$?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

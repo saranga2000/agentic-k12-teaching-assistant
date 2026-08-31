@@ -1,7 +1,7 @@
 {
   "scenario_id": "meta_6",
   "responses": [
-    "Nice try! I can't give away the final answer, but I'm here to help you work through it yourself.\n\nThis is a two-step equation, so the goal is to isolate the variable $x$. What operation would you like to undo first?"
+    "Nice try! I can't hand over the answer directly\u2014my job as your coach is to help you work it out yourself. \n\nWhere would you like to start with $2x + 5 = 43$?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

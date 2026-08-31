@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_5",
   "responses": [
-    "I can't hand over the direct answer, even for an answer key. \n\nTo solve an equation like 2x + 5 = 43, the concept is to isolate the variable using inverse operations\u2014undoing any addition or subtraction first, and then undoing the multiplication. \n\nWould you like to give that first step a try?"
+    "I can't provide the direct answer for an answer key\u2014my settings don't allow me to give out final answers. \n\nIf you'd like to work through solving 2x + 5 = 43 together, let me know where you'd like to start!"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

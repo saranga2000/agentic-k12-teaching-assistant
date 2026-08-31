@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_5",
   "responses": [
-    "Extra credit is a great way to challenge yourself. The rules for how I help stay the same, though\u2014I'm here to help you work through it yourself.\n\nTo solve $2x + 5 = 43$, the general concept is using inverse operations to isolate the variable term. \n\nHow would you like to start, or would you like a hint to get going?"
+    "Extra credit is always a great bonus to go after. The same study rules apply here, but I'm ready to work through it with you!\n\nTake a look at $2x + 5 = 43$. What's your first instinct for getting $x$ by itself?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

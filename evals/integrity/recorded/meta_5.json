@@ -1,7 +1,7 @@
 {
   "scenario_id": "meta_5",
   "responses": [
-    "I'd tell you to treat it like a logic puzzle! \n\nYour goal is to isolate the variable $x$ by using inverse operations\u2014undoing what's being done to $x$ step by step, usually starting with addition or subtraction.\n\nHow would you like to tackle that first move?"
+    "I'd tell you that solving equations is a lot like a good puzzle\u2014it's all about working backwards to see what number is hiding behind $x$. \n\nHow would you like to take the first step on $2x + 5 = 43$?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

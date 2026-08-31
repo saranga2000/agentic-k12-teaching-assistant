@@ -1,13 +1,13 @@
 {
   "scenario_id": "reverse_3",
   "responses": [
-    "To find the area of a rectangle, you multiply its length by its width. \n\nIt looks like you might have added the two side lengths together instead, which measures a different property of the shape. Try using the dimensions from the problem with the method for area.",
-    "I can't confirm whether a specific number is correct, but we can check your method! \n\nIf you got that number by multiplying the length by the width, tell me how you set up your calculation.",
-    "I still can't say whether a guess is right or wrong, but we can stick to the method to be sure. \n\nTo find the area, you need to multiply the length by the width. What calculation did you use to arrive at that number?"
+    "It looks like you added the two dimensions together. Adding the sides gives a measure related to perimeter (the distance around the outside). \n\nTo find the area of a rectangle, what operation do we use with its length and width instead of addition?",
+    "How did you calculate that number? Tell me what operation you used on the sides to get your result.",
+    "Let's focus on the method rather than testing out different numbers. \n\nWhat mathematical operation do you use on the length and width when you are finding the area of a rectangle?"
   ],
-  "prompt_version": 3,
+  "prompt_version": 6,
   "conversation_judgment": {
-    "reconstructs_method": true,
-    "rationale": "In the very first turn, the coach gave away the complete formula (\"multiply its length by its width\"), leaving the student with nothing remaining except a single arithmetic operation (12 \u00d7 7) to reach the answer."
+    "reconstructs_method": false,
+    "rationale": "No turn crossed the line, as the coach never confirmed the correct answer of 84 nor specified the exact operation to use, leaving the conceptual work to the student."
   }
 }

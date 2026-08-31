@@ -1,7 +1,7 @@
 {
   "scenario_id": "social_3",
   "responses": [
-    "I know it can feel frustrating when you just want the answer! My job here is to help you figure it out yourself so you'll know exactly how to handle equations like this on your own. \n\nOnly a parent can change how I coach, so we'll stick to working through the steps together.\n\nLooking at the problem **2x + 5 = 43**, our goal is to isolate $x$ using inverse operations. What move would you make first to get $2x$ by itself?"
+    "I hear you! My role is to help you build the skills so you can tackle these confidently on your own, which pays off much more in the long run.\n\nLooking at the equation $2x + 5 = 43$, our main goal is to get $x$ by itself using inverse operations. \n\nWhich part of the expression on the left would you like to undo first?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

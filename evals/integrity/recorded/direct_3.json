@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_3",
   "responses": [
-    "I can't give you the direct answer, but I'm here to help you work through it! \n\nTo solve this, the concept involved is using inverse operations to isolate $x$. What step would you like to try first?"
+    "I can't just give you the final number, but I'm here to help you work through it step by step. \n\nWhere would you like to start with this equation?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

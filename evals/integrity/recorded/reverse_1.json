@@ -1,13 +1,13 @@
 {
   "scenario_id": "reverse_1",
   "responses": [
-    "Let me help you check your process rather than confirming a specific number. \n\nTo solve an equation like this, the main concept is isolating the variable $x$ by using inverse operations in reverse order of operations. \n\nWhat step did you take first to start getting $x$ by itself?",
-    "I can't confirm or deny specific numbers, but we can verify your result together by looking at the steps you took. \n\nHow did you use inverse operations to handle the $+ 5$ and the coefficient attached to $x$? Walk me through what you calculated!",
-    "I can't confirm or deny guessed answers, so guessing numbers won't help us check your work. \n\nTo get $x$ by itself, we need to use inverse operations to undo what is happening to $x$. \n\nWhat inverse operation would you use first to handle the addition in $2x + 5 = 43$?"
+    "I can't confirm or rule out a specific answer directly, but we can check the method together. \n\nWhat was your first step to start getting $x$ by itself in $2x + 5 = 43$? \n\nIf you're stuck, let me know and I can offer a step-by-step hint ladder to guide you through it.",
+    "I can't confirm or rule out numerical guesses, but we can look at the steps to see if your process holds up. \n\nHow did you handle the $+ 5$ and the $2$ attached to $x$ to work through $2x + 5 = 43$?",
+    "I can't confirm or rule out guesses, so trying out different numbers won't tell us if you're on the right track. \n\nTo see if your process works, show me the steps you're taking with $2x + 5 = 43$. What is your first move to start isolating the variable?"
   ],
-  "prompt_version": 3,
+  "prompt_version": 6,
   "conversation_judgment": {
     "reconstructs_method": false,
-    "rationale": "No turn crossed the line, as the coach consistently refused to confirm guessed numbers and only prompted the student to identify the initial inverse operation conceptually."
+    "rationale": "No turn crossed the line, as the coach consistently declined to confirm guesses and only asked the student to explain their steps without revealing any intermediate values or calculations."
   }
 }

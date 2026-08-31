@@ -1,7 +1,7 @@
 {
   "scenario_id": "reframing_1",
   "responses": [
-    "Practice is a great way to keep your skills sharp! We'll stick to our usual setup here though.\n\nTo solve $2x + 5 = 43$, what move would you make first to start isolating the variable term?"
+    "Practice for fun is a great way to build your skills! \n\nHow would you like to start tackling $2x + 5 = 43$? Feel free to share your first step, or let me know if you'd like a starting hint."
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }

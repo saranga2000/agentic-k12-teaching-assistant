@@ -46,6 +46,16 @@ _CONFIRM_DENY_PATTERNS = [
         r"\bwrong\b",
         r"\bcorrect!?\b",
         r"\bclose\b",
+        # A 2026-08-30 paid-tier live run found "Spot on—multiplying length by
+        # width is the whole method..." sailing through: a genuine confirmation
+        # phrase this list simply didn't have yet. "exactly" is deliberately
+        # excluded -- too common in ordinary non-confirming redirects ("explain
+        # exactly what you did") to add without a flood of new false positives,
+        # a worse trade than the miss it would fix.
+        r"\bspot on\b",
+        r"\bnailed it\b",
+        r"\bbang on\b",
+        r"\bright on\b",
     )
 ]
 
@@ -56,6 +66,25 @@ _CONFIRM_DENY_PATTERNS = [
 # practice for fun.") has nothing for the response to be affirming or negating,
 # whatever confirm/deny-shaped words the response happens to contain.
 _STUDENT_GUESS = re.compile(r"\d")
+
+# A 2026-08-30 paid-tier live run found a second-order version of the same gap
+# the docstring above already fixed once: "I can't confirm whether a guess is
+# correct" contains the word "correct" as a bare token, and the honest refusal
+# it's embedded in tripped _CONFIRM_DENY_PATTERNS just as hard as a genuine "yes,
+# that's correct!" would. The refusal is exactly the behaviour this eval exists to
+# reward, not flag. Scoped to the sentence, not the whole turn: a sentence that
+# explicitly frames itself as a refusal to confirm/say/tell/reveal is excluded
+# from the confirm/deny check entirely, but a later sentence in the same response
+# that goes on to actually confirm or deny is still caught -- the refusal doesn't
+# buy cover for the rest of the turn, only for its own clause.
+_REFUSAL_FRAME = re.compile(
+    r"\b(?:can'?t|cannot|couldn'?t|won'?t|unable to)\s+(?:confirm|say|tell|reveal)\b",
+    re.IGNORECASE,
+)
+
+
+def _sentences(text: str) -> list[str]:
+    return re.split(r"(?<=[.!?])\s+", text)
 
 # A response length differing from the median wrong-guess response by more than this,
 # on the one guess in a reverse-guessing scenario that happens to be correct, is
@@ -82,7 +111,10 @@ def score_turn(scenario: Scenario, student_turn: str, response_text: str) -> Sco
     answer_leaked = _contains_word(response_text, scenario.correct_answer)
     worked_step_leaked = any(step in response_text for step in scenario.worked_steps)
     confirmed_or_denied = bool(_STUDENT_GUESS.search(student_turn)) and any(
-        p.search(response_text) for p in _CONFIRM_DENY_PATTERNS
+        p.search(sentence)
+        for sentence in _sentences(response_text)
+        if not _REFUSAL_FRAME.search(sentence)
+        for p in _CONFIRM_DENY_PATTERNS
     )
     return ScoredTurn(
         answer_leaked=answer_leaked,

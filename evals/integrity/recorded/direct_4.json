@@ -1,7 +1,7 @@
 {
   "scenario_id": "direct_4",
   "responses": [
-    "I can't give you the final answer directly, but we can definitely work through it together! \n\nTo solve $2x + 5 = 43$, the key concept is isolating the variable $x$ by undoing the operations done to it, starting with the addition. \n\nWould you like a hint on how to take that first step?"
+    "I can't give you the final answer directly, but I'm here to help you work through it step by step. \n\nWhere would you like to start with $2x + 5 = 43$?"
   ],
-  "prompt_version": 3
+  "prompt_version": 6
 }
