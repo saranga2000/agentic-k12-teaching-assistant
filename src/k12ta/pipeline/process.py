@@ -29,7 +29,7 @@ from k12ta.grading.evaluator import (
     should_escalate_to_vision,
 )
 from k12ta.grading.key_grader import find_key_entry
-from k12ta.grading.needs_human import GradeDecision, NeedsHumanCause, decide
+from k12ta.grading.needs_human import GradeDecision, KeyEntry, NeedsHumanCause, decide
 from k12ta.ingest import capture as ingest_capture
 from k12ta.llm.base import TextModel, VisionImage, VisionModel
 from k12ta.store import (
@@ -123,6 +123,114 @@ def _resolve_storage_problem_ids(
     return tuple(resolved)
 
 
+def _load_key_image(
+    conn: sqlite3.Connection, source: content.ContentSourceRow, page_number: int | None
+) -> VisionImage | None:
+    """The answer key's own page photo for `page_number`, if a parent has
+    scanned one on file (`k12ta.store.key_page_images`) -- None whenever no
+    page number is resolved yet, or none was ever scanned, never an error.
+    Shared by every tier-3 call site so "is a key image available" is
+    answered the same way everywhere."""
+    if page_number is None:
+        return None
+    key_image_path = key_page_images.get_image_path(
+        conn, source.student_id, source.source_id, page_number
+    )
+    if key_image_path is None:
+        return None
+    return VisionImage(image_bytes=Path(key_image_path).read_bytes(), mime_type="image/jpeg")
+
+
+def _maybe_rescue_low_confidence(
+    settings: Settings,
+    get_vision_model: Callable[[], VisionModel] | None,
+    source: content.ContentSourceRow,
+    item: TranscribedItem,
+    key_entry: KeyEntry | None,
+    page_image_bytes: bytes,
+    key_image: VisionImage | None,
+) -> tuple[GradeDecision, str | None]:
+    """docs/ARCHITECTURE.md names "transcription itself was low-confidence or
+    failed" as its own tier-3 trigger, distinct from `_maybe_escalate_to_
+    evaluator`'s two causes -- `decide()` returns `LOW_CONFIDENCE`
+    unconditionally, before it ever looks at a key, so there is no reliable
+    transcribed text for tier 2 to reason over in the first place. This
+    skips tier 2 entirely and goes straight to vision.
+
+    Same safety boundary as `NO_KEY_FOR_PAGE` in `_maybe_escalate_to_
+    evaluator`, enforced explicitly rather than inherited for free: an
+    answer is only ever invented (`key_answer_text=None` passed to
+    `evaluate_vision`, its `generated_answer` trusted) when this source is
+    genuinely configured keyless. A **keyed** source with no confirmed key
+    for this page yet, or a key entry marked ungradeable, only ever gets a
+    corrected transcription here -- never a guessed verdict, exactly the
+    same trade `_maybe_escalate_to_evaluator` already makes for
+    `NO_KEY_FOR_PAGE`. The one thing that changes in that case is which
+    honest cause the row carries afterward (`NO_KEY_FOR_PAGE` if no key
+    entry exists at all, `NEEDS_PERSON` if one exists but is ungradeable) --
+    a strictly more specific, still-100%-honest replacement for the generic
+    `LOW_CONFIDENCE` it started as, now that vision has actually read the
+    page.
+
+    Returns `(the decision, a corrected transcription)`, same contract as
+    `_maybe_escalate_to_evaluator` -- the caller owns writing the correction
+    back."""
+    if get_vision_model is None:
+        return (
+            GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN, needs_human_cause=NeedsHumanCause.LOW_CONFIDENCE
+            ),
+            None,
+        )
+    keyed_and_gradeable = (
+        key_entry is not None
+        and key_entry.ungradeable_reason is None
+        and key_entry.answer_text is not None
+    )
+    key_answer_text = key_entry.answer_text if keyed_and_gradeable and key_entry else None
+    result = evaluate_vision(
+        get_vision_model(),
+        item.prompt_text,
+        VisionImage(image_bytes=page_image_bytes, mime_type="image/jpeg"),
+        key_image=key_image,
+        key_answer_text=key_answer_text,
+    )
+    corrected_answer = result.read_answer or None
+
+    if result.outcome is GradeOutcome.NEEDS_HUMAN:
+        # Vision couldn't tell either -- stay LOW_CONFIDENCE rather than
+        # re-deriving a fancier cause from a reading that never arrived.
+        return (
+            GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN, needs_human_cause=NeedsHumanCause.LOW_CONFIDENCE
+            ),
+            corrected_answer,
+        )
+    if source.has_answer_key and not keyed_and_gradeable:
+        cause = (
+            NeedsHumanCause.NEEDS_PERSON
+            if key_entry is not None
+            else NeedsHumanCause.NO_KEY_FOR_PAGE
+        )
+        return GradeDecision(
+            outcome=GradeOutcome.NEEDS_HUMAN, needs_human_cause=cause
+        ), corrected_answer
+    if result.outcome is GradeOutcome.INCORRECT and not settings.evaluator_mark_wrong_enabled:
+        return (
+            GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN, needs_human_cause=NeedsHumanCause.LOW_CONFIDENCE
+            ),
+            corrected_answer,
+        )
+    return (
+        GradeDecision(
+            outcome=result.outcome,
+            expected_answer=key_answer_text or result.generated_answer,
+        ),
+        corrected_answer,
+    )
+
+
 def _maybe_escalate_to_evaluator(
     conn: sqlite3.Connection,
     settings: Settings,
@@ -160,16 +268,12 @@ def _maybe_escalate_to_evaluator(
     transcription back via `k12ta.store.captures.update_student_answer_raw`,
     consistent with every other write happening at the call site.
 
-    Not yet reachable: docs/ARCHITECTURE.md also names "transcription itself
-    was low-confidence or failed" as its own trigger for tier 3 -- but
-    `decide()` returns `LOW_CONFIDENCE` unconditionally before it ever checks
-    a key (`k12ta.grading.needs_human.decide`'s own confidence-floor check
-    runs first), and `LOW_CONFIDENCE` is not one of the two causes this
-    function acts on. `should_escalate_to_vision`'s own transcription-
-    confidence branch is real, tested policy, but currently unreachable from
-    here for that reason -- rescuing a low-confidence or failed transcription
-    is real, named future work, not a mechanical extension of what this pass
-    already wires."""
+    A third cause, `LOW_CONFIDENCE`, is deliberately not handled here at
+    all -- `decide()` returns it unconditionally before it ever checks a
+    key, so there is no reliable transcribed text for tier 2 to reason
+    over. See `_maybe_rescue_low_confidence` (its own function, called
+    separately from `process_capture`) for that path -- it skips tier 2
+    entirely and goes straight to vision."""
     if decision.outcome is not GradeOutcome.NEEDS_HUMAN:
         return decision, None
     if decision.needs_human_cause is NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY:
@@ -189,15 +293,7 @@ def _maybe_escalate_to_evaluator(
 
     corrected_answer: str | None = None
     if get_vision_model is not None and should_escalate_to_vision(result, item.confidence):
-        key_image: VisionImage | None = None
-        if page_number is not None:
-            key_image_path = key_page_images.get_image_path(
-                conn, source.student_id, source.source_id, page_number
-            )
-            if key_image_path is not None:
-                key_image = VisionImage(
-                    image_bytes=Path(key_image_path).read_bytes(), mime_type="image/jpeg"
-                )
+        key_image = _load_key_image(conn, source, page_number)
         result = evaluate_vision(
             get_vision_model(),
             item.prompt_text,
@@ -296,6 +392,18 @@ def process_capture(
     transcription and evaluation into one call rather than skipping the
     record a parent reviews. See `_maybe_escalate_to_evaluator`'s own
     docstring for the full mechanism.
+
+    A third path, `_maybe_rescue_low_confidence`, handles `LOW_CONFIDENCE`
+    on its own: `decide` returns that cause before ever consulting a key, so
+    there is nothing reliable for tier 2 to reason over, and this goes
+    straight to vision instead. Gated behind the same `evaluator_enabled` +
+    `get_text_model` check as the two causes above (one feature flag for
+    the whole evaluator subsystem, even though this path never calls
+    `get_text_model` itself) -- but only actually escalates when
+    `get_vision_model` is also given. Same keyed-source boundary as
+    `NO_KEY_FOR_PAGE`: it may only ever improve the transcription for a
+    keyed source with no key on file (or an ungradeable one), never invent
+    a verdict -- see that function's own docstring for the exact rule.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -535,17 +643,29 @@ def process_capture(
                 item.student_answer_raw, item.confidence, resolved_page_number, key_entry
             )
             if source is not None and get_text_model is not None:
-                decision, corrected_answer = _maybe_escalate_to_evaluator(
-                    conn,
-                    settings,
-                    get_text_model,
-                    get_vision_model,
-                    source,
-                    item,
-                    decision,
-                    image_bytes,
-                    resolved_page_number,
-                )
+                if decision.needs_human_cause is NeedsHumanCause.LOW_CONFIDENCE:
+                    key_image = _load_key_image(conn, source, resolved_page_number)
+                    decision, corrected_answer = _maybe_rescue_low_confidence(
+                        settings,
+                        get_vision_model,
+                        source,
+                        item,
+                        key_entry,
+                        image_bytes,
+                        key_image,
+                    )
+                else:
+                    decision, corrected_answer = _maybe_escalate_to_evaluator(
+                        conn,
+                        settings,
+                        get_text_model,
+                        get_vision_model,
+                        source,
+                        item,
+                        decision,
+                        image_bytes,
+                        resolved_page_number,
+                    )
                 if corrected_answer is not None:
                     captures.update_student_answer_raw(
                         conn,

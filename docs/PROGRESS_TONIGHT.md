@@ -97,29 +97,33 @@ running count logged below when that item starts.
 
 Live model calls spent: 6 / 10 (this run's own cap; done, not resuming)
 
-## Current item: none from the original 6 -- new work order 2026-08-31: "Do M5, then
-complete M6 (vision only, splitting explicitly deferred), then a full manual test."
+## Current item: overnight work order 2026-08-31, run unattended (user asleep,
+explicit "don't ask, don't stop" instruction) -- "do the rest of M6 (the
+LOW_CONFIDENCE rescue + the family 3/4 eval script), then M7."
 
 - [x] M5 (correction audit trail, decided-verdict correction path, child notice,
       fixture promotion) -- commits `104b212`, `3d915bc`. Full detail in
       docs/ROADMAP.md's M5 section's two new "Shipped 2026-08-31" notes.
-- [x] M6 tier 3 (vision evaluator) -- commits `19c62ef` (offline core:
-      VisionModel.generate_multi, evaluate_vision, prompts/evaluate_vision.md)
-      and the pipeline-wiring commit right after it (escalation in
-      _maybe_escalate_to_evaluator, transcription correction, live k12ta.web.app
-      wiring via get_vision_evaluator_model). Splitting explicitly out of scope
-      for this pass, per the user's own choice when asked. One real gap found
-      while wiring, not guessed past: the "low-confidence transcription" trigger
-      for tier 3 is currently unreachable from the live pipeline (decide()
-      returns LOW_CONFIDENCE before the two causes tier 3 escalates from can ever
-      fire) -- named in docs/ROADMAP.md's M6 section, not silently downgraded.
-- [ ] Full manual test, next.
+- [x] M6 tier 3 (vision evaluator), first pass -- commits `19c62ef`, `5021546`.
+      Splitting explicitly out of scope, per the user's own choice when asked.
+- [x] M6's LOW_CONFIDENCE rescue path -- `k12ta.pipeline.process._maybe_rescue_
+      low_confidence`, closing the gap found while wiring tier 3 the first time.
+      Same keyed-source never-invent-a-verdict boundary as NO_KEY_FOR_PAGE,
+      enforced explicitly. 8 new pipeline tests. Full detail in docs/ROADMAP.md's
+      M6 section.
+- [ ] Family 3/4 eval precision script -- in progress. Will be built and tested
+      offline with fakes; explicitly will NOT be run live against the real API
+      unattended -- this codebase's own standing rule (scripts/keyless_smoke_
+      test.py's own gate) is that live model spend happens only on an explicit,
+      present confirmation, and a blanket "don't ask permission" for this batch
+      of work doesn't override that specific, narrower rule.
+- [ ] M7 (attempt flow: 3-attempt cap + resubmit confirmation; report cards) --
+      next after the eval script.
 
-Nothing further to do without new direction. Real remaining gaps, all named rather
-than guessed at, are in "Questions for the morning" below (multi-part splitting, the
-evaluator's flat 1.0 confidence, a possible key typo on page 17 worth a parent
-checking) -- none of them block anything currently shipped, since the evaluator
-stays off by default either way.
+Real remaining gaps, all named rather than guessed at, are in "Questions for the
+morning" below (multi-part splitting, the evaluator's flat 1.0 confidence, a
+possible key typo on page 17 worth a parent checking) -- none of them block
+anything currently shipped, since the evaluator stays off by default either way.
 
 ## Questions for the morning
 

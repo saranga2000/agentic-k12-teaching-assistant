@@ -1754,16 +1754,23 @@ route reaches it unless wired) — wired into `k12ta.web.app`'s live capture rou
 `get_vision_evaluator_model`, its own singleton, separate from `get_transcriber`'s
 internal vision model.
 
-**Not reachable yet, found while wiring tier 3, not guessed at:** `docs/
-ARCHITECTURE.md` also names "transcription itself was low-confidence or failed" as
-its own trigger for tier 3 — but `k12ta.grading.needs_human.decide` returns
-`LOW_CONFIDENCE` unconditionally before it ever checks a key, and `LOW_CONFIDENCE`
-is not one of the two causes `_maybe_escalate_to_evaluator` acts on (`ANSWER_
-DIFFERS_FROM_KEY`, `NO_KEY_FOR_PAGE`-keyless). `should_escalate_to_vision`'s own
-transcription-confidence branch is real, tested policy, but currently unreachable
-from the live pipeline for that reason. Rescuing a low-confidence or failed
-transcription — the case that turns a dead end into an attempt — is real, named
-future work, not something this pass silently downgraded.
+**The `LOW_CONFIDENCE` rescue, shipped 2026-08-31, closing the gap above.**
+`k12ta.pipeline.process._maybe_rescue_low_confidence` is a third, separate path,
+entered only when `decide()`'s own cause is `LOW_CONFIDENCE` — it skips tier 2
+entirely (there is nothing reliable for text reasoning to work from) and sends the
+page photo straight to vision. Same keyed-source boundary as `NO_KEY_FOR_PAGE`,
+enforced explicitly here rather than inherited for free: a verdict is only ever
+produced when a real, gradeable key answer is on file, or the source is genuinely
+configured keyless. A keyed source with no key yet (or an ungradeable one) only
+ever gets a **corrected transcription** from this path, plus a strictly more
+specific, still-honest cause in place of the generic `LOW_CONFIDENCE` it started as
+(`NO_KEY_FOR_PAGE` or `NEEDS_PERSON`) — never a guessed verdict. This is exactly
+"turns a dead end into an attempt": a page that was previously stuck at "I could
+not read your writing," with no path forward until a parent typed the answer by
+hand, can now be read from its own pixels first. 8 new pipeline-level tests cover
+every branch: keyless rescue to a real verdict, no-vision-model no-op, both keyed
+no-key-yet shapes (no entry, ungradeable entry), a real key match, vision still
+failing, and the INCORRECT/mark-wrong gate.
 
 **Not done, explicitly, not guessed at:**
 - **Multi-part sub-item splitting (`5a`…`5g`) is not implemented.** This is a real

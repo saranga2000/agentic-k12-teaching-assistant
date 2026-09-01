@@ -1810,3 +1810,259 @@ def test_vision_sends_only_the_page_image_when_no_key_image_is_on_file(tmp_path:
     )
 
     assert vision_model.seen_image_counts == [1]
+
+
+# --- M6 tier 3's LOW_CONFIDENCE rescue path ----------------------------------
+
+
+def _low_confidence_transcription(
+    answer: str = "19", confidence: float = 0.5
+) -> TranscriptionResult:
+    return TranscriptionResult(
+        items=(
+            TranscribedItem(
+                problem_id="1",
+                prompt_text="Solve for x: 2x + 5 = 43",
+                student_answer_raw=answer,
+                confidence=confidence,
+            ),
+        ),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+
+
+def test_low_confidence_keyless_source_rescued_by_vision(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="l9"))
+    text_model = FakeTextModel(replies=[])  # never called for LOW_CONFIDENCE
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("correct", 0.95, read_answer="19", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert text_model.request_count == 0
+    assert vision_model.request_count == 1
+    capture_id = graded[0].capture_id
+    problems = captures.list_problems_for_capture(conn, student_id, capture_id)
+    assert problems[0].student_answer_raw == "19"
+
+
+def test_low_confidence_no_vision_model_stays_low_confidence(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="l9"))
+    text_model = FakeTextModel(replies=[])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.LOW_CONFIDENCE.value
+
+
+def test_low_confidence_keyed_source_with_no_key_only_corrects_transcription(
+    tmp_path: Path,
+) -> None:
+    """The keyed-source safety boundary, entered from LOW_CONFIDENCE instead
+    of NO_KEY_FOR_PAGE -- vision may improve the reading, but must never
+    invent a verdict for a source the parent said they'd supply answers
+    for."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # has_answer_key=True, no key yet
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="l9"))
+    text_model = FakeTextModel(replies=[])
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("correct", 0.95, read_answer="19", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+    capture_id = graded[0].capture_id
+    problems = captures.list_problems_for_capture(conn, student_id, capture_id)
+    assert problems[0].student_answer_raw == "19"  # transcription still improved
+
+
+def test_low_confidence_keyed_source_with_ungradeable_key_only_corrects_transcription(
+    tmp_path: Path,
+) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text=None,
+            ungradeable_reason="answers_vary",
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="l9"))
+    text_model = FakeTextModel(replies=[])
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("correct", 0.95, read_answer="19", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.NEEDS_PERSON.value
+
+
+def test_low_confidence_keyed_source_with_a_real_key_judges_against_it(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="quadrilateral",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(
+        result=_low_confidence_transcription(answer="rombus")  # misread "rhombus"
+    )
+    text_model = FakeTextModel(replies=[])
+    vision_model = FakeVisionModel(replies=[_vision_reply("correct", 0.95, read_answer="rhombus")])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert vision_model.seen_prompts[0].count("quadrilateral") >= 1
+    assert "do not solve the problem yourself" in vision_model.seen_prompts[0].lower()
+
+
+def test_low_confidence_vision_still_cannot_tell_stays_low_confidence(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="???"))
+    text_model = FakeTextModel(replies=[])
+    vision_model = FakeVisionModel(replies=[_vision_reply("needs_human", 0.0)])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.LOW_CONFIDENCE.value
+
+
+def test_low_confidence_incorrect_gated_behind_mark_wrong(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)  # mark_wrong stays False
+    transcriber = FakeTranscriber(result=_low_confidence_transcription(answer="21"))
+    text_model = FakeTextModel(replies=[])
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("incorrect", 0.95, read_answer="21", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.LOW_CONFIDENCE.value
+    capture_id = graded[0].capture_id
+    problems = captures.list_problems_for_capture(conn, student_id, capture_id)
+    assert problems[0].student_answer_raw == "21"  # transcription still corrected
