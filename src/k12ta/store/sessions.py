@@ -157,6 +157,26 @@ def update_graded_problem_after_identity_resolution(
     conn.commit()
 
 
+def get_graded_problem(
+    conn: sqlite3.Connection,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+) -> GradedProblemRow | None:
+    """One graded_problems row by its full key -- used by k12ta.keys.app to read
+    a row's state before correcting it, so the caller can build a
+    k12ta.store.verdict_correction_audit.VerdictCorrectionAuditRow with a real
+    before-value rather than guessing one."""
+    cur = conn.execute(
+        "SELECT * FROM graded_problems WHERE student_id = ? AND session_id = ? "
+        "AND capture_id = ? AND problem_id = ?",
+        (student_id, session_id, capture_id, problem_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else _row_to_graded(row)
+
+
 def apply_human_verdict(
     conn: sqlite3.Connection,
     *,
@@ -182,6 +202,43 @@ def apply_human_verdict(
         """
         UPDATE graded_problems
         SET outcome = :outcome, needs_human_cause = NULL, needs_human_detail = NULL
+        WHERE student_id = :student_id AND session_id = :session_id
+            AND capture_id = :capture_id AND problem_id = :problem_id
+        """,
+        {
+            "student_id": student_id,
+            "session_id": session_id,
+            "capture_id": capture_id,
+            "problem_id": problem_id,
+            "outcome": outcome,
+        },
+    )
+    conn.commit()
+
+
+def correct_decided_verdict(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+    outcome: str,
+) -> None:
+    """docs/ROADMAP.md's M5: a parent unilaterally correcting a verdict the
+    grader already called (correct/partially_correct/incorrect) and the child
+    was already shown -- found wrong later, without the child ever disputing
+    it. Distinct from apply_human_verdict (that row was never decided at all)
+    and from overturn_dispute_to_correct (that path only ever moves incorrect
+    -> correct, and only in response to a filed dispute): this is the general
+    case, any verdict to any other verdict, with no dispute involved. The
+    caller (k12ta.keys.app) is responsible for the audit row -- see
+    k12ta.store.verdict_correction_audit -- and for deciding whether a child
+    notice is warranted, same split as every other write path in this
+    module."""
+    conn.execute(
+        """
+        UPDATE graded_problems SET outcome = :outcome
         WHERE student_id = :student_id AND session_id = :session_id
             AND capture_id = :capture_id AND problem_id = :problem_id
         """,

@@ -1,0 +1,19 @@
+{# docs/ROADMAP.md's M5: a parent correcting a verdict the grader already
+   called, found wrong later, with no dispute involved -- k12ta.keys.app.
+   submit_verdict_correction. Included once per graded item, from
+   evaluations.html's three "Graded ..." sections; `item` and `exclude`
+   (the item's own current outcome, so its own button isn't offered) are set
+   by the caller. Collapsed behind <details>, same progressive-disclosure
+   pattern as this page's "Wrong page?" control, so three long graded lists
+   don't each grow a permanently-visible form per row. #}
+<details class="correction-control">
+  <summary>Fix this grade</summary>
+  <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/correct-verdict" class="verdict-form">
+    <input type="hidden" name="session_id" value="{{ item.session_id }}">
+    <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
+    <input type="hidden" name="problem_id" value="{{ item.problem_id }}">
+    {% if exclude != "correct" %}<button type="submit" name="verdict" value="correct">Actually correct</button>{% endif %}
+    {% if exclude != "partially_correct" %}<button type="submit" name="verdict" value="partially_correct">Actually partially correct</button>{% endif %}
+    {% if exclude != "incorrect" %}<button type="submit" name="verdict" value="incorrect">Actually incorrect</button>{% endif %}
+  </form>
+</details>

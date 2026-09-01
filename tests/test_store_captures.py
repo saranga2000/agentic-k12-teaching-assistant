@@ -132,3 +132,20 @@ def test_rename_problem_id_refuses_a_collision_with_a_real_problem() -> None:
     # Refused, not partially applied.
     problems = {p.problem_id for p in captures.list_problems_for_capture(conn, "s-marcus", "c-1")}
     assert problems == {"_ambiguous_0", "4"}
+
+
+def test_get_problem_returns_the_row() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
+
+    row = captures.get_problem(conn, "s-marcus", "c-1", "1")
+
+    assert row is not None
+    assert row.student_answer_raw == "19"
+
+
+def test_get_problem_returns_none_for_an_unknown_problem() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
+
+    assert captures.get_problem(conn, "s-marcus", "c-1", "nope") is None

@@ -167,7 +167,9 @@
 {% if correct_items %}
 <ul class="pending-list">
   {% for item in correct_items %}
-  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;</li>
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;
+    {% set exclude = "correct" %}{% include "_correction_control.html" %}
+  </li>
   {% endfor %}
 </ul>
 {% else %}
@@ -178,7 +180,9 @@
 {% if partially_correct_items %}
 <ul class="pending-list">
   {% for item in partially_correct_items %}
-  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}</li>
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}
+    {% set exclude = "partially_correct" %}{% include "_correction_control.html" %}
+  </li>
   {% endfor %}
 </ul>
 {% else %}
@@ -189,7 +193,9 @@
 {% if incorrect_items %}
 <ul class="pending-list">
   {% for item in incorrect_items %}
-  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}</li>
+  <li>Page {{ item.page_number }}, Q{{ item.problem_id }}: &ldquo;{{ item.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.student_answer_raw | humanize_math }}&rdquo;{% if item.expected_answer %} &mdash; key says &ldquo;{{ item.expected_answer | humanize_math }}&rdquo;{% endif %}
+    {% set exclude = "incorrect" %}{% include "_correction_control.html" %}
+  </li>
   {% endfor %}
 </ul>
 {% else %}
@@ -218,6 +224,9 @@
   .reassign-page summary { cursor: pointer; }
   .reassign-page form { margin: 0.5rem 0; }
   .reassign-page input[type="number"] { width: 8rem; }
+  .correction-control { margin: 0.3rem 0 0; font-size: 0.85rem; color: var(--text-dim); }
+  .correction-control summary { cursor: pointer; }
+  .correction-control form { margin: 0.4rem 0; }
   .dispute-reason-quote { margin: 0.3rem 0; font-style: italic; color: var(--text-dim); }
   .verdict-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.4rem; }
   .verdict-form input[type="text"] {

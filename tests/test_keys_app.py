@@ -48,6 +48,7 @@ from k12ta.store import (
     quota,
     sessions,
     students,
+    verdict_correction_audit,
 )
 from k12ta.transcribe.base import FailureKind, PageIdentityExtraction, TranscriptionResult
 from k12ta.transcribe.key_page import KeyPageEntry, KeyPageResult
@@ -3666,6 +3667,91 @@ def test_submit_answer_verdict_records_correct_and_clears_the_cause(
     assert graded[0].expected_answer == "quadrilateral"  # untouched, still on the row
 
 
+def test_submit_answer_verdict_records_an_audit_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's M5: a correction has a name, a timestamp, and a
+    before/after value on file -- not just a changed row in graded_problems."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        prompt_text="shape?",
+        student_answer_raw="rhombus",
+        expected_answer="quadrilateral",
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-differs",
+            "capture_id": "c-differs",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    rows = verdict_correction_audit.list_for_problem(
+        conn, "s-marcus", "sess-c-differs", "c-differs", "1"
+    )
+    assert len(rows) == 1
+    assert rows[0].previous_outcome == "needs_human"
+    assert rows[0].previous_needs_human_cause == "answer_differs_from_key"
+    assert rows[0].new_outcome == "correct"
+    assert rows[0].previous_student_answer_raw == "rhombus"
+    assert rows[0].new_student_answer_raw == "rhombus"
+    assert rows[0].source == verdict_correction_audit.VerdictCorrectionSource.NEEDS_HUMAN_RESOLUTION
+
+
+def test_submit_answer_verdict_records_the_corrected_transcription_in_the_audit_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-needs-person", problem_id="4", cause="needs_person", page_number=15
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-needs-person",
+            "capture_id": "c-needs-person",
+            "problem_id": "4",
+            "verdict": "correct",
+            "student_answer_raw": "19 (fixed misread)",
+        },
+        follow_redirects=False,
+    )
+
+    rows = verdict_correction_audit.list_for_problem(
+        conn, "s-marcus", "sess-c-needs-person", "c-needs-person", "4"
+    )
+    assert rows[0].previous_student_answer_raw == "19"
+    assert rows[0].new_student_answer_raw == "19 (fixed misread)"
+
+
 def test_submit_answer_verdict_works_on_a_needs_person_row(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -3840,6 +3926,31 @@ def _seed_decisive_incorrect_problem(
     )
 
 
+def test_evaluations_screen_offers_a_correction_control_on_a_graded_incorrect_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'action="/keys/s-marcus/summer_bridge/correct-verdict"' in response.text
+    # The row is already incorrect -- its own button should not be offered again.
+    incorrect_section = response.text.split('id="graded-incorrect"')[1]
+    assert "Actually incorrect" not in incorrect_section.split("</form>")[0]
+    assert "Actually correct" in incorrect_section
+
+
 def test_evaluations_screen_shows_open_disputes_above_pending_review(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -3975,6 +4086,237 @@ def test_submit_dispute_resolution_overturned_flips_the_grade_to_correct(
     assert response.status_code == 303
     graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
     assert graded[0].outcome == "correct"
+    rows = verdict_correction_audit.list_for_problem(
+        conn, "s-marcus", "sess-c-incorrect", "c-incorrect", "1"
+    )
+    assert len(rows) == 1
+    assert rows[0].previous_outcome == "incorrect"
+    assert rows[0].new_outcome == "correct"
+    assert rows[0].source == verdict_correction_audit.VerdictCorrectionSource.DISPUTE_OVERTURNED
+
+
+def test_submit_dispute_resolution_upheld_records_no_audit_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Upholding an incorrect verdict changes nothing about the grade -- no
+    correction happened, so nothing belongs in the audit trail."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/resolve-dispute",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "resolution": "upheld",
+            "comment": "The key really does say 19 here.",
+        },
+        follow_redirects=False,
+    )
+
+    assert (
+        verdict_correction_audit.list_for_problem(
+            conn, "s-marcus", "sess-c-incorrect", "c-incorrect", "1"
+        )
+        == []
+    )
+
+
+def test_submit_verdict_correction_flips_an_already_decided_verdict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
+    assert graded[0].outcome == "correct"
+    rows = verdict_correction_audit.list_for_problem(
+        conn, "s-marcus", "sess-c-incorrect", "c-incorrect", "1"
+    )
+    assert len(rows) == 1
+    assert rows[0].previous_outcome == "incorrect"
+    assert rows[0].new_outcome == "correct"
+    assert (
+        rows[0].source
+        == verdict_correction_audit.VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION
+    )
+
+
+def test_submit_verdict_correction_is_404_for_a_row_never_graded(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "no-such-session",
+            "capture_id": "no-such-capture",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_submit_verdict_correction_is_refused_while_a_dispute_is_open(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+    )
+
+    assert response.status_code == 409
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
+    assert graded[0].outcome == "incorrect"  # untouched
+
+
+def test_submit_verdict_correction_is_allowed_once_a_dispute_is_resolved(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A parent noticing a different mistake later, after a dispute on the
+    same row already ran its course, must still be able to fix it."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I think I'm right",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+    disputes.resolve(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        resolution="upheld",
+        resolution_comment="The key really does say 19 here.",
+        resolved_at="2026-08-13T10:00:00+00:00",
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-incorrect")
+    assert graded[0].outcome == "correct"
+
+
+def test_submit_verdict_correction_rejects_a_value_that_is_not_a_verdict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "verdict": "maybe",
+        },
+    )
+
+    assert response.status_code == 400
 
 
 def test_submit_dispute_resolution_rejects_a_blank_comment(

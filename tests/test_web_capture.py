@@ -36,6 +36,7 @@ from k12ta.store import (
     quota,
     sessions,
     students,
+    verdict_correction_audit,
 )
 from k12ta.store import captures as store_captures
 from k12ta.store import schedule as store_schedule
@@ -2336,6 +2337,50 @@ def test_a_resolved_dispute_shows_the_parents_comment_and_no_longer_offers_a_but
     assert "A grown-up looked at this" in response.text
     assert 'action="/student/s-marcus/dispute"' not in response.text
     assert "Correct!" in response.text  # the overturn actually changed the grade
+
+
+def test_a_parent_correction_without_a_dispute_shows_a_notice(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's M5: a parent correcting a verdict outside of a
+    dispute must still tell the child something changed, same as a resolved
+    dispute already does."""
+    _seed_one_incorrect_session(
+        conn, source_id="summer_bridge", graded_by_someone_else=False, default_mode="full"
+    )
+    sessions.correct_decided_verdict(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-synthetic",
+        capture_id="c-synthetic",
+        problem_id="1",
+        outcome="correct",
+    )
+    verdict_correction_audit.insert_audit_row(
+        conn,
+        verdict_correction_audit.VerdictCorrectionAuditRow(
+            student_id="s-marcus",
+            session_id="sess-synthetic",
+            capture_id="c-synthetic",
+            problem_id="1",
+            corrected_at="2026-08-31T21:00:00+00:00",
+            previous_outcome="incorrect",
+            previous_needs_human_cause=None,
+            new_outcome="correct",
+            previous_student_answer_raw="19",
+            new_student_answer_raw="19",
+            source=verdict_correction_audit.VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION,
+        ),
+    )
+
+    response = client.get("/session/s-marcus/sess-synthetic")
+
+    assert response.status_code == 200
+    assert "Correct!" in response.text
+    assert (
+        "A grown-up looked at this one again and changed it from incorrect to correct."
+        in response.text
+    )
 
 
 def test_results_page_links_back_to_add_another_page(

@@ -152,6 +152,21 @@ def update_student_answer_raw(
     conn.commit()
 
 
+def get_problem(
+    conn: sqlite3.Connection, student_id: str, capture_id: str, problem_id: str
+) -> ProblemRow | None:
+    """One problems row by its full key -- used by k12ta.keys.app to read a
+    problem's transcribed text before and after a parent's correction, so
+    docs/ROADMAP.md's M5 audit trail can record a real before/after value
+    rather than guessing one."""
+    cur = conn.execute(
+        "SELECT * FROM problems WHERE student_id = ? AND capture_id = ? AND problem_id = ?",
+        (student_id, capture_id, problem_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else _row_to_problem(row)
+
+
 def list_problems_for_capture(
     conn: sqlite3.Connection, student_id: str, capture_id: str
 ) -> list[ProblemRow]:

@@ -106,6 +106,9 @@
         <td class="col-result outcome-label">
           <span class="outcome-glyph">{{ item.glyph }}</span>
           <span class="outcome-note">{{ item.message }}</span>
+          {% with correction_notice=item.correction_notice %}
+          {% include "_correction_notice.html" %}
+          {% endwith %}
           {% if item.display_bucket in ('incorrect', 'partially_correct') or item.dispute %}
           {% with session_id=session_id, capture_id=item.capture_id, problem_id=item.problem_id, dispute=item.dispute, redirect_to="/session/" ~ student.student_id ~ "/" ~ session_id %}
           {% include "_dispute_control.html" %}
@@ -214,5 +217,6 @@
     background: var(--neutral); color: var(--text); cursor: pointer; font-weight: 600;
   }
   .dispute-status { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
+  .correction-notice { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
 </style>
 {% endblock %}

@@ -188,3 +188,44 @@ def test_request_reminder_can_be_retapped() -> None:
 
     pending = sessions.list_pending_for_source(conn, "s-marcus", "summer_bridge")
     assert pending[0].reminder_requested_at == "2026-08-29T11:00:00+00:00"
+
+
+def test_get_graded_problem_returns_the_row() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(
+        conn, capture_id="c-1", problem_id="1", outcome="correct", page_number=17
+    )
+
+    row = sessions.get_graded_problem(conn, "s-marcus", "sess-c-1", "c-1", "1")
+
+    assert row is not None
+    assert row.outcome == "correct"
+
+
+def test_get_graded_problem_returns_none_for_an_unknown_row() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(
+        conn, capture_id="c-1", problem_id="1", outcome="correct", page_number=17
+    )
+
+    assert sessions.get_graded_problem(conn, "s-marcus", "sess-c-1", "c-1", "nope") is None
+
+
+def test_correct_decided_verdict_flips_an_already_decided_row() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(
+        conn, capture_id="c-1", problem_id="1", outcome="correct", page_number=17
+    )
+
+    sessions.correct_decided_verdict(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-1",
+        capture_id="c-1",
+        problem_id="1",
+        outcome="incorrect",
+    )
+
+    row = sessions.get_graded_problem(conn, "s-marcus", "sess-c-1", "c-1", "1")
+    assert row is not None
+    assert row.outcome == "incorrect"

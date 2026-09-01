@@ -62,6 +62,7 @@ from k12ta.store import (
     program_requests,
     sessions,
     students,
+    verdict_correction_audit,
 )
 from k12ta.transcribe.base import Transcriber
 from k12ta.transcribe.key_page import KeyPageEntry, KeyTranscriber, VisionLLMKeyTranscriber
@@ -868,6 +869,10 @@ def submit_answer_verdict(
     _require_student_and_source(conn, student_id, source_id)
     if verdict not in _VERDICTS:
         raise HTTPException(400, "verdict must be 'correct', 'partially_correct', or 'incorrect'")
+    previous_graded = sessions.get_graded_problem(
+        conn, student_id, session_id, capture_id, problem_id
+    )
+    previous_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
     if student_answer_raw is not None and student_answer_raw.strip():
         captures.update_student_answer_raw(
             conn, student_id, capture_id, problem_id, student_answer_raw.strip()
@@ -904,6 +909,93 @@ def submit_answer_verdict(
         capture_id=capture_id,
         problem_id=problem_id,
         outcome=verdict,
+    )
+    if previous_graded is not None and previous_problem is not None:
+        new_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
+        verdict_correction_audit.insert_audit_row(
+            conn,
+            verdict_correction_audit.VerdictCorrectionAuditRow(
+                student_id=student_id,
+                session_id=session_id,
+                capture_id=capture_id,
+                problem_id=problem_id,
+                corrected_at=datetime.now(UTC).isoformat(),
+                previous_outcome=previous_graded.outcome,
+                previous_needs_human_cause=previous_graded.needs_human_cause,
+                new_outcome=verdict,
+                previous_student_answer_raw=previous_problem.student_answer_raw,
+                new_student_answer_raw=(
+                    new_problem.student_answer_raw
+                    if new_problem is not None
+                    else previous_problem.student_answer_raw
+                ),
+                source=verdict_correction_audit.VerdictCorrectionSource.NEEDS_HUMAN_RESOLUTION,
+            ),
+        )
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+
+
+@app.post("/keys/{student_id}/{source_id}/correct-verdict")
+def submit_verdict_correction(
+    student_id: str,
+    source_id: str,
+    session_id: str = Form(...),
+    capture_id: str = Form(...),
+    problem_id: str = Form(...),
+    verdict: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """docs/ROADMAP.md's M5: a parent correcting a verdict the grader already
+    called (correct/partially_correct/incorrect) -- evaluations.html's
+    "Graded correct/partially correct/incorrect" sections, not the pending
+    queue those already have their own verdict form for
+    (k12ta.store.sessions.apply_human_verdict, above). Distinct from a
+    dispute: this is the parent's own initiative, with no child contest
+    involved, so it is refused while a dispute on this exact row is still
+    open -- k12ta.store.disputes.resolve is the one designated path for
+    that case, and letting this endpoint race it would let a correction
+    bypass the required resolution comment a dispute demands. A row with no
+    prior grade at all (never seen by k12ta.store.sessions.get_graded_
+    problem) is a 404: there is nothing here to correct, only apply_human_
+    verdict's first-time path applies to it. No parent-PIN gate, matching
+    apply_human_verdict -- docs/ROADMAP.md's M5 section leaves that an open
+    question, unchanged by this pass."""
+    _require_student_and_source(conn, student_id, source_id)
+    if verdict not in _VERDICTS:
+        raise HTTPException(400, "verdict must be 'correct', 'partially_correct', or 'incorrect'")
+    previous_graded = sessions.get_graded_problem(
+        conn, student_id, session_id, capture_id, problem_id
+    )
+    if previous_graded is None:
+        raise HTTPException(404, "no such graded problem")
+    open_dispute = disputes.get(conn, student_id, session_id, capture_id, problem_id)
+    if open_dispute is not None and open_dispute.resolved_at is None:
+        raise HTTPException(409, "this row has an open dispute -- resolve that first")
+    sessions.correct_decided_verdict(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        outcome=verdict,
+    )
+    problem = captures.get_problem(conn, student_id, capture_id, problem_id)
+    answer_raw = problem.student_answer_raw if problem is not None else ""
+    verdict_correction_audit.insert_audit_row(
+        conn,
+        verdict_correction_audit.VerdictCorrectionAuditRow(
+            student_id=student_id,
+            session_id=session_id,
+            capture_id=capture_id,
+            problem_id=problem_id,
+            corrected_at=datetime.now(UTC).isoformat(),
+            previous_outcome=previous_graded.outcome,
+            previous_needs_human_cause=previous_graded.needs_human_cause,
+            new_outcome=verdict,
+            previous_student_answer_raw=answer_raw,
+            new_student_answer_raw=answer_raw,
+            source=verdict_correction_audit.VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION,
+        ),
     )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
@@ -1109,6 +1201,9 @@ def submit_dispute_resolution(
         raise HTTPException(400, "invalid resolution")
     if not comment.strip():
         raise HTTPException(400, "a comment is required")
+    previous_graded = sessions.get_graded_problem(
+        conn, student_id, session_id, capture_id, problem_id
+    )
     resolved_at = datetime.now(UTC).isoformat()
     changed = disputes.resolve(
         conn,
@@ -1128,6 +1223,25 @@ def submit_dispute_resolution(
             capture_id=capture_id,
             problem_id=problem_id,
         )
+        if previous_graded is not None:
+            problem = captures.get_problem(conn, student_id, capture_id, problem_id)
+            answer_raw = problem.student_answer_raw if problem is not None else ""
+            verdict_correction_audit.insert_audit_row(
+                conn,
+                verdict_correction_audit.VerdictCorrectionAuditRow(
+                    student_id=student_id,
+                    session_id=session_id,
+                    capture_id=capture_id,
+                    problem_id=problem_id,
+                    corrected_at=resolved_at,
+                    previous_outcome=previous_graded.outcome,
+                    previous_needs_human_cause=previous_graded.needs_human_cause,
+                    new_outcome="correct",
+                    previous_student_answer_raw=answer_raw,
+                    new_student_answer_raw=answer_raw,
+                    source=verdict_correction_audit.VerdictCorrectionSource.DISPUTE_OVERTURNED,
+                ),
+            )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 

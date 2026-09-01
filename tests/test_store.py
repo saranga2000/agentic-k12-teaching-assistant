@@ -46,6 +46,7 @@ _EXPECTED_TABLES = {
     "program_requests",
     "disputes",
     "identity_corrections",
+    "verdict_correction_audit_log",
 }
 
 

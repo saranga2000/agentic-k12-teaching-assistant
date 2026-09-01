@@ -60,6 +60,7 @@ from k12ta.store import (
     program_requests,
     sessions,
     students,
+    verdict_correction_audit,
 )
 from k12ta.transcribe.base import Transcriber
 from k12ta.transcribe.vision_llm import VisionLLMTranscriber
@@ -375,8 +376,17 @@ def my_pages(
             if a.capture_id != g.capture_id
         )
         dispute = disputes.get(conn, student_id, g.session_id, g.capture_id, g.problem_id)
+        correction = _latest_decided_correction(
+            conn, student_id, g.session_id, g.capture_id, g.problem_id
+        )
         view = render_student_result(
-            g, prompt_text, answer, rules=rules, prior_attempts=prior_attempts, dispute=dispute
+            g,
+            prompt_text,
+            answer,
+            rules=rules,
+            prior_attempts=prior_attempts,
+            dispute=dispute,
+            latest_decided_correction=correction,
         )
         items.append(
             MyPageItem(
@@ -1215,6 +1225,26 @@ def _problem_sort_key(problem_id: str) -> str:
     return f"1{problem_id}"
 
 
+def _latest_decided_correction(
+    conn: sqlite3.Connection, student_id: str, session_id: str, capture_id: str, problem_id: str
+) -> verdict_correction_audit.VerdictCorrectionAuditRow | None:
+    """The most recent parent correction of this row's already-decided
+    verdict, if any -- docs/ROADMAP.md's M5 child notice. Ignores rows from
+    a first-time needs_human resolution or a dispute's own overturn (the
+    latter already has its own notice, see k12ta.store.disputes); only
+    DECIDED_VERDICT_CORRECTION rows are k12ta.respond.render's concern here.
+    list_for_problem returns oldest-first, so the last matching entry is the
+    most recent."""
+    rows = [
+        r
+        for r in verdict_correction_audit.list_for_problem(
+            conn, student_id, session_id, capture_id, problem_id
+        )
+        if r.source == verdict_correction_audit.VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION
+    ]
+    return rows[-1] if rows else None
+
+
 def _group_by_problem(
     rows: list[sessions.GradedAttemptRow],
 ) -> dict[tuple[int, str], list[sessions.GradedAttemptRow]]:
@@ -1321,6 +1351,9 @@ def session_results(
             if a.capture_id != g.capture_id
         )
         dispute = disputes.get(conn, student_id, g.session_id, g.capture_id, g.problem_id)
+        correction = _latest_decided_correction(
+            conn, student_id, g.session_id, g.capture_id, g.problem_id
+        )
         items.append(
             render_student_result(
                 g,
@@ -1329,6 +1362,7 @@ def session_results(
                 rules=rules,
                 prior_attempts=prior_attempts,
                 dispute=dispute,
+                latest_decided_correction=correction,
             )
         )
 

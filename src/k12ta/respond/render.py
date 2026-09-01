@@ -27,6 +27,7 @@ from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.pipeline.process import AMBIGUOUS_PROBLEM_ID_PREFIX
 from k12ta.store.disputes import DisputeRow
 from k12ta.store.sessions import GradedProblemRow
+from k12ta.store.verdict_correction_audit import VerdictCorrectionAuditRow
 
 # One message and one glyph per k12ta.grading.needs_human.NeedsHumanCause, so the
 # six read differently at a glance -- reinforcement alongside the message text,
@@ -139,6 +140,28 @@ INCORRECT_RESTRICTED_MESSAGE = "This one needs another look."
 # MESSAGE getting its own message text without a fourth CSS-driving outcome.
 PARTIALLY_CORRECT_GLYPH = "±"
 PARTIALLY_CORRECT_RESTRICTED_MESSAGE = "Part of this one is right — a grown-up will check the rest."
+
+# docs/ROADMAP.md's M5: "no child-facing notice when an ordinary verdict is
+# corrected after the fact." A dispute's own resolution already has this
+# (Gap L, _dispute_control.html) -- this is the sibling case, a parent's own
+# correction with no dispute involved. Deliberately its own plain sentence,
+# not folded into `message`: `message` always reflects the row's *current*
+# outcome (already re-derived above from the corrected value), so this only
+# ever adds "and here is what changed," never contradicts it.
+_OUTCOME_DISPLAY_LABEL: dict[str, str] = {
+    "correct": "correct",
+    "partially_correct": "partially correct",
+    "incorrect": "incorrect",
+}
+
+
+def _correction_notice(correction: VerdictCorrectionAuditRow | None) -> str | None:
+    if correction is None:
+        return None
+    previous = _OUTCOME_DISPLAY_LABEL.get(correction.previous_outcome, correction.previous_outcome)
+    new = _OUTCOME_DISPLAY_LABEL.get(correction.new_outcome, correction.new_outcome)
+    return f"A grown-up looked at this one again and changed it from {previous} to {new}."
+
 
 REPEAT_GLYPH = "↺"
 # Identical regardless of whether this attempt is actually right or wrong -- a
@@ -280,6 +303,13 @@ class StudentResultView:
     up (k12ta.store.disputes.get) and passes it through; this function never
     reaches into that table itself, same "caller supplies context, this
     function only interprets it" split as `prior_attempts`."""
+    correction_notice: str | None = None
+    """docs/ROADMAP.md's M5: set only when a parent corrected this row's
+    verdict outside of a dispute (k12ta.store.sessions.correct_decided_
+    verdict) -- None on every row that was never corrected this way, and
+    None for a dispute's own overturn (that case already has its own notice,
+    see `dispute` above) or a first-time needs_human resolution (the child
+    was never shown a verdict to correct in the first place)."""
 
 
 def render_student_result(
@@ -290,6 +320,7 @@ def render_student_result(
     rules: FeedbackRules,
     prior_attempts: Sequence[PastAttempt],
     dispute: DisputeRow | None = None,
+    latest_decided_correction: VerdictCorrectionAuditRow | None = None,
 ) -> StudentResultView:
     """Turn one graded problem into the only thing a student sees for it.
     `rules` and `prior_attempts` are both required and keyword-only -- there is
@@ -301,7 +332,15 @@ def render_student_result(
 
     `prior_attempts` must be every earlier graded_problems row for this exact
     problem identity (student, source, page, problem_id), across every session
-    and capture, EXCLUDING this row itself."""
+    and capture, EXCLUDING this row itself.
+
+    `latest_decided_correction`, if given, must be the most recent
+    k12ta.store.verdict_correction_audit row for this exact row whose
+    `source` is DECIDED_VERDICT_CORRECTION -- the caller looks this up
+    (k12ta.store.verdict_correction_audit.list_for_problem) and passes it
+    through, same "caller supplies context" split as `dispute`. Any other
+    source (a first-time needs_human resolution, or a dispute's own
+    overturn) is not this function's concern to notice about."""
     if row.outcome == "needs_human":
         _, message = _needs_human_copy(
             row.needs_human_cause, row.needs_human_detail, row.expected_answer
@@ -353,6 +392,7 @@ def render_student_result(
         message=message,
         capture_id=row.capture_id,
         dispute=dispute,
+        correction_notice=_correction_notice(latest_decided_correction),
     )
 
 

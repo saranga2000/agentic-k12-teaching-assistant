@@ -1,0 +1,9 @@
+<!-- docs/ROADMAP.md's M5: "no child-facing notice when an ordinary verdict is
+     corrected after the fact." Sibling of _dispute_control.html's resolved
+     state, for the case with no dispute involved at all -- a parent's own
+     correction (StudentResultView.correction_notice). Shared by
+     session_result.html and my_pages.html. Nothing to dismiss: unlike Gap O's
+     source-wide banner, this is already scoped to one specific row. -->
+{% if correction_notice %}
+<p class="correction-notice">{{ correction_notice }}</p>
+{% endif %}

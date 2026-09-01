@@ -22,6 +22,7 @@ from k12ta.respond.render import (
     summarize_results,
 )
 from k12ta.store.sessions import GradedProblemRow
+from k12ta.store.verdict_correction_audit import VerdictCorrectionAuditRow, VerdictCorrectionSource
 
 _FULL = rules_for(FeedbackMode.FULL)
 _DIAGNOSTIC_ONLY = rules_for(FeedbackMode.DIAGNOSTIC_ONLY)
@@ -537,3 +538,60 @@ def test_needs_human_prior_attempts_do_not_count_toward_suppression() -> None:
 
     assert view.message == "Correct!"
     assert view.outcome == "correct"
+
+
+def _correction(**overrides: object) -> VerdictCorrectionAuditRow:
+    base: dict[str, object] = dict(
+        student_id="s-1",
+        session_id="sess-1",
+        capture_id="c-1",
+        problem_id="1",
+        corrected_at="2026-08-31T21:00:00+00:00",
+        previous_outcome="correct",
+        previous_needs_human_cause=None,
+        new_outcome="incorrect",
+        previous_student_answer_raw="19",
+        new_student_answer_raw="19",
+        source=VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION,
+    )
+    base.update(overrides)
+    return VerdictCorrectionAuditRow(**base)  # type: ignore[arg-type]
+
+
+def test_no_correction_notice_by_default() -> None:
+    view = render_student_result(
+        _row(outcome="correct"), "12 + 7", "19", rules=_FULL, prior_attempts=()
+    )
+
+    assert view.correction_notice is None
+
+
+def test_correction_notice_states_what_changed() -> None:
+    view = render_student_result(
+        _row(outcome="incorrect"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        latest_decided_correction=_correction(previous_outcome="correct", new_outcome="incorrect"),
+    )
+
+    assert view.correction_notice == (
+        "A grown-up looked at this one again and changed it from correct to incorrect."
+    )
+
+
+def test_correction_notice_does_not_change_the_current_message() -> None:
+    """The notice is additive -- `message` still reflects the row's *current*
+    outcome, already re-derived from the corrected value, not the old one."""
+    view = render_student_result(
+        _row(outcome="incorrect", expected_answer="42"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        latest_decided_correction=_correction(previous_outcome="correct", new_outcome="incorrect"),
+    )
+
+    assert view.outcome == "incorrect"
+    assert view.message == "Not quite. The answer is 42."

@@ -60,6 +60,9 @@
       {% if item.attempt_count > 1 %}
       <span class="pages-attempts">Tried {{ item.attempt_count }} times</span>
       {% endif %}
+      {% with correction_notice=item.view.correction_notice %}
+      {% include "_correction_notice.html" %}
+      {% endwith %}
       {% if item.view.display_bucket in ('incorrect', 'partially_correct') or item.view.dispute %}
       {% with session_id=item.session_id, capture_id=item.capture_id, problem_id=item.view.problem_id, dispute=item.view.dispute, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
       {% include "_dispute_control.html" %}
@@ -106,6 +109,7 @@
     background: var(--surface); color: var(--text); cursor: pointer; font-weight: 600;
   }
   .dispute-status { margin: 0.4rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
+  .correction-notice { margin: 0.4rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
   .provisional-notice { font-style: italic; color: var(--text-dim); }
 </style>
 {% endblock %}
