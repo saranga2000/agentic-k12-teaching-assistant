@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page14-7.-correction",
+  "image": "pages/summer_bridge-page14-7.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "7.",
+      "prompt_text": "desert : rain forest :: ____ : ravine\nA. ocean\nB. canyon\nC. plateau\nD. mountain",
+      "student_answer_raw": "canyon",
+      "human_legible": true,
+      "correct_answer": "canyon"
+    }
+  ],
+  "provenance": "parent-correction"
+}

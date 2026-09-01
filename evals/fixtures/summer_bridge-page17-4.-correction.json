@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page17-4.-correction",
+  "image": "pages/summer_bridge-page17-4.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "4.",
+      "prompt_text": "facilitate",
+      "student_answer_raw": "verb",
+      "human_legible": true,
+      "correct_answer": "facilitate, verb, to make something easier"
+    }
+  ],
+  "provenance": "parent-correction"
+}

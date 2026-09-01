@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page32-18.-correction",
+  "image": "pages/summer_bridge-page32-18.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "18.",
+      "prompt_text": "The person who came to our door handed us a pamphlet and described his political ____ to us.",
+      "student_answer_raw": "affiliation",
+      "human_legible": true,
+      "correct_answer": "affiliation"
+    }
+  ],
+  "provenance": "parent-correction"
+}

@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page32-23.-correction",
+  "image": "pages/summer_bridge-page32-23.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "23.",
+      "prompt_text": "Rudy was nervous for his driving test, but the instructor's calm ____ put him at ea",
+      "student_answer_raw": "demeanor",
+      "human_legible": true,
+      "correct_answer": "demeanor"
+    }
+  ],
+  "provenance": "parent-correction"
+}

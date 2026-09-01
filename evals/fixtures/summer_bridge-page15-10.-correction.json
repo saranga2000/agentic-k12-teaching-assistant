@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page15-10.-correction",
+  "image": "pages/summer_bridge-page15-10.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "10.",
+      "prompt_text": "The clear blue water seemed to beckon to Rafael.",
+      "student_answer_raw": "",
+      "human_legible": true,
+      "correct_answer": "the clear, blue water seemed to beckon to Rafael."
+    }
+  ],
+  "provenance": "parent-correction"
+}

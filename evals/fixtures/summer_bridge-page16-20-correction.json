@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page16-20-correction",
+  "image": "pages/summer_bridge-page16-20-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "20",
+      "prompt_text": "What kind of information do primary sources provide?",
+      "student_answer_raw": "they provide information that the people of that time recieved",
+      "human_legible": true,
+      "correct_answer": "they provide information that the people of that time recieved"
+    }
+  ],
+  "provenance": "parent-correction"
+}

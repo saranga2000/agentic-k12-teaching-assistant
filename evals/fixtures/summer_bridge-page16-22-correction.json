@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page16-22-correction",
+  "image": "pages/summer_bridge-page16-22-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "22",
+      "prompt_text": "Name a primary source you might use to write a research paper about the Klondike Gold Rush.",
+      "student_answer_raw": "a journal entry from someone who found gold",
+      "human_legible": true,
+      "correct_answer": "a journal entry from someone who found gold"
+    }
+  ],
+  "provenance": "parent-correction"
+}

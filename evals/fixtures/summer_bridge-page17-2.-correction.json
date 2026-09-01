@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page17-2.-correction",
+  "image": "pages/summer_bridge-page17-2.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "2.",
+      "prompt_text": "Louisa biked 50 4/5 miles in 4 hours. How many miles did she bike per hour? Let m represent the number of miles.",
+      "student_answer_raw": "12.6",
+      "human_legible": true,
+      "correct_answer": "50 5/9 over 4 = 12 17/36 miles per hour"
+    }
+  ],
+  "provenance": "parent-correction"
+}

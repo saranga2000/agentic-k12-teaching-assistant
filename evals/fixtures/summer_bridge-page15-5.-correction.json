@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page15-5.-correction",
+  "image": "pages/summer_bridge-page15-5.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "5.",
+      "prompt_text": "Lia has always felt competitive with her intelligent charming athletic older sister.",
+      "student_answer_raw": "",
+      "human_legible": true,
+      "correct_answer": "Lila has always felt competitive with her intelligent, charming, athletic older sister."
+    }
+  ],
+  "provenance": "parent-correction"
+}

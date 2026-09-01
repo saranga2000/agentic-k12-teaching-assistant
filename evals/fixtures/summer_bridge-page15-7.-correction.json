@@ -1,0 +1,18 @@
+{
+  "page_id": "summer_bridge-page15-7.-correction",
+  "image": "pages/summer_bridge-page15-7.-correction.jpg",
+  "source_id": "summer_bridge",
+  "subject": "math",
+  "capture_method": "app-ui",
+  "layout": "single-page",
+  "items": [
+    {
+      "problem_id": "7.",
+      "prompt_text": "The Goldsteins had driven hundreds of miles to see the majestic towering redwood trees.",
+      "student_answer_raw": "",
+      "human_legible": true,
+      "correct_answer": "The Goldsteins had driven hundreds of miles to see the majestic, towering redwood trees."
+    }
+  ],
+  "provenance": "parent-correction"
+}
