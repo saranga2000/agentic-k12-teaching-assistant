@@ -274,6 +274,48 @@ class _ReviewQueueItem:
     pending_count: int
 
 
+@dataclass(frozen=True)
+class _ReportCardRow:
+    source: content.ContentSourceRow
+    counts: sessions.ReportCardCounts
+
+
+@dataclass(frozen=True)
+class _ReportCardStudent:
+    student: students.StudentRow
+    rows: list[_ReportCardRow]
+
+
+@app.get("/keys/report-cards", response_class=HTMLResponse)
+def report_cards(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> HTMLResponse:
+    """docs/ROADMAP.md's V1 "Report cards": every child, every program, one
+    screen -- built entirely from this system's own evaluations, counts not
+    percentages. Archived programs are included, not hidden: archiving
+    freezes a report card as that program's final record, it does not erase
+    it (docs/ROADMAP.md's V1 "Archiving")."""
+    report = [
+        _ReportCardStudent(
+            student=student,
+            rows=[
+                _ReportCardRow(
+                    source=source,
+                    counts=sessions.report_card_counts(conn, student.student_id, source.source_id),
+                )
+                for source in content.list_content_sources(conn, student.student_id)
+            ],
+        )
+        for student in students.list_students(conn)
+    ]
+    return templates.TemplateResponse(
+        request,
+        "report_cards.html",
+        {"report": report, "no_students_message": NO_STUDENTS_MESSAGE},
+    )
+
+
 @dataclass
 class _StudentFormInput:
     """Gap E (docs/USER_WORKFLOWS.md): registering a child only ever happened

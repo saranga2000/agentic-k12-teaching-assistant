@@ -120,8 +120,17 @@ LOW_CONFIDENCE rescue + the family 3/4 eval script), then M7."
       live -- see docs/ROADMAP.md's M6 section for the reasoning (this
       codebase's own live-spend gate, not overridden by "don't ask permission"
       for the rest of tonight's work).
-- [ ] M7 (attempt flow: 3-attempt cap + resubmit confirmation; report cards) --
-      next.
+- [x] M7's report cards -- `sessions.report_card_counts` (five buckets, de-duplicated
+      to final state per problem identity), parent-facing `/keys/report-cards`,
+      child-facing summary added to the existing `my_pages` screen (no new route
+      needed there). 12 new tests (store + both apps).
+- [ ] M7's attempt flow (3-attempt cap + resubmit confirmation) -- next, and the
+      harder, more safety-sensitive piece: it touches the multi-attempt oracle
+      machinery (k12ta.domain.attempts) this project treats very carefully.
+      Approach: ADD a new page-level cap+confirmation layer rather than ripping out
+      the existing per-problem text-diff oracle-suppression logic -- preserving a
+      working safety net as a conservative, fail-closed choice while unattended,
+      not a judgment I'd make the same way with the user available to weigh in.
 
 Real remaining gaps, all named rather than guessed at, are in "Questions for the
 morning" below (multi-part splitting, the evaluator's flat 1.0 confidence, a

@@ -1858,6 +1858,18 @@ same shape as the cross-child review queue that shipped as Gap G. No new model c
 Done when: a parent opens one screen and sees every child's standing in every program,
 and a child who redoes a page sees all three attempts side by side.
 
+**Report cards, shipped 2026-08-31.** `sessions.report_card_counts` computes the five
+buckets (correct / partially correct / incorrect / not answered / still awaiting
+review) from FINAL verdicts — a problem attempted more than once counts once, at its
+most recent state, same de-duplication `k12ta.web.app.my_pages` already applies for
+its own "tried N times" grouping. A parent-facing `/keys/report-cards` (linked from
+the home screen) lists every child and every one of their programs, archived ones
+included and visibly marked, never hidden — archiving freezes a report card, it does
+not erase it. "Child sees only her own" needed no new screen: `k12ta.web.app.my_pages`
+was already scoped to one student and one program, so the same counts, read the same
+way, are shown there as a compact summary line. The attempt flow (the deliberate
+resubmit confirmation and the cap at 3) is separate, still not done — see below.
+
 ### M8. The conversational parent assistant (Gap J)
 **New 2026-08-30**, promoted from the gap register to a real milestone. Parent-facing
 only, text-only, additive alongside every existing form and button — never a replacement.

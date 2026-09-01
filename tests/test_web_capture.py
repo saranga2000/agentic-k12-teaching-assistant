@@ -536,6 +536,73 @@ def test_my_pages_splits_waiting_to_look_at_and_graded(
     assert "/captures/s-marcus/c-correct/image" in response.text
 
 
+def test_my_pages_shows_the_students_own_report_card_summary(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Report cards": "child sees only her own" --
+    satisfied here rather than a new route, since this screen is already
+    scoped to one student and one program."""
+    _seed_one_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-correct",
+            assignment_id="a-1",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-correct",
+            problem_id="1",
+            prompt_text="3 + 4",
+            student_answer_raw="7",
+            transcription_confidence=0.9,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-correct",
+            assignment_id="a-1",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-correct",
+            capture_id="c-correct",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.9,
+            page_number=16,
+        ),
+    )
+
+    response = client.get("/student/s-marcus/summer_bridge/pages")
+
+    assert response.status_code == 200
+    assert "report-card-summary" in response.text
+    assert "1</strong> correct" in response.text
+    assert "0</strong> incorrect" in response.text
+
+
 def test_submit_reminder_sets_the_flag_the_parent_app_shows(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

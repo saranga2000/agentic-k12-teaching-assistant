@@ -459,6 +459,11 @@ def my_pages(
             "to_look_at_items": to_look_at_items,
             "waiting_items": waiting_items,
             "is_provisional": is_provisional,
+            # docs/ROADMAP.md's V1 "Report cards": "child sees only her own" --
+            # this screen is already scoped to student_id + source_id, so the
+            # same counts a parent sees on /keys/report-cards, read the same
+            # way, satisfy that here with no new route needed.
+            "report_card": sessions.report_card_counts(conn, student_id, source_id),
         },
     )
 

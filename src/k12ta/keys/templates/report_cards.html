@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Report cards{% endblock %}
+{% block content %}
+<p><a href="/">&larr; Home</a></p>
+<h1>Report cards</h1>
+<p class="message">Every child, every program. Counts, not percentages -- an unreviewed
+  queue never reads as a bad score.</p>
+{% if report %}
+{% for entry in report %}
+<h2>{{ entry.student.display_name }}</h2>
+{% if entry.rows %}
+<table class="report-card-table">
+  <thead>
+    <tr>
+      <th>Program</th>
+      <th>Correct</th>
+      <th>Partially correct</th>
+      <th>Incorrect</th>
+      <th>Not answered</th>
+      <th>Awaiting review</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in entry.rows %}
+    <tr{% if row.source.archived %} class="archived-row"{% endif %}>
+      <td>
+        <a href="/keys/{{ entry.student.student_id }}/{{ row.source.source_id }}">{{ row.source.label }}</a>
+        {% if row.source.archived %}<span class="cause-label">archived</span>{% endif %}
+      </td>
+      <td>{{ row.counts.correct }}</td>
+      <td>{{ row.counts.partially_correct }}</td>
+      <td>{{ row.counts.incorrect }}</td>
+      <td>{{ row.counts.not_answered }}</td>
+      <td>{{ row.counts.still_awaiting_review }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="message">No enrollments yet for {{ entry.student.display_name }}.</p>
+{% endif %}
+{% endfor %}
+{% else %}
+<p class="message">{{ no_students_message }}</p>
+{% endif %}
+<style>
+  .report-card-table { border-collapse: collapse; width: 100%; margin: 0 0 1.5rem; }
+  .report-card-table th, .report-card-table td { padding: 0.5rem 0.7rem; text-align: left; }
+  .report-card-table thead th {
+    font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-dim); border-bottom: 2px solid var(--surface);
+  }
+  .report-card-table tbody tr { border-bottom: 1px solid var(--surface); }
+  .archived-row { color: var(--text-dim); }
+</style>
+{% endblock %}

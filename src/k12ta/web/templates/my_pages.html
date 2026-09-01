@@ -7,6 +7,13 @@
   {% if is_provisional %}
   <p class="message provisional-notice">First guesses &mdash; a grown-up hasn't checked how pages are identified for this program yet.</p>
   {% endif %}
+  <ul class="report-card-summary">
+    <li><strong>{{ report_card.correct }}</strong> correct</li>
+    <li><strong>{{ report_card.partially_correct }}</strong> partially correct</li>
+    <li><strong>{{ report_card.incorrect }}</strong> incorrect</li>
+    <li><strong>{{ report_card.not_answered }}</strong> not answered</li>
+    <li><strong>{{ report_card.still_awaiting_review }}</strong> waiting on a grown-up</li>
+  </ul>
 
   <h2>Waiting on a grown-up</h2>
   {% if waiting_items %}
@@ -111,5 +118,13 @@
   .dispute-status { margin: 0.4rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
   .correction-notice { margin: 0.4rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
   .provisional-notice { font-style: italic; color: var(--text-dim); }
+  .report-card-summary {
+    list-style: none; padding: 0; margin: 0 0 1.2rem; display: flex; flex-wrap: wrap; gap: 1rem;
+  }
+  .report-card-summary li {
+    background: var(--surface); border: 1px solid var(--surface); border-radius: 8px;
+    padding: 0.5rem 0.9rem; font-size: 0.95rem;
+  }
+  .report-card-summary strong { font-size: 1.15rem; }
 </style>
 {% endblock %}

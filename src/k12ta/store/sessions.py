@@ -353,6 +353,62 @@ def list_all_graded_for_source(
     return [_row_to_graded(row) for row in cur.fetchall()]
 
 
+@dataclass(frozen=True)
+class ReportCardCounts:
+    """docs/ROADMAP.md's V1 "Report cards": five buckets, computed from
+    FINAL verdicts only -- a correction or an overturned dispute already
+    updates `graded_problems.outcome` in place, so reading current state is
+    reading the final one, never the AI's original call re-derived here."""
+
+    correct: int = 0
+    partially_correct: int = 0
+    incorrect: int = 0
+    not_answered: int = 0
+    still_awaiting_review: int = 0
+
+
+def report_card_counts(
+    conn: sqlite3.Connection, student_id: str, source_id: str
+) -> ReportCardCounts:
+    """One row per logical problem identity (page_number, problem_id), at
+    its most recent state -- a problem attempted more than once
+    (k12ta.domain.attempts) counts once, not once per attempt. Same
+    de-duplication k12ta.web.app.my_pages already applies for its own
+    "tried N times" grouping: list_all_graded_for_source returns rows in
+    chronological order, so the last row seen for a given key is the most
+    recent capture's. A row with no resolved page_number (still waiting on
+    identity) has no stable identity to de-duplicate by and is counted on
+    its own, same as my_pages leaves it ungrouped."""
+    rows = list_all_graded_for_source(conn, student_id, source_id)
+    latest_by_key: dict[tuple[int, str], GradedProblemRow] = {}
+    unkeyed: list[GradedProblemRow] = []
+    for row in rows:
+        if row.page_number is None:
+            unkeyed.append(row)
+        else:
+            latest_by_key[(row.page_number, row.problem_id)] = row
+
+    correct = partially_correct = incorrect = not_answered = still_awaiting_review = 0
+    for row in (*latest_by_key.values(), *unkeyed):
+        if not row.answered:
+            not_answered += 1
+        elif row.outcome == "needs_human":
+            still_awaiting_review += 1
+        elif row.outcome == "correct":
+            correct += 1
+        elif row.outcome == "partially_correct":
+            partially_correct += 1
+        else:
+            incorrect += 1
+    return ReportCardCounts(
+        correct=correct,
+        partially_correct=partially_correct,
+        incorrect=incorrect,
+        not_answered=not_answered,
+        still_awaiting_review=still_awaiting_review,
+    )
+
+
 def _row_to_graded(row: sqlite3.Row) -> GradedProblemRow:
     data = dict(row)
     data["diagnosis_skill_ids"] = tuple(json.loads(data["diagnosis_skill_ids"]))

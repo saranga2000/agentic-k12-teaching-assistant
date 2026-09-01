@@ -136,6 +136,91 @@ def _seed_marcus(conn: sqlite3.Connection) -> None:
     )
 
 
+def test_home_links_to_report_cards(client: TestClient, conn: sqlite3.Connection) -> None:
+    response = client.get("/")
+
+    assert 'href="/keys/report-cards"' in response.text
+
+
+def test_report_cards_shows_every_child_and_every_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+
+    response = client.get("/keys/report-cards")
+
+    assert response.status_code == 200
+    assert "Marcus" in response.text
+    assert "Summer bridge workbook" in response.text
+    assert 'href="/keys/s-marcus/summer_bridge"' in response.text
+
+
+def test_report_cards_counts_a_correction_as_the_final_verdict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_decisive_incorrect_problem(conn)
+
+    sessions.correct_decided_verdict(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        outcome="correct",
+    )
+
+    response = client.get("/keys/report-cards")
+
+    # One correct-labelled cell in the table row, not counted anywhere as
+    # still-incorrect -- checked via the table structure, not a bare
+    # substring (the header row already says "Correct").
+    row_start = response.text.index("Summer bridge workbook")
+    row = response.text[row_start : row_start + 600]
+    cells = [c.strip() for c in row.split("<td>")][1:]
+    numbers = [c.split("<")[0].strip() for c in cells]
+    assert numbers == ["1", "0", "0", "0", "0"]
+
+
+def test_report_cards_marks_an_archived_program(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.set_archived(conn, "s-marcus", "summer_bridge", True)
+
+    response = client.get("/keys/report-cards")
+
+    assert "archived" in response.text
+
+
+def test_report_cards_shows_the_no_students_message_when_empty(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    response = client.get("/keys/report-cards")
+
+    assert response.status_code == 200
+    assert "No students yet" in response.text
+
+
 def test_home_shows_a_badge_when_a_child_has_requested_a_program(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
