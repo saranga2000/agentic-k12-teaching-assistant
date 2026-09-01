@@ -61,9 +61,25 @@ def test_prior_attempts_parameter_is_required_and_keyword_only_with_no_default()
     assert prior_param.kind is inspect.Parameter.KEYWORD_ONLY
 
 
+def test_resubmit_confirmed_parameter_is_required_and_keyword_only_with_no_default() -> None:
+    """docs/ROADMAP.md's V1 "Attempts": a caller that forgot this would
+    otherwise silently disclose a grade that was supposed to be withheld
+    pending the child's own confirmation."""
+    sig = inspect.signature(render_student_result)
+    param = sig.parameters["resubmit_confirmed"]
+
+    assert param.default is inspect.Parameter.empty
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+
 def test_calling_without_rules_raises_type_error() -> None:
     with pytest.raises(TypeError):
-        render_student_result(_row(), "12 + 7", "18", prior_attempts=())  # type: ignore[call-arg]
+        render_student_result(_row(), "12 + 7", "18", prior_attempts=(), resubmit_confirmed=True)  # type: ignore[call-arg]
+
+
+def test_calling_without_resubmit_confirmed_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        render_student_result(_row(), "12 + 7", "18", rules=_FULL, prior_attempts=())  # type: ignore[call-arg]
 
 
 def test_calling_without_prior_attempts_raises_type_error() -> None:
@@ -74,7 +90,12 @@ def test_calling_without_prior_attempts_raises_type_error() -> None:
 def test_correct_outcome_says_correct_regardless_of_mode() -> None:
     for rules in (_FULL, _DIAGNOSTIC_ONLY, _FLUENCY):
         view = render_student_result(
-            _row(outcome="correct"), "12 + 7", "19", rules=rules, prior_attempts=()
+            _row(outcome="correct"),
+            "12 + 7",
+            "19",
+            rules=rules,
+            prior_attempts=(),
+            resubmit_confirmed=True,
         )
         assert view.message == "Correct!"
 
@@ -91,6 +112,7 @@ def test_unsimplified_correct_answer_says_so_and_still_counts_as_correct() -> No
         "2/6",
         rules=_FULL,
         prior_attempts=(),
+        resubmit_confirmed=True,
     )
     assert view.outcome == "correct"
     assert view.glyph == "✓"
@@ -100,7 +122,12 @@ def test_unsimplified_correct_answer_says_so_and_still_counts_as_correct() -> No
 
 def test_incorrect_in_full_mode_reveals_the_expected_answer() -> None:
     view = render_student_result(
-        _row(expected_answer="42"), "12 + 7", "18", rules=_FULL, prior_attempts=()
+        _row(expected_answer="42"),
+        "12 + 7",
+        "18",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert "42" in view.message
@@ -116,6 +143,7 @@ def test_incorrect_in_restricted_modes_never_reveals_the_expected_answer(
         "18",
         rules=rules,  # type: ignore[arg-type]
         prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert "42" not in view.message
@@ -131,6 +159,7 @@ def test_partially_correct_in_full_mode_reveals_the_expected_answer() -> None:
         "half of 42",
         rules=_FULL,
         prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert "42" in view.message
@@ -146,6 +175,7 @@ def test_partially_correct_in_restricted_modes_never_reveals_the_expected_answer
         "half of 42",
         rules=rules,  # type: ignore[arg-type]
         prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert "42" not in view.message
@@ -153,7 +183,12 @@ def test_partially_correct_in_restricted_modes_never_reveals_the_expected_answer
 
 def test_partially_correct_gets_its_own_display_bucket_and_glyph() -> None:
     view = render_student_result(
-        _row(outcome="partially_correct"), "12 + 7", "half of 42", rules=_FULL, prior_attempts=()
+        _row(outcome="partially_correct"),
+        "12 + 7",
+        "half of 42",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert view.display_bucket == "partially_correct"
@@ -174,6 +209,7 @@ def test_a_second_partially_correct_guess_is_itself_suppressed() -> None:
         "half of 42",  # a new, different guess from the prior "18"
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.outcome == "repeat"
@@ -192,6 +228,7 @@ def test_a_second_distinct_guess_after_partially_correct_is_suppressed() -> None
         "42",  # a new, different guess from the prior "half of 42"
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.outcome == "repeat"
@@ -203,7 +240,9 @@ def test_needs_human_message_is_identical_across_every_mode() -> None:
     row = _row(outcome="needs_human", needs_human_cause="low_confidence", expected_answer=None)
 
     messages = {
-        render_student_result(row, "12 + 7", "18", rules=rules, prior_attempts=()).message
+        render_student_result(
+            row, "12 + 7", "18", rules=rules, prior_attempts=(), resubmit_confirmed=True
+        ).message
         for rules in (_FULL, _DIAGNOSTIC_ONLY, _FLUENCY)
     }
 
@@ -215,7 +254,9 @@ def test_needs_human_message_does_not_change_with_expected_answer_present() -> N
     needs_human message never surfaces it."""
     row = _row(outcome="needs_human", needs_human_cause="low_confidence", expected_answer="42")
 
-    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "18", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert "42" not in view.message
 
@@ -226,7 +267,9 @@ def test_ambiguous_problem_id_says_which_question_not_which_answer() -> None:
     from LOW_CONFIDENCE's "I could not read your writing."."""
     row = _row(outcome="needs_human", needs_human_cause="ambiguous_problem_id")
 
-    view = render_student_result(row, "12 + 7", "19", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "19", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert view.message == AMBIGUOUS_PROBLEM_ID_MESSAGE
     assert "question" in view.message.lower()
@@ -238,7 +281,9 @@ def test_attempt_cap_reached_names_the_limit_not_a_verdict() -> None:
     verdict either way."""
     row = _row(outcome="needs_human", needs_human_cause="attempt_cap_reached")
 
-    view = render_student_result(row, "12 + 7", "19", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "19", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert "3 times" in view.message
     assert view.display_bucket == "needs_a_person"
@@ -255,7 +300,9 @@ def test_answer_differs_from_key_shows_both_answers_and_marks_nothing() -> None:
         expected_answer="quadrilateral",
     )
 
-    view = render_student_result(row, "shape?", "rhombus", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "shape?", "rhombus", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert "quadrilateral" in view.message
     assert "rhombus" in (view.student_answer_raw,)  # her own answer, shown as-is
@@ -267,7 +314,9 @@ def test_answer_differs_from_key_shows_both_answers_and_marks_nothing() -> None:
 def test_view_carries_no_raw_expected_answer_field() -> None:
     """StudentResultView has no expected_answer attribute at all -- a template
     author has nothing sensitive to accidentally render."""
-    view = render_student_result(_row(), "12 + 7", "18", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        _row(), "12 + 7", "18", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert not hasattr(view, "expected_answer")
 
@@ -282,6 +331,7 @@ def test_first_attempt_is_never_suppressed_even_in_a_restricted_mode() -> None:
         "19",
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert view.message == "Correct!"
@@ -297,6 +347,7 @@ def test_second_distinct_guess_correct_is_suppressed_in_a_restricted_mode() -> N
         "19",  # a new, different guess from the prior "18"
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.message != "Correct!"
@@ -315,6 +366,7 @@ def test_suppressed_correct_and_suppressed_incorrect_are_byte_identical() -> Non
         "19",
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
     incorrect_view = render_student_result(
         _row(outcome="incorrect", expected_answer="19"),
@@ -322,6 +374,7 @@ def test_suppressed_correct_and_suppressed_incorrect_are_byte_identical() -> Non
         "20",  # also a new, different guess from "18"
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert (correct_view.glyph, correct_view.message, correct_view.outcome) == (
@@ -329,6 +382,83 @@ def test_suppressed_correct_and_suppressed_incorrect_are_byte_identical() -> Non
         incorrect_view.message,
         incorrect_view.outcome,
     )
+
+
+def test_unconfirmed_resubmission_withholds_a_correct_grade() -> None:
+    """docs/ROADMAP.md's V1 "Attempts": a grade is withheld, not disclosed,
+    until the child confirms she actually redid the page."""
+    view = render_student_result(
+        _row(outcome="correct"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=False,
+    )
+
+    assert view.needs_resubmit_confirmation is True
+    assert view.outcome == "repeat"
+    assert view.display_bucket == "repeat"
+    assert "19" not in view.message
+    assert "did you actually redo" in view.message.lower()
+
+
+def test_unconfirmed_correct_and_unconfirmed_incorrect_are_byte_identical() -> None:
+    """Same oracle-safety property as the existing repeat-suppression case,
+    now for the confirmation gate: nothing about the withheld message may
+    vary with whether this attempt actually happens to be right."""
+    correct_view = render_student_result(
+        _row(outcome="correct", expected_answer="19"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=False,
+    )
+    incorrect_view = render_student_result(
+        _row(outcome="incorrect", expected_answer="19"),
+        "12 + 7",
+        "20",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=False,
+    )
+
+    assert (correct_view.glyph, correct_view.message, correct_view.outcome) == (
+        incorrect_view.glyph,
+        incorrect_view.message,
+        incorrect_view.outcome,
+    )
+
+
+def test_confirmed_resubmission_discloses_normally() -> None:
+    view = render_student_result(
+        _row(outcome="correct"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
+    )
+
+    assert view.needs_resubmit_confirmation is False
+    assert view.message == "Correct!"
+
+
+def test_resubmit_confirmation_gate_does_not_apply_to_needs_human_rows() -> None:
+    """Nothing to withhold: a needs_human row never discloses a verdict
+    either way, so there is nothing for the confirmation gate to protect."""
+    view = render_student_result(
+        _row(outcome="needs_human", needs_human_cause="low_confidence"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=False,
+    )
+
+    assert view.needs_resubmit_confirmation is False
+    assert view.outcome == "needs_human"
 
 
 def test_unchanged_resubmission_is_not_suppressed() -> None:
@@ -342,6 +472,7 @@ def test_unchanged_resubmission_is_not_suppressed() -> None:
         "18",  # same answer as the prior attempt
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.outcome == "incorrect"
@@ -359,6 +490,7 @@ def test_full_mode_ignores_attempt_history_entirely() -> None:
         "19",
         rules=_FULL,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.message == "Correct!"
@@ -388,7 +520,9 @@ def test_every_needs_human_cause_maps_to_one_of_three_display_buckets(
 ) -> None:
     row = _row(outcome="needs_human", needs_human_cause=cause)
 
-    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "18", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert view.display_bucket == expected_bucket
 
@@ -399,17 +533,29 @@ def test_a_needs_human_row_with_no_claimed_cause_falls_to_needs_a_person() -> No
     never guessed into could-not-read or waiting-on-key."""
     row = _row(outcome="needs_human", needs_human_cause=None)
 
-    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "18", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert view.display_bucket == "needs_a_person"
 
 
 def test_correct_and_unsimplified_share_a_bucket_but_not_a_message() -> None:
     plain = render_student_result(
-        _row(outcome="correct"), "12 + 7", "19", rules=_FULL, prior_attempts=()
+        _row(outcome="correct"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
     unsimplified = render_student_result(
-        _row(outcome="correct", unsimplified=True), "2/6?", "2/6", rules=_FULL, prior_attempts=()
+        _row(outcome="correct", unsimplified=True),
+        "2/6?",
+        "2/6",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert plain.display_bucket == unsimplified.display_bucket == "correct"
@@ -418,7 +564,12 @@ def test_correct_and_unsimplified_share_a_bucket_but_not_a_message() -> None:
 
 def test_display_number_is_the_real_problem_id() -> None:
     view = render_student_result(
-        _row(problem_id="4"), "12 + 7", "18", rules=_FULL, prior_attempts=()
+        _row(problem_id="4"),
+        "12 + 7",
+        "18",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert view.display_number == "4"
@@ -430,7 +581,9 @@ def test_display_number_hides_a_synthetic_ambiguous_placeholder() -> None:
     more confusing than the honest "no number to show" it actually is."""
     row = _row(problem_id=f"{AMBIGUOUS_PROBLEM_ID_PREFIX}0")
 
-    view = render_student_result(row, "12 + 7", "18", rules=_FULL, prior_attempts=())
+    view = render_student_result(
+        row, "12 + 7", "18", rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
     assert view.display_number == "?"
 
@@ -441,7 +594,12 @@ def test_suppressed_repeat_still_gets_its_own_display_bucket() -> None:
     prior = (PastAttempt(outcome="incorrect", student_answer_raw="18"),)
 
     view = render_student_result(
-        _row(outcome="correct"), "12 + 7", "19", rules=_DIAGNOSTIC_ONLY, prior_attempts=prior
+        _row(outcome="correct"),
+        "12 + 7",
+        "19",
+        rules=_DIAGNOSTIC_ONLY,
+        prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.display_bucket == "repeat"
@@ -454,7 +612,9 @@ def _view(
     problem_id: str, prompt_text: str = "12 + 7", answer: str = "19", **overrides: object
 ) -> StudentResultView:
     row = _row(problem_id=problem_id, **overrides)  # type: ignore[arg-type]
-    return render_student_result(row, prompt_text, answer, rules=_FULL, prior_attempts=())
+    return render_student_result(
+        row, prompt_text, answer, rules=_FULL, prior_attempts=(), resubmit_confirmed=True
+    )
 
 
 def test_summary_counts_right_to_look_at_and_waiting_on_a_grownup() -> None:
@@ -546,6 +706,7 @@ def test_needs_human_prior_attempts_do_not_count_toward_suppression() -> None:
         "19",
         rules=_DIAGNOSTIC_ONLY,
         prior_attempts=prior,
+        resubmit_confirmed=True,
     )
 
     assert view.message == "Correct!"
@@ -572,7 +733,12 @@ def _correction(**overrides: object) -> VerdictCorrectionAuditRow:
 
 def test_no_correction_notice_by_default() -> None:
     view = render_student_result(
-        _row(outcome="correct"), "12 + 7", "19", rules=_FULL, prior_attempts=()
+        _row(outcome="correct"),
+        "12 + 7",
+        "19",
+        rules=_FULL,
+        prior_attempts=(),
+        resubmit_confirmed=True,
     )
 
     assert view.correction_notice is None
@@ -585,6 +751,7 @@ def test_correction_notice_states_what_changed() -> None:
         "19",
         rules=_FULL,
         prior_attempts=(),
+        resubmit_confirmed=True,
         latest_decided_correction=_correction(previous_outcome="correct", new_outcome="incorrect"),
     )
 
@@ -602,6 +769,7 @@ def test_correction_notice_does_not_change_the_current_message() -> None:
         "19",
         rules=_FULL,
         prior_attempts=(),
+        resubmit_confirmed=True,
         latest_decided_correction=_correction(previous_outcome="correct", new_outcome="incorrect"),
     )
 

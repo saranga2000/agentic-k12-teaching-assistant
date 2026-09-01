@@ -178,6 +178,17 @@ REPEAT_GLYPH = "↺"
 # suppression exists to close. See k12ta.domain.attempts.already_disclosed.
 REPEAT_MESSAGE = "I already told you what I can on this one — check it yourself."
 
+# docs/ROADMAP.md's V1 "Attempts": "a resubmission is only accepted if she
+# confirms she actually redid the work." Same glyph/outcome as REPEAT_MESSAGE
+# and for the same reason -- correctness must never leak through the CSS
+# class while a grade is withheld -- but this is a different question
+# (confirmation pending, not "have we already told you this") and it comes
+# with an action, so it gets its own field on StudentResultView rather than
+# being folded into the plain repeat message.
+RESUBMIT_CONFIRM_MESSAGE = (
+    "Did you actually redo this page, or was this the same page again by accident?"
+)
+
 # The results table's display grouping: eight NeedsHumanCause values collapse to
 # three buckets so a student is learning three shapes, not eight, at a glance --
 # the per-cause message (above) stays exactly as specific as it always was, only
@@ -323,6 +334,14 @@ class StudentResultView:
     None for a dispute's own overturn (that case already has its own notice,
     see `dispute` above) or a first-time needs_human resolution (the child
     was never shown a verdict to correct in the first place)."""
+    needs_resubmit_confirmation: bool = False
+    """docs/ROADMAP.md's V1 "Attempts": True when this row's grade is being
+    withheld pending the child's own "did you actually redo this page?"
+    confirmation (`outcome`/`display_bucket` are both forced to "repeat" in
+    this case too, same correctness-must-never-leak-through-styling rule as
+    an ordinary repeat). Distinct from a plain repeat: this one comes with
+    an action, so a template needs to know to render the confirmation
+    control rather than just the static message."""
 
 
 def render_student_result(
@@ -332,20 +351,30 @@ def render_student_result(
     *,
     rules: FeedbackRules,
     prior_attempts: Sequence[PastAttempt],
+    resubmit_confirmed: bool,
     dispute: DisputeRow | None = None,
     latest_decided_correction: VerdictCorrectionAuditRow | None = None,
 ) -> StudentResultView:
     """Turn one graded problem into the only thing a student sees for it.
-    `rules` and `prior_attempts` are both required and keyword-only -- there is
-    no default for either, so a caller with no `FeedbackRules` in scope, or that
-    forgot to fetch this problem's attempt history, cannot call this at all. A
-    caller that forgot `prior_attempts` would otherwise silently behave as if
-    every attempt were the first, which is exactly the multi-attempt oracle this
-    parameter exists to close.
+    `rules`, `prior_attempts`, and `resubmit_confirmed` are all required and
+    keyword-only -- there is no default for any of them, so a caller with no
+    `FeedbackRules` in scope, that forgot to fetch this problem's attempt
+    history, or that forgot to check this capture's confirmation state,
+    cannot call this at all. A caller that forgot `prior_attempts` would
+    otherwise silently behave as if every attempt were the first, which is
+    exactly the multi-attempt oracle this parameter exists to close; a
+    caller that forgot `resubmit_confirmed` would otherwise silently
+    disclose a grade that was supposed to be withheld pending confirmation
+    (docs/ROADMAP.md's V1 "Attempts").
 
     `prior_attempts` must be every earlier graded_problems row for this exact
     problem identity (student, source, page, problem_id), across every session
     and capture, EXCLUDING this row itself.
+
+    `resubmit_confirmed` must be this row's own capture's
+    `k12ta.store.captures.PageCaptureRow.resubmit_confirmed_at is not None` --
+    the caller looks this up and passes it through, same "caller supplies
+    context, this function only interprets it" split as `prior_attempts`.
 
     `latest_decided_correction`, if given, must be the most recent
     k12ta.store.verdict_correction_audit row for this exact row whose
@@ -354,12 +383,16 @@ def render_student_result(
     through, same "caller supplies context" split as `dispute`. Any other
     source (a first-time needs_human resolution, or a dispute's own
     overturn) is not this function's concern to notice about."""
+    needs_resubmit_confirmation = False
     if row.outcome == "needs_human":
         _, message = _needs_human_copy(
             row.needs_human_cause, row.needs_human_detail, row.expected_answer
         )
         outcome = row.outcome
         bucket = _needs_human_bucket(row.needs_human_cause)
+    elif not resubmit_confirmed and row.outcome in ("correct", "partially_correct", "incorrect"):
+        message, outcome, bucket = RESUBMIT_CONFIRM_MESSAGE, "repeat", "repeat"
+        needs_resubmit_confirmation = True
     elif (
         not rules.reveal_final_answer
         and row.outcome in ("correct", "partially_correct", "incorrect")
@@ -406,6 +439,7 @@ def render_student_result(
         capture_id=row.capture_id,
         dispute=dispute,
         correction_notice=_correction_notice(latest_decided_correction),
+        needs_resubmit_confirmation=needs_resubmit_confirmation,
     )
 
 

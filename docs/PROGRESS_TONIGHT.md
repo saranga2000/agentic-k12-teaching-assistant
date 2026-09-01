@@ -124,13 +124,32 @@ LOW_CONFIDENCE rescue + the family 3/4 eval script), then M7."
       to final state per problem identity), parent-facing `/keys/report-cards`,
       child-facing summary added to the existing `my_pages` screen (no new route
       needed there). 12 new tests (store + both apps).
-- [ ] M7's attempt flow (3-attempt cap + resubmit confirmation) -- next, and the
-      harder, more safety-sensitive piece: it touches the multi-attempt oracle
-      machinery (k12ta.domain.attempts) this project treats very carefully.
-      Approach: ADD a new page-level cap+confirmation layer rather than ripping out
-      the existing per-problem text-diff oracle-suppression logic -- preserving a
-      working safety net as a conservative, fail-closed choice while unattended,
-      not a judgment I'd make the same way with the user available to weigh in.
+- [x] M7's attempt cap -- a fourth capture of the same page is refused grading
+      (new NeedsHumanCause.ATTEMPT_CAP_REACHED), checked via a plain COUNT
+      DISTINCT query, no new table. 9 new tests.
+- [x] M7's deliberate-resubmit confirmation -- migration 0027
+      (page_captures.resubmit_confirmed_at), a new second gate in render.py
+      (additive alongside the existing text-diff suppression, not a
+      replacement -- the conservative call made while unattended on the
+      oracle machinery), a new POST /student/{id}/confirm-resubmit endpoint,
+      new _resubmit_confirmation.html partial. Auto-confirmed for a page's
+      first capture (both at capture time and inside regrade_capture_for_
+      resolved_identity, so a late identity resolution never gets stuck).
+      tests/browser/test_multi_attempt_oracle.py -- the canonical live oracle
+      test -- extended to click through the new confirmation and prove the
+      safety property holds on both sides of it, not just before.
+      M7 is now fully complete.
+
+Real, unplanned finding tonight, not a bug I introduced but worth knowing about:
+the household's own k12ta.web/k12ta.keys servers are running live (started 21:43,
+against the real data/k12ta.db) while this work happened, and a parent was actively
+reviewing the evaluations queue for real -- 70+ new real fixture files appeared in
+evals/fixtures/ mid-session from M5's fixture-promotion feature working exactly as
+designed. Left uncommitted deliberately (not mine to commit on the household's
+behalf); found and fixed one real bug along the way (a page_id normalisation gap
+producing near-duplicate fixture files for "7" vs "7."). The live servers were
+started before tonight's last few commits, so they are not running the newest code
+(M7 in particular) until restarted.
 
 Real remaining gaps, all named rather than guessed at, are in "Questions for the
 morning" below (multi-part splitting, the evaluator's flat 1.0 confidence, a

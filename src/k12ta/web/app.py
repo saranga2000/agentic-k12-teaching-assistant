@@ -396,12 +396,15 @@ def my_pages(
         correction = _latest_decided_correction(
             conn, student_id, g.session_id, g.capture_id, g.problem_id
         )
+        capture_row = captures.get_page_capture(conn, student_id, g.capture_id)
         view = render_student_result(
             g,
             prompt_text,
             answer,
             rules=rules,
             prior_attempts=prior_attempts,
+            resubmit_confirmed=capture_row is not None
+            and capture_row.resubmit_confirmed_at is not None,
             dispute=dispute,
             latest_decided_correction=correction,
         )
@@ -532,6 +535,30 @@ def submit_dispute(
         reason=reason.strip(),
         disputed_at=datetime.now(UTC).isoformat(),
     )
+    return RedirectResponse(redirect_to, status_code=303)
+
+
+@app.post("/student/{student_id}/confirm-resubmit")
+def submit_resubmit_confirmation(
+    student_id: str,
+    capture_id: str = Form(...),
+    redirect_to: str = Form(...),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """docs/ROADMAP.md's V1 "Attempts": the child's own "yes, I actually
+    redid this" tap, confirming a 2nd or 3rd photograph of a page was a real
+    resubmission, not an accidental re-upload of the same one --
+    k12ta.respond.render withholds this capture's grade until this is
+    called. A no-op, not an error, when already confirmed
+    (captures.mark_resubmit_confirmed's own contract) -- re-tapping a
+    confirmed page changes nothing rather than erroring on a stale page.
+    `redirect_to`, same reasoning as submit_dispute above."""
+    student = students.get_student(conn, student_id)
+    if student is None:
+        raise HTTPException(404, "no such student")
+    if not redirect_to.startswith("/") or redirect_to.startswith("//"):
+        raise HTTPException(400, "invalid redirect")
+    captures.mark_resubmit_confirmed(conn, student_id, capture_id, datetime.now(UTC).isoformat())
     return RedirectResponse(redirect_to, status_code=303)
 
 
@@ -1348,11 +1375,18 @@ def session_results(
         graded = sessions.list_graded_problems_for_session(conn, student_id, session_id)
 
     problems_by_id = {}
+    resubmit_confirmed = False
     if graded:
         problems_by_id = {
             p.problem_id: p
             for p in captures.list_problems_for_capture(conn, student_id, graded[0].capture_id)
         }
+        # Every row in `graded` shares this one session's single capture
+        # (k12ta.pipeline.process mints exactly one session per capture).
+        capture_row = captures.get_page_capture(conn, student_id, graded[0].capture_id)
+        resubmit_confirmed = (
+            capture_row is not None and capture_row.resubmit_confirmed_at is not None
+        )
 
     history = _group_by_problem(
         sessions.list_graded_attempts_for_source(conn, student_id, source.source_id)
@@ -1384,6 +1418,7 @@ def session_results(
                 answer,
                 rules=rules,
                 prior_attempts=prior_attempts,
+                resubmit_confirmed=resubmit_confirmed,
                 dispute=dispute,
                 latest_decided_correction=correction,
             )

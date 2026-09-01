@@ -1867,8 +1867,38 @@ the home screen) lists every child and every one of their programs, archived one
 included and visibly marked, never hidden — archiving freezes a report card, it does
 not erase it. "Child sees only her own" needed no new screen: `k12ta.web.app.my_pages`
 was already scoped to one student and one program, so the same counts, read the same
-way, are shown there as a compact summary line. The attempt flow (the deliberate
-resubmit confirmation and the cap at 3) is separate, still not done — see below.
+way, are shown there as a compact summary line.
+
+**The three-attempt cap, shipped 2026-08-31.** A fourth photograph of a page that
+already has 3 distinct resolved captures is refused automatic grading — a new
+`NeedsHumanCause.ATTEMPT_CAP_REACHED`, checked once per capture
+(`sessions.count_page_attempts`, a plain `COUNT DISTINCT` query, no new table)
+alongside the existing ambiguous/conflicting/partial special cases, before `decide()`
+ever runs. A parent can still judge a capped attempt directly from the evaluations
+screen, the same one-tap verdict form already offered for `needs_person`. Deliberately
+independent of `k12ta.domain.attempts`' own per-problem text-diff oracle-suppression
+logic, which is unchanged: that decides what a student is *told* about an
+already-graded answer; this decides whether a page gets graded at all.
+
+**The deliberate-resubmit confirmation, shipped 2026-08-31, closing the milestone.**
+"A resubmission is only accepted if she confirms she actually redid the work." A
+capture's grade is withheld — same oracle-safe, correctness-never-leaks-through-styling
+"repeat" state as the existing text-diff suppression, with its own distinct message and
+a "Yes, I redid it" control — until `page_captures.resubmit_confirmed_at` is set
+(migration 0027). Set automatically for a page's first-ever capture, which has nothing
+to confirm redoing (`k12ta.pipeline.process`, both at capture time and inside
+`regrade_capture_for_resolved_identity`, so a capture that resolves its page identity
+late is never stuck withholding a grade forever); set by the child's own tap otherwise,
+via a new `POST /student/{student_id}/confirm-resubmit`. Kept as a second, additive gate
+in front of the existing text-diff suppression rather than replacing it — the
+conservative, fail-closed choice for this specific piece, made while working unattended
+on the multi-attempt oracle machinery rather than a judgment call to make the same way
+with the user available to weigh in. `tests/browser/test_multi_attempt_oracle.py`, the
+canonical end-to-end oracle test, now proves the safety property (never "Correct!",
+never the real answer) holds through both gates in sequence, confirmed then still
+suppressed, not just before confirmation.
+
+M7 is now complete.
 
 ### M8. The conversational parent assistant (Gap J)
 **New 2026-08-30**, promoted from the gap register to a real milestone. Parent-facing

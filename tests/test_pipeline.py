@@ -991,6 +991,51 @@ def test_regrade_capture_for_resolved_identity_grades_every_problem_from_the_cap
     assert transcriber.request_count == 1  # never called again
 
 
+def test_regrade_capture_for_resolved_identity_auto_confirms_a_pages_first_attempt(
+    tmp_path: Path,
+) -> None:
+    """docs/ROADMAP.md's V1 "Attempts": a capture resolving to a page for
+    the first time -- via a pick or a parent's later key entry, same as
+    above -- has nothing to confirm redoing, so it must not get stuck
+    withholding its own grade forever waiting for a confirmation that will
+    never come."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_section_and_day_schema_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(
+        result=TranscriptionResult(
+            items=(
+                TranscribedItem(
+                    problem_id="1", prompt_text="q1", student_answer_raw="19", confidence=0.99
+                ),
+            ),
+            provider="google",
+            model="gemini-3.7-flash",
+            cost_usd=0.0,
+            latency_ms=500,
+            data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+            page_identity=PageIdentityExtraction(candidates={"day": ("Day 5",)}, confidence=0.97),
+        )
+    )
+    outcome = process_capture(
+        conn, settings, lambda: transcriber, student_id, assignment_id, b"fake-jpeg-bytes"
+    )
+    graded_before = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    capture_id = graded_before[0].capture_id
+    before = captures.get_page_capture(conn, student_id, capture_id)
+    assert before is not None
+    assert before.resubmit_confirmed_at is None  # unresolved identity, nothing to confirm yet
+
+    regrade_capture_for_resolved_identity(
+        conn, student_id, outcome.session_id, capture_id, "summer_bridge", page_number=21
+    )
+
+    after = captures.get_page_capture(conn, student_id, capture_id)
+    assert after is not None
+    assert after.resubmit_confirmed_at is not None
+
+
 def test_regrade_capture_for_resolved_identity_can_still_land_on_needs_human(
     tmp_path: Path,
 ) -> None:
@@ -2238,3 +2283,63 @@ def test_a_different_page_is_unaffected_by_another_pages_cap(tmp_path: Path) -> 
 
     graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
     assert graded[0].outcome == "correct"
+
+
+# --- M7's deliberate-resubmit confirmation -----------------------------------
+
+
+def test_a_pages_first_capture_is_auto_confirmed(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    capture = captures.get_page_capture(conn, student_id, graded[0].capture_id)
+    assert capture is not None
+    assert capture.resubmit_confirmed_at is not None
+
+
+def test_a_pages_second_capture_starts_unconfirmed(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path)
+
+    first_transcriber = FakeTranscriber(result=_one_item_transcription(answer="18"))
+    process_capture(
+        conn,
+        settings,
+        lambda: first_transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    second_transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: second_transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    capture = captures.get_page_capture(conn, student_id, graded[0].capture_id)
+    assert capture is not None
+    assert capture.resubmit_confirmed_at is None

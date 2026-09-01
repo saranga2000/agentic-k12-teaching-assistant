@@ -109,6 +109,9 @@
           {% with correction_notice=item.correction_notice %}
           {% include "_correction_notice.html" %}
           {% endwith %}
+          {% with needs_resubmit_confirmation=item.needs_resubmit_confirmation, capture_id=item.capture_id, redirect_to="/session/" ~ student.student_id ~ "/" ~ session_id %}
+          {% include "_resubmit_confirmation.html" %}
+          {% endwith %}
           {% if item.display_bucket in ('incorrect', 'partially_correct') or item.dispute %}
           {% with session_id=session_id, capture_id=item.capture_id, problem_id=item.problem_id, dispute=item.dispute, redirect_to="/session/" ~ student.student_id ~ "/" ~ session_id %}
           {% include "_dispute_control.html" %}
@@ -218,5 +221,10 @@
   }
   .dispute-status { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
   .correction-notice { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
+  .resubmit-confirm-form { margin-top: 0.5rem; }
+  .resubmit-confirm-button {
+    font-size: 0.9rem; padding: 0.4rem 0.9rem; border-radius: 8px; border: none;
+    background: var(--accent); color: #12141a; cursor: pointer; font-weight: 600;
+  }
 </style>
 {% endblock %}

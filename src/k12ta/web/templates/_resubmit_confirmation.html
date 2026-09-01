@@ -1,0 +1,14 @@
+<!-- docs/ROADMAP.md's V1 "Attempts": "a resubmission is only accepted if she
+     confirms she actually redid the work." Shared by session_result.html and
+     my_pages.html, same pattern as _dispute_control.html. Params via `with`:
+     needs_resubmit_confirmation (StudentResultView's own flag), capture_id,
+     redirect_to (where confirming should return the student). Nothing to
+     render when this row isn't gated -- the message itself already came
+     through as `item.message`, this only ever adds the action. -->
+{% if needs_resubmit_confirmation %}
+<form method="post" action="/student/{{ student.student_id }}/confirm-resubmit" class="resubmit-confirm-form">
+  <input type="hidden" name="capture_id" value="{{ capture_id }}">
+  <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+  <button type="submit" class="resubmit-confirm-button">Yes, I redid it</button>
+</form>
+{% endif %}

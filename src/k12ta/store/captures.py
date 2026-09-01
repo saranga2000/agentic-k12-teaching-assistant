@@ -35,6 +35,14 @@ class PageCaptureRow:
     provider is just out of capacity. Written by record_rate_limited below.
     Never set alongside transcribe_failure_reason -- process_capture's
     failure branches are mutually exclusive by construction."""
+    resubmit_confirmed_at: str | None = None
+    """docs/ROADMAP.md's V1 "Attempts" (migration 0027): None means this
+    capture is a 2nd or 3rd photograph of an already-attempted page, still
+    pending the child's own "did you actually redo this?" confirmation --
+    k12ta.respond.render withholds the grade until it is set. Auto-set by
+    k12ta.pipeline.process for a page's first-ever capture, which has
+    nothing to confirm redoing; set by mark_resubmit_confirmed below
+    otherwise. Never cleared once set."""
 
 
 def insert_page_capture(conn: sqlite3.Connection, row: PageCaptureRow) -> None:
@@ -59,6 +67,26 @@ def get_page_capture(
     )
     row = cur.fetchone()
     return None if row is None else PageCaptureRow(**dict(row))
+
+
+def mark_resubmit_confirmed(
+    conn: sqlite3.Connection, student_id: str, capture_id: str, confirmed_at: str
+) -> None:
+    """docs/ROADMAP.md's V1 "Attempts": the child's own "yes, I actually
+    redid this" tap, or k12ta.pipeline.process auto-confirming a page's
+    first-ever capture. A no-op, not an error, when already confirmed --
+    same "stale action, nothing happens" honesty as k12ta.store.
+    identity_corrections.dismiss_correction, since re-tapping an already-
+    confirmed page must never overwrite its original confirmation time."""
+    conn.execute(
+        """
+        UPDATE page_captures SET resubmit_confirmed_at = :confirmed_at
+        WHERE student_id = :student_id AND capture_id = :capture_id
+            AND resubmit_confirmed_at IS NULL
+        """,
+        {"student_id": student_id, "capture_id": capture_id, "confirmed_at": confirmed_at},
+    )
+    conn.commit()
 
 
 def record_transcribe_failure(

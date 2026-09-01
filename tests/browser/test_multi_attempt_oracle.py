@@ -107,6 +107,13 @@ def _capture_result(student_answer: str) -> TranscriptionResult:
 def test_a_second_capture_with_a_changed_correct_answer_never_confirms_it(
     page: Page, web_server: LiveServer, stub_web_transcriber: FakeTranscriber
 ) -> None:
+    """docs/ROADMAP.md's V1 "Attempts" added a gate in front of the older
+    per-problem text-diff suppression this test originally proved alone: a
+    second real capture of the same page now withholds its grade behind a
+    "did you actually redo this?" confirmation first. The oracle-safety
+    property under test -- never "Correct!", never the real answer -- must
+    hold at both stages, so this exercises both: before confirming, and
+    again once confirmed and the older suppression logic takes over."""
     _seed_gradeable_diagnostic_only_source(web_server.connection())
 
     stub_web_transcriber.result = _capture_result("18")  # wrong
@@ -122,6 +129,16 @@ def test_a_second_capture_with_a_changed_correct_answer_never_confirms_it(
     # Scoped to the coach's own message, not the whole page: "You wrote: 19" in
     # the (separate) answer div is her own input echoed back, not a disclosure --
     # the property under test is that the *coach's verdict* never confirms it.
+    outcome_label = page.locator(".outcome-label")
+    expect(outcome_label).not_to_contain_text("Correct!")
+    expect(outcome_label).not_to_contain_text(_REAL_ANSWER)
+    expect(outcome_label).to_contain_text("Did you actually redo this page")
+
+    # Confirm the resubmission -- the real answer still must never surface,
+    # now via the older text-diff suppression this whole flow used to test
+    # on its own.
+    page.get_by_role("button", name="Yes, I redid it").click()
+    expect(page.locator(".outcome-label")).to_be_visible(timeout=5000)
     outcome_label = page.locator(".outcome-label")
     expect(outcome_label).not_to_contain_text("Correct!")
     expect(outcome_label).not_to_contain_text(_REAL_ANSWER)

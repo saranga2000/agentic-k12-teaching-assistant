@@ -608,10 +608,18 @@ def process_capture(
     # k12ta.domain.attempts' own per-problem text-diff oracle-suppression
     # logic (unchanged) -- that decides what a student is TOLD; this decides
     # whether a FOURTH photograph gets graded at all.
-    attempt_cap_reached = resolved_page_number is not None and (
+    existing_page_attempts = (
         sessions.count_page_attempts(conn, student_id, assignment.source_id, resolved_page_number)
-        >= 3
+        if resolved_page_number is not None
+        else 0
     )
+    attempt_cap_reached = resolved_page_number is not None and existing_page_attempts >= 3
+    if resolved_page_number is not None and existing_page_attempts == 0:
+        # A page's first-ever capture has nothing to confirm redoing --
+        # docs/ROADMAP.md's V1 "Attempts", the deliberate-resubmit
+        # confirmation only applies from the second capture of a page
+        # onward. k12ta.respond.render withholds a grade until this is set.
+        captures.mark_resubmit_confirmed(conn, student_id, capture_row.capture_id, now)
 
     session_id = str(uuid4())
     sessions.insert_session(
@@ -752,7 +760,20 @@ def regrade_capture_for_resolved_identity(
     Resolving identity is not the same as having a key for the resolved
     page -- decide() can still land on NEEDS_HUMAN (most likely
     NO_KEY_FOR_PAGE) rather than a definite grade, and that is exactly as
-    honest here as it is at capture time."""
+    honest here as it is at capture time.
+
+    Also auto-confirms this capture's resubmit-confirmation (docs/ROADMAP.md's
+    V1 "Attempts") when no *other* capture has ever resolved to this same
+    page -- this capture's own rows still carry their original NULL
+    page_number at this point (the update loop below hasn't run yet), so
+    count_page_attempts never counts it against itself, same reasoning as
+    process_capture's own check. Called from replay_source too, harmlessly:
+    an already-multi-attempt page's confirmation state is left exactly as
+    it was, since mark_resubmit_confirmed only ever sets a NULL value."""
+    if sessions.count_page_attempts(conn, student_id, source_id, page_number) == 0:
+        captures.mark_resubmit_confirmed(
+            conn, student_id, capture_id, datetime.now(UTC).isoformat()
+        )
     for problem in captures.list_problems_for_capture(conn, student_id, capture_id):
         key_entry = find_key_entry(
             answer_keys.get_entries_for_page(conn, student_id, source_id, page_number),

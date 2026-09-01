@@ -489,6 +489,9 @@ def test_my_pages_splits_waiting_to_look_at_and_graded(
                 image_path="/tmp/does-not-matter.jpg",
             ),
         )
+        store_captures.mark_resubmit_confirmed(
+            conn, "s-marcus", capture_id, "2026-08-13T08:00:00+00:00"
+        )
         store_captures.insert_problem(
             conn,
             store_captures.ProblemRow(
@@ -700,6 +703,7 @@ def test_my_pages_honours_a_parent_override_of_the_feedback_mode(
             image_path="/tmp/does-not-matter.jpg",
         ),
     )
+    store_captures.mark_resubmit_confirmed(conn, "s-marcus", "c-1", "2026-08-13T08:00:00+00:00")
     store_captures.insert_problem(
         conn,
         store_captures.ProblemRow(
@@ -1235,6 +1239,9 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
             captured_at="2026-08-12T08:00:00+00:00",
             image_path="/tmp/does-not-matter.jpg",
         ),
+    )
+    store_captures.mark_resubmit_confirmed(
+        conn, "s-marcus", "c-synthetic", "2026-08-12T08:00:00+00:00"
     )
     for problem_id, answer, confidence in (("1", "19", 0.99), ("2", "12", 0.99), ("3", "7", 0.99)):
         store_captures.insert_problem(
@@ -2209,6 +2216,9 @@ def _seed_one_incorrect_session(
             image_path="/tmp/does-not-matter.jpg",
         ),
     )
+    store_captures.mark_resubmit_confirmed(
+        conn, "s-marcus", "c-synthetic", "2026-08-12T08:00:00+00:00"
+    )
     store_captures.insert_problem(
         conn,
         store_captures.ProblemRow(
@@ -2317,6 +2327,143 @@ def test_submit_dispute_files_it_and_redirects_back(
     after = client.get("/session/s-marcus/sess-synthetic")
     assert "Sent to your grown-up." in after.text
     assert 'action="/student/s-marcus/dispute"' not in after.text
+
+
+def _seed_unconfirmed_resubmission(conn: sqlite3.Connection) -> None:
+    """A second, genuinely unconfirmed capture -- docs/ROADMAP.md's V1
+    "Attempts" -- for a problem the child already saw an incorrect verdict
+    for, real answer "19_SECRET" withheld."""
+    students.insert_student(
+        conn,
+        students.StudentRow(
+            student_id="s-marcus",
+            display_name="Marcus",
+            grade_level=7,
+            state_code="CA",
+            coach_name="Coach",
+        ),
+    )
+    content.insert_content_source(
+        conn,
+        content.ContentSourceRow(
+            student_id="s-marcus",
+            source_id="summer_bridge",
+            label="summer_bridge",
+            kind="worksheet_packet",
+            subject="math",
+            has_answer_key=True,
+            graded_by_someone_else=False,
+            default_mode="full",
+            typical_session_minutes=30,
+        ),
+    )
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-synthetic",
+            source_id="summer_bridge",
+            created_at="2026-08-12T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-unconfirmed",
+            assignment_id="a-synthetic",
+            captured_at="2026-08-12T09:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    # Deliberately no mark_resubmit_confirmed call -- this is the point.
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-unconfirmed",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-unconfirmed",
+            assignment_id="a-synthetic",
+            started_at="2026-08-12T09:00:00+00:00",
+            ended_at="2026-08-12T09:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-unconfirmed",
+            capture_id="c-unconfirmed",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+        ),
+    )
+
+
+def test_session_result_shows_the_resubmit_confirmation_control_when_unconfirmed(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_unconfirmed_resubmission(conn)
+
+    response = client.get("/session/s-marcus/sess-unconfirmed")
+
+    assert response.status_code == 200
+    assert "Correct!" not in response.text
+    assert "did you actually redo" in response.text.lower()
+    assert 'action="/student/s-marcus/confirm-resubmit"' in response.text
+    assert 'value="c-unconfirmed"' in response.text
+
+
+def test_submit_resubmit_confirmation_confirms_it_and_then_discloses(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_unconfirmed_resubmission(conn)
+
+    response = client.post(
+        "/student/s-marcus/confirm-resubmit",
+        data={
+            "capture_id": "c-unconfirmed",
+            "redirect_to": "/session/s-marcus/sess-unconfirmed",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/session/s-marcus/sess-unconfirmed"
+    capture = store_captures.get_page_capture(conn, "s-marcus", "c-unconfirmed")
+    assert capture is not None
+    assert capture.resubmit_confirmed_at is not None
+
+    after = client.get("/session/s-marcus/sess-unconfirmed")
+    assert "Correct!" in after.text
+    assert 'action="/student/s-marcus/confirm-resubmit"' not in after.text
+
+
+def test_submit_resubmit_confirmation_rejects_an_external_redirect(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_unconfirmed_resubmission(conn)
+
+    response = client.post(
+        "/student/s-marcus/confirm-resubmit",
+        data={"capture_id": "c-unconfirmed", "redirect_to": "https://example.com/evil"},
+    )
+
+    assert response.status_code == 400
+    capture = store_captures.get_page_capture(conn, "s-marcus", "c-unconfirmed")
+    assert capture is not None
+    assert capture.resubmit_confirmed_at is None
 
 
 def test_submit_dispute_rejects_a_blank_reason(
@@ -2520,6 +2667,11 @@ def _seed_whole_page_recapture(conn: sqlite3.Connection, *, second_guess: str) -
                 image_path="/tmp/does-not-matter.jpg",
             ),
         )
+        # This test is about the pre-existing per-problem text-diff
+        # suppression logic (k12ta.domain.attempts), not docs/ROADMAP.md's V1
+        # "Attempts" confirmation gate -- both captures are confirmed so that
+        # gate never interferes with what this test actually exercises.
+        store_captures.mark_resubmit_confirmed(conn, "s-marcus", capture_id, captured_at)
         sessions.insert_session(
             conn,
             sessions.SessionRow(
@@ -2668,6 +2820,7 @@ def test_my_pages_groups_a_recaptured_partially_correct_page_with_an_attempt_cou
                 image_path="/tmp/does-not-matter.jpg",
             ),
         )
+        store_captures.mark_resubmit_confirmed(conn, "s-marcus", capture_id, captured_at)
         store_captures.insert_problem(
             conn,
             store_captures.ProblemRow(

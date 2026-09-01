@@ -149,3 +149,36 @@ def test_get_problem_returns_none_for_an_unknown_problem() -> None:
     _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
 
     assert captures.get_problem(conn, "s-marcus", "c-1", "nope") is None
+
+
+def test_a_new_capture_starts_with_no_resubmit_confirmation() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
+
+    row = captures.get_page_capture(conn, "s-marcus", "c-1")
+
+    assert row is not None
+    assert row.resubmit_confirmed_at is None
+
+
+def test_mark_resubmit_confirmed_sets_the_timestamp() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
+
+    captures.mark_resubmit_confirmed(conn, "s-marcus", "c-1", "2026-08-31T21:00:00+00:00")
+
+    row = captures.get_page_capture(conn, "s-marcus", "c-1")
+    assert row is not None
+    assert row.resubmit_confirmed_at == "2026-08-31T21:00:00+00:00"
+
+
+def test_mark_resubmit_confirmed_never_overwrites_an_earlier_confirmation() -> None:
+    conn = _migrated_connection()
+    _seed_graded_problem(conn, capture_id="c-1", problem_id="1")
+
+    captures.mark_resubmit_confirmed(conn, "s-marcus", "c-1", "2026-08-31T21:00:00+00:00")
+    captures.mark_resubmit_confirmed(conn, "s-marcus", "c-1", "2026-08-31T22:00:00+00:00")
+
+    row = captures.get_page_capture(conn, "s-marcus", "c-1")
+    assert row is not None
+    assert row.resubmit_confirmed_at == "2026-08-31T21:00:00+00:00"
