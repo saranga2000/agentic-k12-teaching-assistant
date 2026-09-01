@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -31,6 +31,7 @@ from k12ta.llm.base import (
     RateLimitExhaustedError,
     RequestCapExceededError,
     TransientError,
+    VisionImage,
     VisionResponse,
 )
 
@@ -95,17 +96,35 @@ class GeminiVisionModel:
         can legitimately run a couple of minutes (see STREAM_INACTIVITY_TIMEOUT_
         SECONDS's docstring). Cumulative, not a per-chunk delta: callers want "how
         much has arrived," not arithmetic on a stream of diffs."""
+        return self.generate_multi(
+            prompt, [VisionImage(image_bytes=image_bytes, mime_type=mime_type)], on_progress
+        )
+
+    def generate_multi(
+        self,
+        prompt: str,
+        images: Sequence[VisionImage],
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        """Same call shape as `generate`, for one or more images at once --
+        docs/ARCHITECTURE.md's tier 3 vision evaluator. Gemini's `parts` list
+        already accepts any number of `inline_data` entries alongside the
+        prompt text; `generate` is the one-image case of this, not a
+        separate code path."""
         body = {
             "contents": [
                 {
                     "parts": [
                         {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime_type,
-                                "data": base64.b64encode(image_bytes).decode("ascii"),
+                        *(
+                            {
+                                "inline_data": {
+                                    "mime_type": image.mime_type,
+                                    "data": base64.b64encode(image.image_bytes).decode("ascii"),
+                                }
                             }
-                        },
+                            for image in images
+                        ),
                     ]
                 }
             ]

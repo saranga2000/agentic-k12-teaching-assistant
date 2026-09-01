@@ -8,9 +8,12 @@ what kind of question it is. The only branches are confidence branches: whether
 tier 2 agreed with itself, and whether tier 2's own confidence (or the
 transcription's) is low enough to escalate to tier 3.
 
-Vision (tier 3) is not implemented in this file yet -- see should_escalate_to_
-vision, which decides *whether* to escalate, offline and model-free, so the
-policy is tested independently of tier 3 existing at all.
+Tier 3 (evaluate_vision) sends the exercise page photograph -- and the answer
+key's own page photograph, when one is on file -- directly to the model,
+fusing transcription and evaluation into one call rather than trusting a
+possibly-wrong transcription. should_escalate_to_vision decides *whether* to
+escalate, offline and model-free, so that policy is tested independently of
+whether tier 3 itself is called.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import json
 from dataclasses import dataclass
 
 from k12ta.domain.models import GradeOutcome
-from k12ta.llm.base import ChatTurn, TextModel
+from k12ta.llm.base import ChatTurn, TextModel, VisionImage, VisionModel
 from k12ta.prompts import load_prompt
 
 _VERDICT_FLOOR = 0.7
@@ -37,6 +40,19 @@ class EvaluatorResult:
     verdict accuracy). Always None for a keyed-mismatch judgement, which never
     solves the problem itself."""
     tier: int = 2
+    read_confidence: float | None = None
+    """Tier 3 only: confidence in what the vision call actually saw on the
+    page, kept separate from `confidence` (confidence in the verdict) --
+    docs/ARCHITECTURE.md requires two distinct confidences here, since
+    misreading the student's handwriting and correctly reading a wrong
+    answer are different problems with different fixes. Always None for
+    tier 2, which never looks at pixels."""
+    read_answer: str | None = None
+    """Tier 3 only: a textual description of the answer it saw on the page --
+    stored as this item's transcription, per docs/ARCHITECTURE.md ("tier 3
+    fuses transcription and evaluation into one call rather than skipping
+    the record the parent reviews and the report card counts"). Always None
+    for tier 2."""
 
 
 def _strip_code_fence(text: str) -> str:
@@ -59,6 +75,15 @@ _OUTCOME_BY_VERDICT = {
 }
 
 
+def _valid_float(value: object) -> float:
+    """0.0 for anything that isn't genuinely a number (including bool, which
+    isinstance(x, int) would otherwise accept) -- an untrustworthy confidence
+    value defaults to the floor, never a guessed number."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return 0.0
+
+
 def _parse_response(text: str, tier: int) -> EvaluatorResult:
     """Ambiguity resolves to NEEDS_HUMAN, never a guess -- same rule
     k12ta.grading.key_grader.normalise's docstring states for the
@@ -72,17 +97,41 @@ def _parse_response(text: str, tier: int) -> EvaluatorResult:
         outcome = _OUTCOME_BY_VERDICT.get(str(verdict))
         if outcome is None:
             return EvaluatorResult(outcome=GradeOutcome.NEEDS_HUMAN, confidence=0.0, tier=tier)
-        confidence = payload.get("confidence")
-        valid_confidence = isinstance(confidence, int | float) and not isinstance(confidence, bool)
         generated_answer = payload.get("generated_answer")
         return EvaluatorResult(
             outcome=outcome,
-            confidence=float(confidence) if valid_confidence else 0.0,  # type: ignore[arg-type]
+            confidence=_valid_float(payload.get("confidence")),
             generated_answer=str(generated_answer) if generated_answer else None,
             tier=tier,
         )
     except (json.JSONDecodeError, ValueError, TypeError):
         return EvaluatorResult(outcome=GradeOutcome.NEEDS_HUMAN, confidence=0.0, tier=tier)
+
+
+def _parse_vision_response(text: str) -> EvaluatorResult:
+    """Tier 3's own parse, distinct from _parse_response only in reading the
+    two extra fields (read_answer/read_confidence) evaluate_vision's prompt
+    asks for -- same ambiguity-resolves-to-NEEDS_HUMAN rule."""
+    try:
+        payload = json.loads(_strip_code_fence(text))
+        if not isinstance(payload, dict):
+            raise ValueError("expected a JSON object")
+        verdict = payload.get("verdict")
+        outcome = _OUTCOME_BY_VERDICT.get(str(verdict))
+        if outcome is None:
+            return EvaluatorResult(outcome=GradeOutcome.NEEDS_HUMAN, confidence=0.0, tier=3)
+        generated_answer = payload.get("generated_answer")
+        read_answer = payload.get("read_answer")
+        return EvaluatorResult(
+            outcome=outcome,
+            confidence=_valid_float(payload.get("confidence")),
+            generated_answer=str(generated_answer) if generated_answer else None,
+            tier=3,
+            read_confidence=_valid_float(payload.get("read_confidence")),
+            read_answer=str(read_answer) if read_answer else None,
+        )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return EvaluatorResult(outcome=GradeOutcome.NEEDS_HUMAN, confidence=0.0, tier=3)
 
 
 _PROMPT = load_prompt("evaluate_text")
@@ -158,6 +207,77 @@ def evaluate_keyless(
         generated_answer=first.generated_answer or second.generated_answer,
         tier=2,
     )
+
+
+_VISION_PROMPT = load_prompt("evaluate_vision")
+
+_VISION_KEYED_TEXT_AND_IMAGE_SECTION = (
+    'The answer key\'s text says: "{key_answer}". Its own page photograph is also '
+    "included, as the second image."
+)
+_VISION_KEYED_TEXT_ONLY_SECTION = 'The answer key says: "{key_answer}".'
+_VISION_KEYED_IMAGE_ONLY_SECTION = (
+    "No key text is on file, but the answer key's own page photograph is included "
+    "as the second image -- read its answer directly from it."
+)
+_VISION_KEYLESS_SECTION = (
+    "No answer key exists for this problem. You must work out the correct answer yourself."
+)
+_VISION_KEYED_INSTRUCTIONS = (
+    "judge whether the student's answer means the same thing as the key's answer -- "
+    "reason about meaning, not exact wording, and do not solve the problem yourself. "
+    "Leave generated_answer null."
+)
+_VISION_KEYLESS_INSTRUCTIONS = (
+    "first solve the problem yourself, carefully, then compare the student's answer "
+    "against your own solved answer. Report your own solved answer in generated_answer."
+)
+
+
+def _build_vision_prompt(
+    problem_text: str, key_answer_text: str | None, has_key_image: bool
+) -> str:
+    if key_answer_text and has_key_image:
+        section = _VISION_KEYED_TEXT_AND_IMAGE_SECTION.format(key_answer=key_answer_text)
+    elif key_answer_text:
+        section = _VISION_KEYED_TEXT_ONLY_SECTION.format(key_answer=key_answer_text)
+    elif has_key_image:
+        section = _VISION_KEYED_IMAGE_ONLY_SECTION
+    else:
+        section = _VISION_KEYLESS_SECTION
+    is_keyed = key_answer_text is not None or has_key_image
+    instructions = _VISION_KEYED_INSTRUCTIONS if is_keyed else _VISION_KEYLESS_INSTRUCTIONS
+    return (
+        _VISION_PROMPT.replace("{{PROBLEM_TEXT}}", problem_text)
+        .replace("{{KEY_ANSWER_SECTION}}", section)
+        .replace("{{KEY_ANSWER_INSTRUCTIONS}}", instructions)
+    )
+
+
+def evaluate_vision(
+    vision_model: VisionModel,
+    problem_text: str,
+    page_image: VisionImage,
+    key_image: VisionImage | None,
+    key_answer_text: str | None,
+) -> EvaluatorResult:
+    """Tier 3, the last resort (docs/ARCHITECTURE.md's evaluation ladder):
+    reads the answer directly off the exercise page photograph -- and the
+    answer key's own page photograph, when one is on file -- rather than
+    trusting a possibly-wrong transcription. This is what makes spatial
+    answers (a line joining two columns, a circled option, a crossing-out)
+    gradable at all, and turns a low-confidence or failed transcription from
+    a dead end into an attempt. Never requires the key image: works with the
+    key as text, as an image, both, or neither. One call regardless of
+    whether a key exists, unlike tier 2's keyed/keyless split, since the
+    prompt itself conditions on what key context was given. Emits two
+    separate confidences and its own reading of the answer -- see
+    EvaluatorResult's own docstrings for why neither may be dropped or
+    merged with the other."""
+    images = [page_image, *([key_image] if key_image is not None else [])]
+    prompt = _build_vision_prompt(problem_text, key_answer_text, key_image is not None)
+    response = vision_model.generate_multi(prompt, images)
+    return _parse_vision_response(response.text)
 
 
 def should_escalate_to_vision(

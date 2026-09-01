@@ -97,14 +97,21 @@ running count logged below when that item starts.
 
 Live model calls spent: 6 / 10 (this run's own cap; done, not resuming)
 
-## Current item: none -- all 6 items, including the live smoke test, are complete
-and committed.
+## Current item: none from the original 6 -- new work order 2026-08-31: "Do M5, then
+complete M6 (vision only, splitting explicitly deferred), then a full manual test."
+
+- [x] M5 (correction audit trail, decided-verdict correction path, child notice,
+      fixture promotion) -- commits `104b212`, `3d915bc`. Full detail in
+      docs/ROADMAP.md's M5 section's two new "Shipped 2026-08-31" notes.
+- [ ] M6 tier 3 (vision evaluator) -- in progress. Splitting explicitly out of
+      scope for this pass, per the user's own choice when asked.
+- [ ] Full manual test, once M6 tier 3 is done and `make check` is clean.
 
 Nothing further to do without new direction. Real remaining gaps, all named rather
-than guessed at, are in "Questions for the morning" below (tier 3, multi-part
-splitting, the evaluator's flat 1.0 confidence, a possible key typo on page 17 worth
-a parent checking) -- none of them block anything currently shipped, since the
-evaluator stays off by default either way.
+than guessed at, are in "Questions for the morning" below (multi-part splitting, the
+evaluator's flat 1.0 confidence, a possible key typo on page 17 worth a parent
+checking) -- none of them block anything currently shipped, since the evaluator
+stays off by default either way.
 
 ## Questions for the morning
 
@@ -125,11 +132,7 @@ evaluator stays off by default either way.
 3. **Multi-part sub-item splitting (`5a`...`5g`) is not implemented at all.** Real
    structural change (one transcribed item -> one graded_problems row today, always)
    -- needs its own design pass, not a decision made solo tonight.
-4. **Vision (tier 3) is not implemented.** `should_escalate_to_vision` exists and is
-   tested; nothing calls it yet. The smoke test's page 15 (a spatial cross-section
-   question, no image access) is a real, concrete example of exactly the case it's
-   for.
-5. **Every live call in the smoke test reported confidence 1.0**, including one
+4. **Every live call in the smoke test reported confidence 1.0**, including one
    whose own two independent solves disagreed with each other. Worth checking once
    a larger run exists whether `prompts/evaluate_text.md` needs a stronger nudge to
    actually calibrate this value, rather than default to the ceiling.

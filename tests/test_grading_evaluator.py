@@ -16,9 +16,10 @@ from k12ta.grading.evaluator import (
     EvaluatorResult,
     evaluate_keyed_mismatch,
     evaluate_keyless,
+    evaluate_vision,
     should_escalate_to_vision,
 )
-from k12ta.llm.base import ChatResponse, DataRetention
+from k12ta.llm.base import ChatResponse, DataRetention, VisionImage, VisionResponse
 
 
 @dataclass
@@ -42,6 +43,51 @@ class _FakeTextModel:
 def _reply(verdict: str, confidence: float, generated_answer: str | None = None) -> str:
     return json.dumps(
         {"verdict": verdict, "confidence": confidence, "generated_answer": generated_answer}
+    )
+
+
+@dataclass
+class _FakeVisionModel:
+    replies: list[str]
+    data_retention: DataRetention = DataRetention.NO_RETENTION
+    request_count: int = field(default=0)
+    seen_prompts: list[str] = field(default_factory=list)
+    seen_image_counts: list[int] = field(default_factory=list)
+
+    def generate(
+        self, prompt: str, image_bytes: bytes, mime_type: str, on_progress: object = None
+    ) -> VisionResponse:
+        raise NotImplementedError("evaluate_vision always calls generate_multi")
+
+    def generate_multi(
+        self, prompt: str, images: list[VisionImage], on_progress: object = None
+    ) -> VisionResponse:
+        self.seen_prompts.append(prompt)
+        self.seen_image_counts.append(len(images))
+        self.request_count += 1
+        return VisionResponse(
+            text=self.replies[self.request_count - 1], cost_usd=Decimal("0"), latency_ms=1
+        )
+
+    def verify(self) -> None:
+        pass
+
+
+def _vision_reply(
+    verdict: str,
+    confidence: float,
+    read_answer: str | None = None,
+    read_confidence: float = 0.9,
+    generated_answer: str | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "verdict": verdict,
+            "confidence": confidence,
+            "read_answer": read_answer,
+            "read_confidence": read_confidence,
+            "generated_answer": generated_answer,
+        }
     )
 
 
@@ -173,6 +219,107 @@ def test_keyless_prompt_never_mentions_a_key_answer() -> None:
     evaluate_keyless(model, "2 + 2", "4")
 
     assert "no answer key" in model.seen_prompts[0].lower()
+
+
+# --- evaluate_vision: tier 3, the last resort -------------------------------
+
+
+def test_vision_sends_only_the_page_image_when_no_key_image_exists() -> None:
+    model = _FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="19")])
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    evaluate_vision(model, "12 + 7", page, key_image=None, key_answer_text=None)
+
+    assert model.seen_image_counts == [1]
+
+
+def test_vision_sends_both_images_when_a_key_image_exists() -> None:
+    model = _FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="19")])
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+    key = VisionImage(image_bytes=b"key-bytes", mime_type="image/png")
+
+    evaluate_vision(model, "12 + 7", page, key_image=key, key_answer_text=None)
+
+    assert model.seen_image_counts == [2]
+
+
+def test_vision_returns_a_result_at_tier_3_with_both_confidences() -> None:
+    model = _FakeVisionModel(
+        replies=[_vision_reply("correct", 0.85, read_answer="19", read_confidence=0.95)]
+    )
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    result = evaluate_vision(model, "12 + 7", page, key_image=None, key_answer_text=None)
+
+    assert result.tier == 3
+    assert result.outcome is GradeOutcome.CORRECT
+    assert result.confidence == 0.85
+    assert result.read_confidence == 0.95
+    assert result.read_answer == "19"
+
+
+def test_vision_reports_a_generated_answer_when_keyless() -> None:
+    model = _FakeVisionModel(
+        replies=[_vision_reply("correct", 0.9, read_answer="19", generated_answer="19")]
+    )
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    result = evaluate_vision(model, "12 + 7", page, key_image=None, key_answer_text=None)
+
+    assert result.generated_answer == "19"
+    assert "no answer key" in model.seen_prompts[0].lower()
+
+
+def test_vision_never_solves_it_itself_when_a_key_answer_is_given() -> None:
+    model = _FakeVisionModel(replies=[_vision_reply("incorrect", 0.9, read_answer="rhombus")])
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    evaluate_vision(model, "shape?", page, key_image=None, key_answer_text="quadrilateral")
+
+    prompt = model.seen_prompts[0]
+    assert "quadrilateral" in prompt
+    assert "do not solve the problem yourself" in prompt.lower()
+
+
+def test_vision_prompt_mentions_the_key_image_when_one_is_included_with_no_text() -> None:
+    model = _FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="19")])
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+    key = VisionImage(image_bytes=b"key-bytes", mime_type="image/png")
+
+    evaluate_vision(model, "12 + 7", page, key_image=key, key_answer_text=None)
+
+    assert "second image" in model.seen_prompts[0].lower()
+
+
+def test_vision_malformed_response_is_needs_human_not_a_guess() -> None:
+    model = _FakeVisionModel(replies=["not json at all"])
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    result = evaluate_vision(model, "12 + 7", page, key_image=None, key_answer_text=None)
+
+    assert result.outcome is GradeOutcome.NEEDS_HUMAN
+    assert result.confidence == 0.0
+    assert result.tier == 3
+
+
+def test_vision_unrecognised_verdict_is_needs_human() -> None:
+    model = _FakeVisionModel(
+        replies=[
+            json.dumps(
+                {
+                    "verdict": "sort-of",
+                    "confidence": 0.9,
+                    "read_answer": "19",
+                    "read_confidence": 0.9,
+                }
+            )
+        ]
+    )
+    page = VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg")
+
+    result = evaluate_vision(model, "12 + 7", page, key_image=None, key_answer_text=None)
+
+    assert result.outcome is GradeOutcome.NEEDS_HUMAN
 
 
 # --- should_escalate_to_vision: confidence branches only, never a type branch

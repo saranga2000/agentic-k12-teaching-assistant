@@ -15,6 +15,7 @@ from k12ta.llm.base import (
     RateLimitExhaustedError,
     RequestCapExceededError,
     TransientError,
+    VisionImage,
 )
 from k12ta.llm.gemini import GeminiError, GeminiVisionModel
 
@@ -187,6 +188,64 @@ def test_generate_sends_prompt_and_inline_image_data() -> None:
     assert parts[0] == {"text": "describe this page"}
     assert parts[1]["inline_data"]["mime_type"] == "image/png"
     assert base64.b64decode(parts[1]["inline_data"]["data"]) == b"\x01\x02\x03"
+
+
+def test_generate_delegates_to_generate_multi_with_one_image() -> None:
+    """generate is the one-image case of generate_multi, not a separate code
+    path -- docs/ARCHITECTURE.md's tier 3 vision evaluator relies on both
+    producing identical request shapes for a single image."""
+    client, calls = _client_and_calls([_sse_response("{}")])
+    model = _model(client)
+
+    model.generate("describe this page", b"\x01\x02\x03", "image/png")
+
+    body = json.loads(calls[0].content)
+    parts = body["contents"][0]["parts"]
+    assert len(parts) == 2
+    assert parts[1]["inline_data"]["mime_type"] == "image/png"
+
+
+def test_generate_multi_sends_every_image_in_order() -> None:
+    client, calls = _client_and_calls([_sse_response("{}")])
+    model = _model(client)
+
+    model.generate_multi(
+        "compare these two pages",
+        [
+            VisionImage(image_bytes=b"page-bytes", mime_type="image/jpeg"),
+            VisionImage(image_bytes=b"key-bytes", mime_type="image/png"),
+        ],
+    )
+
+    body = json.loads(calls[0].content)
+    parts = body["contents"][0]["parts"]
+    assert parts[0] == {"text": "compare these two pages"}
+    assert parts[1]["inline_data"]["mime_type"] == "image/jpeg"
+    assert base64.b64decode(parts[1]["inline_data"]["data"]) == b"page-bytes"
+    assert parts[2]["inline_data"]["mime_type"] == "image/png"
+    assert base64.b64decode(parts[2]["inline_data"]["data"]) == b"key-bytes"
+
+
+def test_generate_multi_works_with_a_single_image() -> None:
+    client, calls = _client_and_calls([_sse_response("{}")])
+    model = _model(client)
+
+    model.generate_multi(
+        "describe this page", [VisionImage(image_bytes=b"\x01\x02\x03", mime_type="image/png")]
+    )
+
+    body = json.loads(calls[0].content)
+    assert len(body["contents"][0]["parts"]) == 2
+
+
+def test_generate_multi_returns_text_and_marks_provider_may_train() -> None:
+    client, _ = _client_and_calls([_sse_response("hello")])
+    model = _model(client)
+
+    response = model.generate_multi("p", [VisionImage(image_bytes=b"x", mime_type="image/jpeg")])
+
+    assert response.text == "hello"
+    assert model.data_retention is DataRetention.PROVIDER_MAY_TRAIN
 
 
 def test_generate_raises_on_missing_candidates() -> None:

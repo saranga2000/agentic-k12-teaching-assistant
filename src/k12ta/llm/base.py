@@ -65,8 +65,16 @@ class RequestCapExceededError(ModelCallError):
     before the request that would exceed it is sent."""
 
 
+@dataclass(frozen=True)
+class VisionImage:
+    """One image to send alongside a prompt -- see VisionModel.generate_multi."""
+
+    image_bytes: bytes
+    mime_type: str
+
+
 class VisionModel(Protocol):
-    """Anything that turns a prompt plus one image into raw model text."""
+    """Anything that turns a prompt plus one or more images into raw model text."""
 
     data_retention: DataRetention
     request_count: int
@@ -80,10 +88,26 @@ class VisionModel(Protocol):
         mime_type: str,
         on_progress: Callable[[int], None] | None = None,
     ) -> VisionResponse:
-        """Call the model once. Raises on failure; the caller decides how to degrade.
-        `on_progress`, if given, is called with the cumulative character count
-        received so far -- a caller with nothing better than a static spinner uses
-        this to show something honest about a call that can run minutes."""
+        """Call the model once with exactly one image. Raises on failure; the caller
+        decides how to degrade. `on_progress`, if given, is called with the
+        cumulative character count received so far -- a caller with nothing better
+        than a static spinner uses this to show something honest about a call that
+        can run minutes."""
+        ...
+
+    def generate_multi(
+        self,
+        prompt: str,
+        images: Sequence[VisionImage],
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        """Like `generate`, but for more than one image in the same call --
+        docs/ARCHITECTURE.md's tier 3 vision evaluator sends the exercise page
+        photo plus the answer key page photo, when one is on file, together so
+        the model can reason about both at once rather than losing the
+        comparison across two separate calls. `images` is sent in order.
+        `k12ta.transcribe`'s existing single-image call sites are unaffected
+        and keep using `generate`."""
         ...
 
     def verify(self) -> None:
