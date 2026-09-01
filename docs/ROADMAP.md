@@ -1772,15 +1772,39 @@ every branch: keyless rescue to a real verdict, no-vision-model no-op, both keye
 no-key-yet shapes (no entry, ungradeable entry), a real key match, vision still
 failing, and the INCORRECT/mark-wrong gate.
 
+**`docs/EVALS.md` families 3/4's precision-calibration script, shipped 2026-08-31.**
+`evals/run_grading_eval.py` scores the evaluator against the fixture corpus rather
+than only a live-DB smoke test: precision of INCORRECT verdicts per confidence band
+(family 3) and overall agreement with a fixture's own `correct_answer` (family 4),
+for both the keyed-mismatch and keyless paths, always reported separately, never
+pooled. Ground truth is `_ground_truth`, a string/numeric proxy built from
+`k12ta.grading.key_grader.grade_against_key` — honest for numeric fixtures and
+exact matches, and explicit about what it cannot judge: a genuinely semantic
+near-miss (the exact case the evaluator exists to judge, e.g. "rhombus" vs
+"quadrilateral") is reported as `unscoreable` rather than guessed at, mirroring the
+same `looks_numeric` check `k12ta.grading.needs_human.decide` already applies.
+Sliced by provenance (hand-labelled vs parent-correction) and confidence band — not
+by answer shape or language, since neither is a field the fixture schema carries
+yet, and this script does not invent one to fill that gap. Built and tested offline
+with fakes only; **not run live against the real API as part of this pass** — this
+codebase's own standing rule (`scripts/keyless_smoke_test.py`'s gate) is that live
+model spend happens only on an explicit, present confirmation, not folded into an
+unattended batch of other work.
+
 **Not done, explicitly, not guessed at:**
 - **Multi-part sub-item splitting (`5a`…`5g`) is not implemented.** This is a real
   structural change (one transcribed item can currently only ever become one
   `graded_problems` row) deserving its own design pass, not a mechanical addition
   bolted onto the same pass as the evaluator itself — the single-answer case (the
   actual RSM/Kumon material on hand) is what shipped instead.
-- `docs/EVALS.md` families 3/4 have no runnable *precision-calibration* script yet
-  (family 4's key-withheld *smoke test* now does, see below) — only the method
-  documented in that file.
+- **Sliced by answer shape or language, per `docs/EVALS.md`'s own request for
+  families 1 and 4 alike** — neither is a field `k12ta.evals.fixtures.FixturePage`/
+  `FixtureItem` carries today. Adding one means a schema change and re-labelling the
+  existing corpus, not a mechanical script addition.
+- **A real precision-per-confidence-band *number*.** The script now exists and is
+  tested; it has not been run against the live API or the real fixture corpus, so
+  there is still no number to gate the "mark wrong" flag on — only the mechanism to
+  produce one, on demand.
 
 **Live smoke test run 2026-08-31, on explicit confirmation.** `scripts/
 keyless_smoke_test.py` (read-only against the real household database, opened via a

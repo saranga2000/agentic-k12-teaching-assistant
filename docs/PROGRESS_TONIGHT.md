@@ -111,14 +111,17 @@ LOW_CONFIDENCE rescue + the family 3/4 eval script), then M7."
       Same keyed-source never-invent-a-verdict boundary as NO_KEY_FOR_PAGE,
       enforced explicitly. 8 new pipeline tests. Full detail in docs/ROADMAP.md's
       M6 section.
-- [ ] Family 3/4 eval precision script -- in progress. Will be built and tested
-      offline with fakes; explicitly will NOT be run live against the real API
-      unattended -- this codebase's own standing rule (scripts/keyless_smoke_
-      test.py's own gate) is that live model spend happens only on an explicit,
-      present confirmation, and a blanket "don't ask permission" for this batch
-      of work doesn't override that specific, narrower rule.
+- [x] Family 3/4 eval precision script -- `evals/run_grading_eval.py` +
+      `tests/test_run_grading_eval.py` (8 tests, all offline via FakeTextModel).
+      Ground truth via a new `_ground_truth` helper mirroring decide()'s own
+      looks_numeric check, not grade_against_key alone (grade_against_key has no
+      notion of "might be a valid alternate name" -- found and fixed while
+      writing the first version of this script's tests). Deliberately NOT run
+      live -- see docs/ROADMAP.md's M6 section for the reasoning (this
+      codebase's own live-spend gate, not overridden by "don't ask permission"
+      for the rest of tonight's work).
 - [ ] M7 (attempt flow: 3-attempt cap + resubmit confirmation; report cards) --
-      next after the eval script.
+      next.
 
 Real remaining gaps, all named rather than guessed at, are in "Questions for the
 morning" below (multi-part splitting, the evaluator's flat 1.0 confidence, a
