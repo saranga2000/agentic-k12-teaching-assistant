@@ -367,6 +367,28 @@ class ReportCardCounts:
     still_awaiting_review: int = 0
 
 
+def count_page_attempts(
+    conn: sqlite3.Connection, student_id: str, source_id: str, page_number: int
+) -> int:
+    """docs/ROADMAP.md's V1 "Attempts": "a child may submit a page up to
+    three times" -- distinct captures that have ever resolved to this page
+    number, independent of k12ta.domain.attempts' own per-PROBLEM text-diff
+    logic (unchanged, still the oracle-suppression backstop for disclosure).
+    This counts physical resubmissions of the whole page, not distinct
+    guesses at one question, so k12ta.pipeline.process can enforce the cap
+    before deciding a single item."""
+    cur = conn.execute(
+        """
+        SELECT COUNT(DISTINCT gp.capture_id) FROM graded_problems gp
+        JOIN page_captures pc ON pc.student_id = gp.student_id AND pc.capture_id = gp.capture_id
+        JOIN assignments a ON a.student_id = pc.student_id AND a.assignment_id = pc.assignment_id
+        WHERE gp.student_id = ? AND a.source_id = ? AND gp.page_number = ?
+        """,
+        (student_id, source_id, page_number),
+    )
+    return int(cur.fetchone()[0])
+
+
 def report_card_counts(
     conn: sqlite3.Connection, student_id: str, source_id: str
 ) -> ReportCardCounts:

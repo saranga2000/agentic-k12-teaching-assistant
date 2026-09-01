@@ -3013,6 +3013,39 @@ def test_evaluations_screen_offers_a_verdict_form_for_needs_person_rows_too(
     assert "key says" not in response.text
 
 
+def test_evaluations_screen_offers_a_verdict_form_for_the_attempt_cap_too(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """docs/ROADMAP.md's V1 "Attempts": a fourth photograph of the same page
+    is refused automatic grading, but a parent can still judge it directly,
+    the same one-tap verdict already offered for needs_person."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-capped",
+        problem_id="1",
+        cause="attempt_cap_reached",
+        page_number=15,
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "Already tried 3 times" in response.text
+    assert "photographed this page 3 times" in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'value="c-capped"' in response.text
+
+
 def test_evaluations_screen_offers_a_verdict_form_for_low_confidence_rows_too(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

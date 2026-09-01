@@ -356,6 +356,14 @@ def process_capture(
     guess; CONFLICTING and PARTIAL are the two exceptions, refused explicitly as
     `NeedsHumanCause.CONFLICTING_PAGE_MARKERS`/`PARTIAL_PAGE_MARKERS` before
     `decide` ever runs, because `decide` itself never produces either cause.
+    A third exception, checked last: `NeedsHumanCause.ATTEMPT_CAP_REACHED`
+    (docs/ROADMAP.md's V1 "Attempts") when `sessions.count_page_attempts`
+    already counts 3 or more *other* captures resolved to this same page --
+    a fourth photograph is refused grading entirely, before `decide` runs,
+    rather than producing a fourth automatic verdict. Independent of
+    `k12ta.domain.attempts`' own per-problem text-diff oracle-suppression
+    logic, which is unchanged: that decides what a student is *told* about a
+    graded answer; this decides whether a page gets graded at all.
     Grading itself goes through `k12ta.grading.needs_human.decide`, which is the
     only place that decides an outcome and, when it's NEEDS_HUMAN, why. `decide`
     itself never solves a problem independently or judges a mismatch -- that is
@@ -593,6 +601,18 @@ def process_capture(
         else None
     )
 
+    # docs/ROADMAP.md's V1 "Attempts": "a child may submit a page up to three
+    # times." Computed once per capture, from every OTHER capture that has
+    # already resolved to this page -- this capture's own items are not yet
+    # inserted, so they are never counted against themselves. Independent of
+    # k12ta.domain.attempts' own per-problem text-diff oracle-suppression
+    # logic (unchanged) -- that decides what a student is TOLD; this decides
+    # whether a FOURTH photograph gets graded at all.
+    attempt_cap_reached = resolved_page_number is not None and (
+        sessions.count_page_attempts(conn, student_id, assignment.source_id, resolved_page_number)
+        >= 3
+    )
+
     session_id = str(uuid4())
     sessions.insert_session(
         conn,
@@ -628,6 +648,11 @@ def process_capture(
                 needs_human_cause=NeedsHumanCause.PARTIAL_PAGE_MARKERS,
             )
             detail = partial_detail
+        elif attempt_cap_reached:
+            decision = GradeDecision(
+                outcome=GradeOutcome.NEEDS_HUMAN,
+                needs_human_cause=NeedsHumanCause.ATTEMPT_CAP_REACHED,
+            )
         else:
             key_entry = (
                 find_key_entry(

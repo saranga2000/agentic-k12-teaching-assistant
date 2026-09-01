@@ -33,7 +33,7 @@ from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.domain.text import humanize_math_text
 from k12ta.evals.fixtures import promote_correction
 from k12ta.grading import page_identity
-from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry
+from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry, normalise_problem_id
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm import build_vision_model
 from k12ta.pipeline.key_ingestion import (
@@ -584,6 +584,7 @@ _WAITING_ON_TRANSCRIPTION_CAUSE = "low_confidence"
 _NEEDS_PERSON_CAUSE = "needs_person"
 _ANSWER_DIFFERS_CAUSE = "answer_differs_from_key"
 _AMBIGUOUS_PROBLEM_ID_CAUSE = "ambiguous_problem_id"
+_ATTEMPT_CAP_REACHED_CAUSE = "attempt_cap_reached"
 
 _CAUSE_LABELS: dict[str, str] = {
     _WAITING_ON_KEY_CAUSE: "Waiting on an answer key",
@@ -594,6 +595,7 @@ _CAUSE_LABELS: dict[str, str] = {
     _NEEDS_PERSON_CAUSE: "Needs a person to judge",
     _ANSWER_DIFFERS_CAUSE: "Answer differs from the key",
     _AMBIGUOUS_PROBLEM_ID_CAUSE: "Question number not identified",
+    _ATTEMPT_CAP_REACHED_CAUSE: "Already tried 3 times",
 }
 _UNKNOWN_CAUSE_LABEL = "Needs a look"
 """A legacy row with no cause at all (predates the needs_human_cause column)
@@ -657,7 +659,12 @@ def _pick_capture_for_page(
 
 
 _NEEDS_REVIEW_CAUSES = frozenset(
-    {_NEEDS_PERSON_CAUSE, _ANSWER_DIFFERS_CAUSE, _AMBIGUOUS_PROBLEM_ID_CAUSE}
+    {
+        _NEEDS_PERSON_CAUSE,
+        _ANSWER_DIFFERS_CAUSE,
+        _AMBIGUOUS_PROBLEM_ID_CAUSE,
+        _ATTEMPT_CAP_REACHED_CAUSE,
+    }
 )
 
 
@@ -913,7 +920,12 @@ def _promote_correction(
         return
     promote_correction(
         get_fixtures_dir(),
-        page_id=f"{source_id}-page{page_number}-{problem_id}-correction",
+        # normalise_problem_id (k12ta.grading.key_grader), not the raw
+        # problem_id: found 2026-08-31 in real household data -- "7" and "7."
+        # (a trailing printed period, present or read inconsistently across
+        # transcriptions) otherwise promote two near-duplicate fixture files
+        # for what a person would call the same question.
+        page_id=f"{source_id}-page{page_number}-{normalise_problem_id(problem_id)}-correction",
         source_id=source_id,
         subject=source.subject,
         image_source_path=image_path,

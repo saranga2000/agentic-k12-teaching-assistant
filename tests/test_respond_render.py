@@ -232,6 +232,18 @@ def test_ambiguous_problem_id_says_which_question_not_which_answer() -> None:
     assert "question" in view.message.lower()
 
 
+def test_attempt_cap_reached_names_the_limit_not_a_verdict() -> None:
+    """docs/ROADMAP.md's V1 "Attempts": a fourth photograph is refused
+    grading, not marked wrong -- the message must say why, not imply a
+    verdict either way."""
+    row = _row(outcome="needs_human", needs_human_cause="attempt_cap_reached")
+
+    view = render_student_result(row, "12 + 7", "19", rules=_FULL, prior_attempts=())
+
+    assert "3 times" in view.message
+    assert view.display_bucket == "needs_a_person"
+
+
 def test_answer_differs_from_key_shows_both_answers_and_marks_nothing() -> None:
     """The one deliberate exception to the invariant above: this cause exists
     specifically so a name that differs from the key (a rhombus vs.

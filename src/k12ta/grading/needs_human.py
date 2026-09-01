@@ -94,6 +94,13 @@ class NeedsHumanCause(StrEnum):
     k12ta.pipeline.process, never by decide() below. See the module docstring
     above."""
 
+    ATTEMPT_CAP_REACHED = "attempt_cap_reached"
+    """This page has already been photographed three times (docs/ROADMAP.md's
+    V1 "Attempts") -- decided by k12ta.pipeline.process, before decide() ever
+    runs for any item on the photo, same as AMBIGUOUS_PROBLEM_ID above. A
+    fourth attempt needs a parent's own judgement, not a fourth automatic
+    grade."""
+
 
 @dataclass(frozen=True)
 class GradeDecision:

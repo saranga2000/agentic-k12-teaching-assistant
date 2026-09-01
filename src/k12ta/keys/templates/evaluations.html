@@ -127,10 +127,13 @@
       <span class="question-number">Q{{ item.row.problem_id }}</span>
       {% endif %}
       &ldquo;{{ item.row.prompt_text | humanize_math }}&rdquo; &mdash; {{ student.display_name }} wrote &ldquo;{{ item.row.student_answer_raw | humanize_math }}&rdquo;
-      {% if item.row.needs_human_cause in ("answer_differs_from_key", "needs_person", "low_confidence") %}
+      {% if item.row.needs_human_cause in ("answer_differs_from_key", "needs_person", "low_confidence", "attempt_cap_reached") %}
       {% if item.row.expected_answer %}&mdash; key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;{% endif %}
       {% if item.row.needs_human_cause == "low_confidence" %}
       <p class="message">The model wasn't confident reading this one &mdash; confirm what's below is right, fix it, or clear it and type what {{ student.display_name }} actually wrote.</p>
+      {% endif %}
+      {% if item.row.needs_human_cause == "attempt_cap_reached" %}
+      <p class="message">{{ student.display_name }} has photographed this page 3 times already &mdash; judge this attempt yourself below.</p>
       {% endif %}
       <form method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/answer-verdict" class="verdict-form">
         <input type="hidden" name="session_id" value="{{ item.row.session_id }}">

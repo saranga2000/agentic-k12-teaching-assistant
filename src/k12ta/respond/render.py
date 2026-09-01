@@ -87,6 +87,11 @@ UNKNOWN_CAUSE_GLYPH = "?"
 # problem_id on one photo).
 AMBIGUOUS_PROBLEM_ID_MESSAGE = "I could not tell which question this answer belongs to."
 AMBIGUOUS_PROBLEM_ID_GLYPH = "#"
+# docs/ROADMAP.md's V1 "Attempts": a fourth photograph of the same page needs a
+# parent's own judgement, not a fourth automatic grade -- see
+# k12ta.grading.needs_human.NeedsHumanCause.ATTEMPT_CAP_REACHED's docstring.
+ATTEMPT_CAP_REACHED_MESSAGE = "This page has already been tried 3 times. Ask a grown-up about it."
+ATTEMPT_CAP_REACHED_GLYPH = "⊘"
 
 _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
     NeedsHumanCause.LOW_CONFIDENCE: (COULD_NOT_READ_GLYPH, COULD_NOT_READ_MESSAGE),
@@ -108,6 +113,10 @@ _NEEDS_HUMAN_COPY: dict[NeedsHumanCause, tuple[str, str]] = {
     NeedsHumanCause.AMBIGUOUS_PROBLEM_ID: (
         AMBIGUOUS_PROBLEM_ID_GLYPH,
         AMBIGUOUS_PROBLEM_ID_MESSAGE,
+    ),
+    NeedsHumanCause.ATTEMPT_CAP_REACHED: (
+        ATTEMPT_CAP_REACHED_GLYPH,
+        ATTEMPT_CAP_REACHED_MESSAGE,
     ),
 }
 
@@ -187,7 +196,11 @@ _COULD_NOT_READ_CAUSES = frozenset(
     }
 )
 _NEEDS_A_PERSON_CAUSES = frozenset(
-    {NeedsHumanCause.NEEDS_PERSON, NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY}
+    {
+        NeedsHumanCause.NEEDS_PERSON,
+        NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY,
+        NeedsHumanCause.ATTEMPT_CAP_REACHED,
+    }
 )
 
 

@@ -2066,3 +2066,175 @@ def test_low_confidence_incorrect_gated_behind_mark_wrong(tmp_path: Path) -> Non
     capture_id = graded[0].capture_id
     problems = captures.list_problems_for_capture(conn, student_id, capture_id)
     assert problems[0].student_answer_raw == "21"  # transcription still corrected
+
+
+# --- M7's attempt cap: a fourth photograph of the same page is refused -----
+
+
+def test_first_three_captures_of_a_page_grade_normally(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # has_answer_key=True
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+
+    for _ in range(3):
+        transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+        outcome = process_capture(
+            conn,
+            settings,
+            lambda t=transcriber: t,
+            student_id,
+            assignment_id,
+            b"fake-jpeg-bytes",
+            page_number=5,
+        )
+        graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+        assert graded[0].outcome == "correct"
+        assert graded[0].needs_human_cause is None
+
+
+def test_a_fourth_capture_of_the_same_page_is_refused(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+
+    for _ in range(3):
+        transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+        process_capture(
+            conn,
+            settings,
+            lambda t=transcriber: t,
+            student_id,
+            assignment_id,
+            b"fake-jpeg-bytes",
+            page_number=5,
+        )
+
+    fourth_transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: fourth_transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == NeedsHumanCause.ATTEMPT_CAP_REACHED.value
+
+
+def test_the_capture_that_reaches_the_cap_still_counts_and_is_not_capped_itself(
+    tmp_path: Path,
+) -> None:
+    """The third capture must grade normally -- it must never be counted
+    against itself while its own count_page_attempts query runs."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="19",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path)
+
+    outcomes = []
+    for _ in range(3):
+        transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+        outcomes.append(
+            process_capture(
+                conn,
+                settings,
+                lambda t=transcriber: t,
+                student_id,
+                assignment_id,
+                b"fake-jpeg-bytes",
+                page_number=5,
+            )
+        )
+
+    third_graded = sessions.list_graded_problems_for_session(
+        conn, student_id, outcomes[2].session_id
+    )
+    assert third_graded[0].outcome == "correct"
+
+
+def test_a_different_page_is_unaffected_by_another_pages_cap(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    for page_number, answer_text in [(5, "19"), (6, "20")]:
+        answer_keys.upsert_entry(
+            conn,
+            answer_keys.AnswerKeyEntryRow(
+                student_id=student_id,
+                source_id="summer_bridge",
+                page_number=page_number,
+                problem_number="1",
+                answer_text=answer_text,
+                ungradeable_reason=None,
+                confirmed_at="2026-08-14T08:00:00+00:00",
+            ),
+        )
+    settings = _settings(tmp_path)
+
+    for _ in range(3):
+        transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+        process_capture(
+            conn,
+            settings,
+            lambda t=transcriber: t,
+            student_id,
+            assignment_id,
+            b"fake-jpeg-bytes",
+            page_number=5,
+        )
+
+    other_page_transcriber = FakeTranscriber(result=_one_item_transcription(answer="20"))
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: other_page_transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=6,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
