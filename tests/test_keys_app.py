@@ -26,6 +26,7 @@ from PIL import Image
 import k12ta.keys.app as keys_app
 import k12ta.web.app as web_app
 from k12ta.config import Settings
+from k12ta.evals.fixtures import FixtureProvenance, load_fixture_pages
 from k12ta.grading.page_identity import build_composite_key
 from k12ta.llm.base import DataRetention
 from k12ta.store import (
@@ -97,10 +98,15 @@ def client(
     settings: Settings,
     transcriber: FakeKeyTranscriber,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> Iterator[TestClient]:
     keys_app.app.dependency_overrides[keys_app.get_conn] = lambda: conn
     keys_app.app.dependency_overrides[keys_app.get_settings] = lambda: settings
     monkeypatch.setattr(keys_app, "get_transcriber", lambda _settings: transcriber)
+    # docs/ROADMAP.md's M5 fixture promotion writes real files -- never into
+    # this repo's actual, git-tracked evals/fixtures/ directory during a
+    # test run, regardless of what any individual test's image_path is.
+    monkeypatch.setattr(keys_app, "get_fixtures_dir", lambda: tmp_path / "fixtures")
     test_client = TestClient(keys_app.app)
     yield test_client
     keys_app.app.dependency_overrides.clear()
@@ -3750,6 +3756,165 @@ def test_submit_answer_verdict_records_the_corrected_transcription_in_the_audit_
     )
     assert rows[0].previous_student_answer_raw == "19"
     assert rows[0].new_student_answer_raw == "19 (fixed misread)"
+
+
+def test_submit_answer_verdict_promotes_a_fixture_when_a_correct_answer_is_known(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """docs/ROADMAP.md's M5 fixture promotion, exercised end to end through
+    the real endpoint -- not just the pure k12ta.evals.fixtures functions
+    tests/test_fixture_promotion.py already covers in isolation."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    image_path = tmp_path / "capture.jpg"
+    image_path.write_bytes(b"a real file, not the usual placeholder path")
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path=str(image_path),
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-differs",
+            problem_id="1",
+            prompt_text="shape?",
+            student_answer_raw="rhombus",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-differs",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-differs",
+            capture_id="c-differs",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.0,
+            expected_answer="quadrilateral",
+            page_number=15,
+            needs_human_cause="answer_differs_from_key",
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/answer-verdict",
+        data={
+            "session_id": "sess-c-differs",
+            "capture_id": "c-differs",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    fixtures_dir = tmp_path / "fixtures"
+    pages = load_fixture_pages(fixtures_dir)
+    assert len(pages) == 1
+    page = pages[0]
+    assert page.provenance == FixtureProvenance.PARENT_CORRECTION
+    assert page.source_id == "summer_bridge"
+    assert page.subject == "math"
+    assert (fixtures_dir / page.image).read_bytes() == image_path.read_bytes()
+    assert page.items[0].correct_answer == "quadrilateral"
+
+
+def test_submit_verdict_correction_promotes_a_fixture_using_the_students_own_answer(
+    client: TestClient, conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    image_path = tmp_path / "capture.jpg"
+    image_path.write_bytes(b"another real file")
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-incorrect",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path=str(image_path),
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-incorrect",
+            problem_id="1",
+            prompt_text="12 + 7",
+            student_answer_raw="19",
+            transcription_confidence=0.95,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-incorrect",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-incorrect",
+            capture_id="c-incorrect",
+            problem_id="1",
+            outcome="incorrect",
+            grader_confidence=0.95,
+            page_number=15,
+        ),
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/correct-verdict",
+        data={
+            "session_id": "sess-c-incorrect",
+            "capture_id": "c-incorrect",
+            "problem_id": "1",
+            "verdict": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    pages = load_fixture_pages(tmp_path / "fixtures")
+    assert len(pages) == 1
+    assert pages[0].items[0].correct_answer == "19"
 
 
 def test_submit_answer_verdict_works_on_a_needs_person_row(

@@ -31,6 +31,7 @@ from k12ta.config import COACH_NAME_PLACEHOLDER, Settings, load_dotenv
 from k12ta.domain.attempts import PastAttempt, attempt_number
 from k12ta.domain.policy import FeedbackMode, resolve_mode, rules_for
 from k12ta.domain.text import humanize_math_text
+from k12ta.evals.fixtures import promote_correction
 from k12ta.grading import page_identity
 from k12ta.grading.key_grader import CONFIDENCE_FLOOR, find_key_entry
 from k12ta.grading.page_identity import build_composite_key
@@ -75,6 +76,23 @@ NO_STUDENTS_MESSAGE = (
     "No students yet. Run `python scripts/seed_dev_data.py` against this server's K12TA_DATA_DIR."
 )
 UNGRADEABLE_REASONS = ("answers_vary", "graph_or_table")
+
+# docs/ROADMAP.md's M5 "fixture promotion": the same repo-committed directory
+# k12ta.evals.run_transcription_eval reads from, computed relative to this
+# source file rather than the household's own K12TA_DATA_DIR -- this is a
+# shared eval corpus, not per-household data. Same convention as this
+# module's own /static mount two lines below.
+_FIXTURES_DIR = Path(__file__).resolve().parents[3] / "evals" / "fixtures"
+
+
+def get_fixtures_dir() -> Path:
+    """Indirection so a test can monkeypatch this to a tmp_path -- same
+    "factory, not a bare module constant" pattern as get_transcriber below.
+    Without it, any test that pairs a real on-disk image with a verdict
+    correction would write into this repo's actual, git-tracked evals/
+    fixtures/ directory."""
+    return _FIXTURES_DIR
+
 
 # Plain-language options for the enrollment setup screen (M3.1), not the internal
 # enum values (k12ta.content.source.SourceKind) a parent has no reason to know.
@@ -819,6 +837,52 @@ def submit_regrade_pending(
 _VERDICTS = frozenset({"correct", "partially_correct", "incorrect"})
 
 
+def _promote_correction(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    source_id: str,
+    capture_id: str,
+    problem_id: str,
+    page_number: int | None,
+    prompt_text: str,
+    student_answer_raw: str,
+    expected_answer: str | None,
+    new_outcome: str,
+) -> None:
+    """docs/ROADMAP.md's M5: called after every verdict-changing write in
+    this module. Best-effort and silent on a missing precondition -- a
+    capture with no page identity yet (page_number is None) or no image file
+    on disk promotes nothing, since fixture promotion is a bonus this write
+    path produces, never a reason a parent's correction itself could fail.
+    k12ta.evals.fixtures.promote_correction itself decides whether a correct
+    answer is actually knowable at all; this function only gathers what it
+    needs to ask."""
+    if page_number is None:
+        return
+    capture = captures.get_page_capture(conn, student_id, capture_id)
+    if capture is None:
+        return
+    image_path = Path(capture.image_path)
+    if not image_path.is_file():
+        return
+    source = content.get_content_source(conn, student_id, source_id)
+    if source is None:
+        return
+    promote_correction(
+        get_fixtures_dir(),
+        page_id=f"{source_id}-page{page_number}-{problem_id}-correction",
+        source_id=source_id,
+        subject=source.subject,
+        image_source_path=image_path,
+        problem_id=problem_id,
+        prompt_text=prompt_text,
+        student_answer_raw=student_answer_raw,
+        expected_answer=expected_answer,
+        new_outcome=new_outcome,
+    )
+
+
 @app.post("/keys/{student_id}/{source_id}/answer-verdict", response_model=None)
 def submit_answer_verdict(
     request: Request,
@@ -932,6 +996,30 @@ def submit_answer_verdict(
                 source=verdict_correction_audit.VerdictCorrectionSource.NEEDS_HUMAN_RESOLUTION,
             ),
         )
+        _promote_correction(
+            conn,
+            student_id=student_id,
+            source_id=source_id,
+            capture_id=capture_id,
+            problem_id=problem_id,
+            page_number=previous_graded.page_number or page_number,
+            prompt_text=previous_problem.prompt_text,
+            student_answer_raw=(
+                new_problem.student_answer_raw
+                if new_problem is not None
+                else previous_problem.student_answer_raw
+            ),
+            # A key just typed in for a NO_KEY_FOR_PAGE row (key_answer_text)
+            # is fresher ground truth than the row's own expected_answer,
+            # which is always None in exactly that case (no key existed yet
+            # when this row was graded).
+            expected_answer=(
+                key_answer_text.strip()
+                if key_answer_text is not None and key_answer_text.strip()
+                else previous_graded.expected_answer
+            ),
+            new_outcome=verdict,
+        )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
 
@@ -996,6 +1084,18 @@ def submit_verdict_correction(
             new_student_answer_raw=answer_raw,
             source=verdict_correction_audit.VerdictCorrectionSource.DECIDED_VERDICT_CORRECTION,
         ),
+    )
+    _promote_correction(
+        conn,
+        student_id=student_id,
+        source_id=source_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        page_number=previous_graded.page_number,
+        prompt_text=problem.prompt_text if problem is not None else "",
+        student_answer_raw=answer_raw,
+        expected_answer=previous_graded.expected_answer,
+        new_outcome=verdict,
     )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
@@ -1241,6 +1341,18 @@ def submit_dispute_resolution(
                     new_student_answer_raw=answer_raw,
                     source=verdict_correction_audit.VerdictCorrectionSource.DISPUTE_OVERTURNED,
                 ),
+            )
+            _promote_correction(
+                conn,
+                student_id=student_id,
+                source_id=source_id,
+                capture_id=capture_id,
+                problem_id=problem_id,
+                page_number=previous_graded.page_number,
+                prompt_text=problem.prompt_text if problem is not None else "",
+                student_answer_raw=answer_raw,
+                expected_answer=previous_graded.expected_answer,
+                new_outcome="correct",
             )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 

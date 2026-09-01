@@ -1605,6 +1605,41 @@ Done when: a correction has a name, a timestamp, and a before/after value on fil
 shows up as a labelled fixture the next eval run can use — not just a changed row in
 `graded_problems`.
 
+**Shipped 2026-08-31.** `verdict_correction_audit_log` (migration 0026, append-only,
+mirroring `policy_override_audit_log`'s own shape) now records every parent-driven
+verdict change: `apply_human_verdict`'s first-time needs_human resolution, a dispute's
+overturn, and a genuinely new third path this pass added —
+`sessions.correct_decided_verdict` plus `k12ta.keys.app`'s `/correct-verdict` endpoint,
+reachable from new "Fix this grade" controls in evaluations.html's three "Graded ..."
+sections, which previously had no way at all for a parent to correct a verdict the
+child already saw with no dispute involved. Refused (409) while an open dispute exists
+on the same row — `disputes.resolve` is the one designated path for that case. No
+parent-PIN gate, per the open question above, unchanged by this pass.
+
+**Child notice, shipped the same day.** A `DECIDED_VERDICT_CORRECTION` audit row
+surfaces as a plain, permanent notice on `session_result.html`/`my_pages.html`
+(`StudentResultView.correction_notice`) — "A grown-up looked at this one again and
+changed it from X to Y," mirroring the resolved-dispute notice's own established
+pattern (Gap L) rather than inventing a new one. A dispute's own overturn keeps its
+existing, separate notice; a first-time needs_human resolution gets none, since the
+child was never shown a verdict to correct in the first place.
+
+**Fixture promotion, shipped the same day.** `k12ta.evals.fixtures` gained
+`provenance` ("hand-labelled" | "parent-correction", defaulting to "hand-labelled" so
+the entire pre-existing M1 corpus keeps meaning exactly what it always did) and
+`promote_correction`, called from all three correction paths above. Honest about what
+a correction actually proves: a key's own answer, when one is on file, is always the
+ground truth regardless of verdict (the permanent record of a keyed mismatch a parent
+judged); absent a key, only a "correct" verdict promotes anything, using the student's
+own answer as ground truth; an "incorrect"/"partially_correct" verdict with no key
+names what's wrong, not what's right, so nothing is promoted rather than fabricating a
+ground truth. `capture_quality`/`capture_device` are left unset for a promoted
+fixture — genuinely unknowable, no live capture tracks either — while `capture_method`
+is truthfully always "app-ui" and `layout` always "single-page," since the live
+capture path is one page at a time. Writes into this repo's real `evals/fixtures/`
+directory in production (same convention as `k12ta.design`'s static mount), injected
+through `k12ta.keys.app.get_fixtures_dir` so tests never touch it.
+
 ### M6. The agentic evaluator
 **Renamed and rescoped 2026-08-30 from "Keyless grading with calibration."** That
 milestone was scoped as an optional hard finale and sat at the top of the cut list.

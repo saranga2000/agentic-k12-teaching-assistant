@@ -311,3 +311,57 @@ def test_rejects_page_identity_value_that_is_not_a_list_of_strings(tmp_path: Pat
 
     with pytest.raises(FixtureValidationError, match="day_or_unit_banner"):
         load_fixture_pages(tmp_path)
+
+
+def test_provenance_defaults_to_hand_labelled(tmp_path: Path) -> None:
+    """docs/EVALS.md family 1: every fixture written before M5's provenance
+    field existed -- the entire original M1 corpus -- must keep meaning
+    exactly what it always did."""
+    page = _valid_page()
+    assert "provenance" not in page
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].provenance == "hand-labelled"
+
+
+def test_provenance_accepts_parent_correction(tmp_path: Path) -> None:
+    page = _valid_page()
+    page["provenance"] = "parent-correction"
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].provenance == "parent-correction"
+
+
+def test_rejects_an_unrecognised_provenance(tmp_path: Path) -> None:
+    page = _valid_page()
+    page["provenance"] = "guessed"
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    with pytest.raises(FixtureValidationError, match="provenance"):
+        load_fixture_pages(tmp_path)
+
+
+def test_a_parent_correction_fixture_may_omit_capture_quality_and_device(
+    tmp_path: Path,
+) -> None:
+    """A live capture has no equivalent live-tracked notion of either field
+    (FixturePage's own docstrings) -- a promoted correction must not be
+    forced to fabricate one just to pass validation."""
+    page = _valid_page()
+    page["provenance"] = "parent-correction"
+    del page["capture_quality"]
+    del page["capture_device"]
+    _touch_image(tmp_path, str(page["image"]))
+    _write_label(tmp_path, page)
+
+    pages = load_fixture_pages(tmp_path)
+
+    assert pages[0].capture_quality is None
+    assert pages[0].capture_device is None
