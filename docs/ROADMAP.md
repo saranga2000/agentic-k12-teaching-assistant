@@ -1735,10 +1735,37 @@ turning the flags on in a real deployment actually reaches this code, not just t
 the earlier lesson from this same milestone's first life ("scoped as optional, sat
 unused") deliberately not repeated a second time.
 
+**Tier 3 (vision), shipped 2026-08-31.** `k12ta.grading.evaluator.evaluate_vision`
+sends the exercise page photo already in hand — plus the answer key's own page
+photo, when one is on file (`k12ta.store.key_page_images`) — to the model in one
+call, escalated from tier 2 by `should_escalate_to_vision`'s existing, unchanged
+policy: tier 2's own confidence too low, or it declined outright. Never requires the
+key image; works with the key as text, as an image, both, or neither. Emits two
+separate confidences (what it read, and the verdict) and its own textual reading of
+the answer, which replaces the item's stored transcription when tier 3 fires and
+reports one (`k12ta.store.captures.update_student_answer_raw`) — "tier 3 fuses
+transcription and evaluation into one call rather than skipping the record the
+parent reviews," per this section's own design above. `k12ta.llm.base.VisionModel`
+gained `generate_multi` for a call carrying more than one image, additive alongside
+the existing single-image `generate` (which now delegates to it), so
+`k12ta.transcribe`'s call sites are unaffected. Gated behind the same
+`get_vision_model` factory pattern as `get_text_model` (default `None`, no live
+route reaches it unless wired) — wired into `k12ta.web.app`'s live capture route as
+`get_vision_evaluator_model`, its own singleton, separate from `get_transcriber`'s
+internal vision model.
+
+**Not reachable yet, found while wiring tier 3, not guessed at:** `docs/
+ARCHITECTURE.md` also names "transcription itself was low-confidence or failed" as
+its own trigger for tier 3 — but `k12ta.grading.needs_human.decide` returns
+`LOW_CONFIDENCE` unconditionally before it ever checks a key, and `LOW_CONFIDENCE`
+is not one of the two causes `_maybe_escalate_to_evaluator` acts on (`ANSWER_
+DIFFERS_FROM_KEY`, `NO_KEY_FOR_PAGE`-keyless). `should_escalate_to_vision`'s own
+transcription-confidence branch is real, tested policy, but currently unreachable
+from the live pipeline for that reason. Rescuing a low-confidence or failed
+transcription — the case that turns a dead end into an attempt — is real, named
+future work, not something this pass silently downgraded.
+
 **Not done, explicitly, not guessed at:**
-- **Tier 3 (vision) is not implemented.** The policy that would trigger it exists and
-  is tested; nothing calls it. A case that would have escalated is left as the
-  original honest `NEEDS_HUMAN` rather than silently downgraded.
 - **Multi-part sub-item splitting (`5a`…`5g`) is not implemented.** This is a real
   structural change (one transcribed item can currently only ever become one
   `graded_problems` row) deserving its own design pass, not a mechanical addition

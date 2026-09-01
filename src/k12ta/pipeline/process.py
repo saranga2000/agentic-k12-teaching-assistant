@@ -16,20 +16,27 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
+from pathlib import Path
 from uuid import uuid4
 
 from k12ta.config import Settings
 from k12ta.domain.models import GradeOutcome
 from k12ta.grading import page_identity
-from k12ta.grading.evaluator import evaluate_keyed_mismatch, evaluate_keyless
+from k12ta.grading.evaluator import (
+    evaluate_keyed_mismatch,
+    evaluate_keyless,
+    evaluate_vision,
+    should_escalate_to_vision,
+)
 from k12ta.grading.key_grader import find_key_entry
 from k12ta.grading.needs_human import GradeDecision, NeedsHumanCause, decide
 from k12ta.ingest import capture as ingest_capture
-from k12ta.llm.base import TextModel
+from k12ta.llm.base import TextModel, VisionImage, VisionModel
 from k12ta.store import (
     answer_keys,
     captures,
     content,
+    key_page_images,
     page_identity_resolutions,
     page_identity_schemas,
     quota,
@@ -117,24 +124,57 @@ def _resolve_storage_problem_ids(
 
 
 def _maybe_escalate_to_evaluator(
+    conn: sqlite3.Connection,
     settings: Settings,
     get_text_model: Callable[[], TextModel],
+    get_vision_model: Callable[[], VisionModel] | None,
     source: content.ContentSourceRow,
     item: TranscribedItem,
     decision: GradeDecision,
-) -> GradeDecision:
+    page_image_bytes: bytes,
+    page_number: int | None,
+) -> tuple[GradeDecision, str | None]:
     """M6, the agentic evaluator (docs/ROADMAP.md) -- tried only after `decide`
     has already produced an honest NEEDS_HUMAN, only for the two causes it can
     actually help with, and only ever narrowing a NEEDS_HUMAN, never widening
     one: a decisive CORRECT/INCORRECT/PARTIALLY_CORRECT from `decide` is never
     revisited. See process_capture's own docstring for the full boundary this
     enforces, especially why NO_KEY_FOR_PAGE only escalates on a keyless
-    source."""
+    source.
+
+    Tier 3 (vision) runs after tier 2, when `get_vision_model` is given and
+    `should_escalate_to_vision` says tier 2's own result (or the underlying
+    transcription) isn't trusted enough to stand alone -- confidence signals
+    only, never a question type (docs/ARCHITECTURE.md). It sends the page
+    photo already in hand, plus the answer key's own page photo when one is
+    on file (`k12ta.store.key_page_images`) -- never required, only used
+    when present.
+
+    Returns `(the possibly-narrowed decision, a corrected transcription)`.
+    The second element is tier 3's own reading of the answer
+    (`EvaluatorResult.read_answer`) when tier 3 ran and reported one, else
+    None -- docs/ARCHITECTURE.md: "tier 3 fuses transcription and evaluation
+    into one call rather than skipping the record the parent reviews and the
+    report card counts." This function only ever reads (the key image file);
+    the caller (`process_capture`) is responsible for writing the corrected
+    transcription back via `k12ta.store.captures.update_student_answer_raw`,
+    consistent with every other write happening at the call site.
+
+    Not yet reachable: docs/ARCHITECTURE.md also names "transcription itself
+    was low-confidence or failed" as its own trigger for tier 3 -- but
+    `decide()` returns `LOW_CONFIDENCE` unconditionally before it ever checks
+    a key (`k12ta.grading.needs_human.decide`'s own confidence-floor check
+    runs first), and `LOW_CONFIDENCE` is not one of the two causes this
+    function acts on. `should_escalate_to_vision`'s own transcription-
+    confidence branch is real, tested policy, but currently unreachable from
+    here for that reason -- rescuing a low-confidence or failed transcription
+    is real, named future work, not a mechanical extension of what this pass
+    already wires."""
     if decision.outcome is not GradeOutcome.NEEDS_HUMAN:
-        return decision
+        return decision, None
     if decision.needs_human_cause is NeedsHumanCause.ANSWER_DIFFERS_FROM_KEY:
         if decision.expected_answer is None:
-            return decision  # cannot happen in practice, but never guess a key
+            return decision, None  # cannot happen in practice, but never guess a key
         text_model = get_text_model()
         result = evaluate_keyed_mismatch(
             text_model, item.prompt_text, item.student_answer_raw, decision.expected_answer
@@ -145,19 +185,43 @@ def _maybe_escalate_to_evaluator(
         text_model = get_text_model()
         result = evaluate_keyless(text_model, item.prompt_text, item.student_answer_raw)
     else:
-        return decision
+        return decision, None
+
+    corrected_answer: str | None = None
+    if get_vision_model is not None and should_escalate_to_vision(result, item.confidence):
+        key_image: VisionImage | None = None
+        if page_number is not None:
+            key_image_path = key_page_images.get_image_path(
+                conn, source.student_id, source.source_id, page_number
+            )
+            if key_image_path is not None:
+                key_image = VisionImage(
+                    image_bytes=Path(key_image_path).read_bytes(), mime_type="image/jpeg"
+                )
+        result = evaluate_vision(
+            get_vision_model(),
+            item.prompt_text,
+            VisionImage(image_bytes=page_image_bytes, mime_type="image/jpeg"),
+            key_image=key_image,
+            key_answer_text=decision.expected_answer,
+        )
+        if result.read_answer:
+            corrected_answer = result.read_answer
 
     if result.outcome is GradeOutcome.NEEDS_HUMAN:
-        return decision  # no verdict tier 2 is confident enough to give; leave as-is
+        return decision, corrected_answer  # no tier is confident enough; leave as-is
     if result.outcome is GradeOutcome.INCORRECT and not settings.evaluator_mark_wrong_enabled:
         # V1's own rule (docs/ROADMAP.md): every keyless INCORRECT reaches a
         # parent before the child, regardless of the evaluator's confidence,
         # until docs/EVALS.md family 3's precision number exists. CORRECT and
         # PARTIALLY_CORRECT are not gated this way -- only INCORRECT is.
-        return decision
-    return GradeDecision(
-        outcome=result.outcome,
-        expected_answer=decision.expected_answer or result.generated_answer,
+        return decision, corrected_answer
+    return (
+        GradeDecision(
+            outcome=result.outcome,
+            expected_answer=decision.expected_answer or result.generated_answer,
+        ),
+        corrected_answer,
     )
 
 
@@ -170,6 +234,7 @@ def process_capture(
     image_bytes: bytes,
     page_number: int | None = None,
     get_text_model: Callable[[], TextModel] | None = None,
+    get_vision_model: Callable[[], VisionModel] | None = None,
 ) -> PipelineOutcome:
     """Walk one accepted photo through transcription, key grading, and persistence.
 
@@ -219,9 +284,18 @@ def process_capture(
     otherwise the original honest NEEDS_HUMAN stands, per V1's "every keyless
     INCORRECT reaches a parent before the child" rule. CORRECT and
     PARTIALLY_CORRECT verdicts are not gated this way; only INCORRECT is.
-    Tier 3 (vision) is not called from here yet -- `should_escalate_to_vision`
-    exists and is tested, but nothing in this function acts on it yet, so a
-    case it would have escalated is simply left as the original NEEDS_HUMAN.
+    Tier 3 (vision) runs after tier 2, when a `get_vision_model` factory is
+    also given (default None, same "no change unless explicitly wired"
+    guarantee as `get_text_model`) and `should_escalate_to_vision` says tier
+    2's own result isn't trusted enough to stand alone. It sends the page
+    photo already in hand for this capture, plus the answer key's own page
+    photo when one is on file (`k12ta.store.key_page_images`) -- never
+    required, only used when present -- and, when it reports a reading of
+    the answer, that reading replaces this item's stored transcription
+    (`k12ta.store.captures.update_student_answer_raw`), since tier 3 fuses
+    transcription and evaluation into one call rather than skipping the
+    record a parent reviews. See `_maybe_escalate_to_evaluator`'s own
+    docstring for the full mechanism.
     """
     today = date.today()
     if quota.get_count(conn, today) >= settings.daily_request_limit:
@@ -426,6 +500,7 @@ def process_capture(
         result.items, storage_problem_ids, strict=True
     ):
         detail = None
+        corrected_answer: str | None = None
         if ambiguous:
             # Checked first, unconditionally: there is no question to key this
             # answer to at all, which is a more fundamental gap than whether
@@ -460,9 +535,28 @@ def process_capture(
                 item.student_answer_raw, item.confidence, resolved_page_number, key_entry
             )
             if source is not None and get_text_model is not None:
-                decision = _maybe_escalate_to_evaluator(
-                    settings, get_text_model, source, item, decision
+                decision, corrected_answer = _maybe_escalate_to_evaluator(
+                    conn,
+                    settings,
+                    get_text_model,
+                    get_vision_model,
+                    source,
+                    item,
+                    decision,
+                    image_bytes,
+                    resolved_page_number,
                 )
+                if corrected_answer is not None:
+                    captures.update_student_answer_raw(
+                        conn,
+                        student_id,
+                        capture_row.capture_id,
+                        storage_problem_id,
+                        corrected_answer,
+                    )
+        effective_answer_raw = (
+            corrected_answer if corrected_answer is not None else item.student_answer_raw
+        )
         sessions.insert_graded_problem(
             conn,
             sessions.GradedProblemRow(
@@ -481,7 +575,7 @@ def process_capture(
                 ),
                 needs_human_detail=detail,
                 unsimplified=decision.unsimplified,
-                answered=bool(item.student_answer_raw.strip()),
+                answered=bool(effective_answer_raw.strip()),
             ),
         )
 

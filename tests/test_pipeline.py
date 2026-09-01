@@ -26,6 +26,7 @@ from k12ta.store import (
     captures,
     content,
     db,
+    key_page_images,
     migrate,
     page_identities,
     page_identity_resolutions,
@@ -40,7 +41,7 @@ from k12ta.transcribe.base import (
     TranscribedItem,
     TranscriptionResult,
 )
-from tests.fakes import FakeTextModel, FakeTranscriber
+from tests.fakes import FakeTextModel, FakeTranscriber, FakeVisionModel
 
 TODAY = date.today()
 """`process_capture` calls `date.today()` internally (it has no injectable clock), so
@@ -1563,3 +1564,249 @@ def test_evaluator_enabled_but_no_text_model_factory_stays_needs_human(tmp_path:
     graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
     assert graded[0].outcome == "needs_human"
     assert graded[0].needs_human_cause == NeedsHumanCause.NO_KEY_FOR_PAGE.value
+
+
+# --- M6 tier 3 (vision), wired into the pipeline -----------------------------
+
+
+def _vision_reply(
+    verdict: str,
+    confidence: float,
+    read_answer: str | None = None,
+    read_confidence: float = 0.9,
+    generated_answer: str | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "verdict": verdict,
+            "confidence": confidence,
+            "read_answer": read_answer,
+            "read_confidence": read_confidence,
+            "generated_answer": generated_answer,
+        }
+    )
+
+
+def test_low_tier2_confidence_escalates_to_vision_and_uses_its_verdict(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)  # has_answer_key=True
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="quadrilateral",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="rhombus"))
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.4}'])
+    vision_model = FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="rhombus")])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    assert vision_model.request_count == 1
+
+
+def test_no_vision_model_factory_means_no_escalation_even_at_low_confidence(
+    tmp_path: Path,
+) -> None:
+    """get_vision_model is optional (every existing caller passes nothing) --
+    tier 2's own result stands, exactly as it did before tier 3 existed."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="quadrilateral",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="rhombus"))
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.2}'])
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"  # tier 2's own low-confidence verdict stands
+
+
+def test_vision_read_answer_replaces_the_stored_transcription(tmp_path: Path) -> None:
+    """docs/ARCHITECTURE.md: tier 3 fuses transcription and evaluation into
+    one call rather than skipping the record a parent reviews."""
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True, evaluator_mark_wrong_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="l9"))  # misread "19"
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "needs_human", "confidence": 0.0}',
+            '{"verdict": "needs_human", "confidence": 0.0}',
+        ]
+    )
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("correct", 0.95, read_answer="19", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "correct"
+    capture_id = graded[0].capture_id
+    problems = captures.list_problems_for_capture(conn, student_id, capture_id)
+    assert problems[0].student_answer_raw == "19"
+
+
+def test_vision_incorrect_verdict_stays_needs_human_until_mark_wrong_is_enabled(
+    tmp_path: Path,
+) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)  # mark_wrong stays False
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="21"))
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "needs_human", "confidence": 0.0}',
+            '{"verdict": "needs_human", "confidence": 0.0}',
+        ]
+    )
+    vision_model = FakeVisionModel(
+        replies=[_vision_reply("incorrect", 0.95, read_answer="21", generated_answer="19")]
+    )
+
+    outcome = process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, student_id, outcome.session_id)
+    assert graded[0].outcome == "needs_human"
+
+
+def test_vision_sends_the_key_image_when_one_is_on_file(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_student_with_source(conn, student_id)
+    answer_keys.upsert_entry(
+        conn,
+        answer_keys.AnswerKeyEntryRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            problem_number="1",
+            answer_text="quadrilateral",
+            ungradeable_reason=None,
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    key_image_path = tmp_path / "key-page-5.jpg"
+    key_image_path.write_bytes(b"a real key page photo")
+    key_page_images.upsert_image(
+        conn,
+        key_page_images.KeyPageImageRow(
+            student_id=student_id,
+            source_id="summer_bridge",
+            page_number=5,
+            image_path=str(key_image_path),
+            confirmed_at="2026-08-14T08:00:00+00:00",
+        ),
+    )
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="rhombus"))
+    text_model = FakeTextModel(replies=['{"verdict": "correct", "confidence": 0.4}'])
+    vision_model = FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="rhombus")])
+
+    process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    assert vision_model.seen_image_counts == [2]
+
+
+def test_vision_sends_only_the_page_image_when_no_key_image_is_on_file(tmp_path: Path) -> None:
+    conn = _migrated_connection()
+    student_id = "s-jahnvi"
+    assignment_id = _seed_keyless_source(conn, student_id)
+    settings = _settings(tmp_path, evaluator_enabled=True)
+    transcriber = FakeTranscriber(result=_one_item_transcription(answer="19"))
+    text_model = FakeTextModel(
+        replies=[
+            '{"verdict": "needs_human", "confidence": 0.0}',
+            '{"verdict": "needs_human", "confidence": 0.0}',
+        ]
+    )
+    vision_model = FakeVisionModel(replies=[_vision_reply("correct", 0.9, read_answer="19")])
+
+    process_capture(
+        conn,
+        settings,
+        lambda: transcriber,
+        student_id,
+        assignment_id,
+        b"fake-jpeg-bytes",
+        page_number=5,
+        get_text_model=lambda: text_model,
+        get_vision_model=lambda: vision_model,
+    )
+
+    assert vision_model.seen_image_counts == [1]

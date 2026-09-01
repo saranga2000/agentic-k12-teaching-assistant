@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from k12ta.llm.base import ChatResponse, DataRetention
+from k12ta.llm.base import ChatResponse, DataRetention, VisionImage, VisionResponse
 from k12ta.transcribe.base import TranscriptionResult
 from k12ta.transcribe.key_page import KeyPageResult
 
@@ -92,6 +92,44 @@ class FakeTextModel:
         reply = self.replies[self.request_count]
         self.request_count += 1
         return ChatResponse(text=reply, cost_usd=Decimal("0"), latency_ms=1)
+
+    def verify(self) -> None:
+        pass
+
+
+@dataclass
+class FakeVisionModel:
+    """A `VisionModel` (k12ta.grading.evaluator's tier 3) that returns canned
+    replies in order and never touches the network. One reply per call to
+    generate_multi -- generate() is not implemented, since k12ta.grading.
+    evaluator.evaluate_vision always calls generate_multi."""
+
+    replies: list[str] = field(default_factory=list)
+    data_retention: DataRetention = DataRetention.NO_RETENTION
+    request_count: int = field(default=0, init=False)
+    seen_prompts: list[str] = field(default_factory=list, init=False)
+    seen_image_counts: list[int] = field(default_factory=list, init=False)
+
+    def generate(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        raise NotImplementedError("evaluate_vision always calls generate_multi")
+
+    def generate_multi(
+        self,
+        prompt: str,
+        images: Sequence[VisionImage],
+        on_progress: Callable[[int], None] | None = None,
+    ) -> VisionResponse:
+        self.seen_prompts.append(prompt)
+        self.seen_image_counts.append(len(images))
+        reply = self.replies[self.request_count]
+        self.request_count += 1
+        return VisionResponse(text=reply, cost_usd=Decimal("0"), latency_ms=1)
 
     def verify(self) -> None:
         pass

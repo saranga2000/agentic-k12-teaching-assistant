@@ -37,7 +37,7 @@ from k12ta.grading.needs_human import NeedsHumanCause
 from k12ta.ingest import capture as ingest_capture
 from k12ta.ingest import schedule as ingest_schedule
 from k12ta.llm import build_text_model, build_vision_model
-from k12ta.llm.base import TextModel
+from k12ta.llm.base import TextModel, VisionModel
 from k12ta.pipeline.process import (
     PipelineOutcome,
     PipelineStatus,
@@ -124,6 +124,7 @@ templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: Transcriber | None = None
 _text_model: TextModel | None = None
+_vision_evaluator_model: VisionModel | None = None
 
 
 def get_settings() -> Settings:
@@ -168,6 +169,22 @@ def get_text_model(settings: Settings) -> TextModel:
     if _text_model is None:
         _text_model = build_text_model(settings)
     return _text_model
+
+
+def get_vision_evaluator_model(settings: Settings) -> VisionModel:
+    """M6, the agentic evaluator's tier 3 (docs/ROADMAP.md) -- same reused-
+    singleton, same lazy-build reasoning as get_text_model above. A separate
+    instance from get_transcriber's own vision model, not the same one
+    reused: transcription and tier-3 evaluation are different call sites,
+    each with their own independent request-cap bookkeeping, same
+    separation get_text_model already keeps from get_transcriber. Only ever
+    called from inside process_capture, and only when settings.evaluator_
+    enabled is True, so a household that never sets K12TA_EVALUATOR_ENABLED
+    never builds this at all."""
+    global _vision_evaluator_model
+    if _vision_evaluator_model is None:
+        _vision_evaluator_model = build_vision_model(settings)
+    return _vision_evaluator_model
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -661,6 +678,7 @@ def _stream_capture_response(
                 # this factory is ever actually called, exactly like its own
                 # quota gate already decides whether get_transcriber is.
                 get_text_model=lambda: get_text_model(settings),
+                get_vision_model=lambda: get_vision_evaluator_model(settings),
             )
         except Exception as exc:
             logger.exception(

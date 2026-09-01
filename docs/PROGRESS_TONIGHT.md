@@ -103,9 +103,17 @@ complete M6 (vision only, splitting explicitly deferred), then a full manual tes
 - [x] M5 (correction audit trail, decided-verdict correction path, child notice,
       fixture promotion) -- commits `104b212`, `3d915bc`. Full detail in
       docs/ROADMAP.md's M5 section's two new "Shipped 2026-08-31" notes.
-- [ ] M6 tier 3 (vision evaluator) -- in progress. Splitting explicitly out of
-      scope for this pass, per the user's own choice when asked.
-- [ ] Full manual test, once M6 tier 3 is done and `make check` is clean.
+- [x] M6 tier 3 (vision evaluator) -- commits `19c62ef` (offline core:
+      VisionModel.generate_multi, evaluate_vision, prompts/evaluate_vision.md)
+      and the pipeline-wiring commit right after it (escalation in
+      _maybe_escalate_to_evaluator, transcription correction, live k12ta.web.app
+      wiring via get_vision_evaluator_model). Splitting explicitly out of scope
+      for this pass, per the user's own choice when asked. One real gap found
+      while wiring, not guessed past: the "low-confidence transcription" trigger
+      for tier 3 is currently unreachable from the live pipeline (decide()
+      returns LOW_CONFIDENCE before the two causes tier 3 escalates from can ever
+      fire) -- named in docs/ROADMAP.md's M6 section, not silently downgraded.
+- [ ] Full manual test, next.
 
 Nothing further to do without new direction. Real remaining gaps, all named rather
 than guessed at, are in "Questions for the morning" below (multi-part splitting, the
