@@ -60,3 +60,29 @@ def test_neither_app_keeps_its_own_copy_of_the_lightbox_partial() -> None:
 
     assert not (web_templates_dir / "_lightbox.html").exists()
     assert not (keys_templates_dir / "_lightbox.html").exists()
+
+
+def test_both_apps_render_the_same_shared_photo_source_partial() -> None:
+    """M9b (docs/ROADMAP.md): _photo_source.html used to be two near-identical
+    copies (one per app) differing only in button sizing. Now it's one file
+    in k12ta.design/, with that sizing difference expressed as the `large`
+    parameter rather than as drift between two copies -- so the same
+    template, rendered with the same params, produces identical markup in
+    both apps."""
+    params = {"input_id": "photo-input"}
+
+    web_html = web_app.templates.get_template("_photo_source.html").render(params)
+    keys_html = keys_app.templates.get_template("_photo_source.html").render(params)
+
+    assert web_html == keys_html
+    assert 'id="photo-input"' in web_html
+
+
+def test_neither_app_keeps_its_own_copy_of_the_photo_source_partial() -> None:
+    from pathlib import Path
+
+    web_templates_dir = Path(web_app.__file__).parent / "templates"
+    keys_templates_dir = Path(keys_app.__file__).parent / "templates"
+
+    assert not (web_templates_dir / "_photo_source.html").exists()
+    assert not (keys_templates_dir / "_photo_source.html").exists()

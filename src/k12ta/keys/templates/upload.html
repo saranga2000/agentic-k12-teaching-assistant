@@ -7,7 +7,7 @@
 workbook pages, so a whole key is usually 6-8 photos.</p>
 <form id="upload-form" method="post" action="/keys/{{ student.student_id }}/{{ source.source_id }}/upload" enctype="multipart/form-data">
   {% if redirect_to %}<input type="hidden" name="redirect_to" value="{{ redirect_to }}">{% endif %}
-  {% with input_id="photo-input" %}
+  {% with input_id="photo-input", large=false %}
   {% include "_photo_source.html" %}
   {% endwith %}
   <p id="no-photo-error" class="message" hidden>Take or choose a photo first.</p>

@@ -1,8 +1,9 @@
-<!-- Shared by capture.html, result.html's retake form, and k12ta.keys'
-     upload.html -- two ways to get a photo into the same target file input
-     (`input_id`), so every caller's existing submit logic (either
-     _capture_checklist.html's auto-submit-on-change, or keys/upload.html's
-     own explicit-button submit) needs no changes at all:
+<!-- M9b (docs/ROADMAP.md): shared by capture.html and result.html's retake
+     form in k12ta.web, and by k12ta.keys' upload.html -- two ways to get a
+     photo into the same target file input (`input_id`), so every caller's
+     existing submit logic (either _capture_checklist.html's
+     auto-submit-on-change, or keys/upload.html's own explicit-button submit)
+     needs no changes at all:
 
      - "Take Photo": a live in-page camera (getUserMedia) when the browser
        will allow it -- true on http://localhost (secure-context exempt) and
@@ -16,18 +17,29 @@
        included. This is the durable fix; the camera above is a best-effort
        enhancement layered on top of it, never a replacement for it.
 
+     Used to be two near-identical copies, one per app, differing only in
+     button sizing: k12ta.web is a child's one-glance kiosk screen (large,
+     full-width, stacked buttons), k12ta.keys is a parent's dense desk-based
+     form (plain buttons styled by that app's own `button` rule, laid out in
+     a row). Reached from both apps via the same design/ Jinja2Templates
+     fallback search path as _lightbox.html (see k12ta.web.app /
+     k12ta.keys.app) -- one physical file, the sizing difference expressed as
+     a parameter rather than as drift between two copies.
+
      Parameters: input_id (the target file input other scripts already look
      for), button_wrapper_id (default "take-photo-button" -- the id
      _capture_checklist.html hides on submit; keys/upload.html doesn't use
      this id but having it costs nothing there), primary_label (default
      "Take Photo"), hide_camera (default false -- an online-exercise
      screenshot has no physical page to photograph, so only Upload makes
-     sense there). -->
-<div id="{{ button_wrapper_id | default('take-photo-button') }}" class="photo-source-picker">
+     sense there), large (default true -- pass false for the parent app's
+     compact, plain-button treatment). -->
+{% set large = large is not defined or large %}
+<div id="{{ button_wrapper_id | default('take-photo-button') }}" class="photo-source-picker{{ '' if large else ' photo-source-picker--compact' }}">
   {% if not hide_camera %}
-  <button type="button" class="big-button" id="{{ input_id }}-camera-btn">{{ primary_label | default("Take Photo") }}</button>
+  <button type="button" class="{{ 'big-button' if large }}" id="{{ input_id }}-camera-btn">{{ primary_label | default("Take Photo") }}</button>
   {% endif %}
-  <button type="button" class="big-button secondary" id="{{ input_id }}-upload-btn">{{ "Add Screenshot" if hide_camera else "Upload a Photo" }}</button>
+  <button type="button" class="{{ 'big-button secondary' if large }}" id="{{ input_id }}-upload-btn">{{ "Add Screenshot" if hide_camera else "Upload a Photo" }}</button>
 </div>
 <input id="{{ input_id }}" type="file" name="photo" accept="image/*" capture="environment" style="display:none">
 <input id="{{ input_id }}-upload-proxy" type="file" accept="image/*" style="display:none">
@@ -35,8 +47,8 @@
 <div id="{{ input_id }}-camera-modal" class="camera-modal" hidden>
   <video id="{{ input_id }}-camera-video" autoplay playsinline></video>
   <div class="camera-modal-actions">
-    <button type="button" class="big-button" id="{{ input_id }}-camera-capture">Capture</button>
-    <button type="button" class="big-button secondary" id="{{ input_id }}-camera-cancel">Cancel</button>
+    <button type="button" class="{{ 'big-button' if large }}" id="{{ input_id }}-camera-capture">Capture</button>
+    <button type="button" class="{{ 'big-button secondary' if large }}" id="{{ input_id }}-camera-cancel">Cancel</button>
   </div>
 </div>
 <script>
@@ -130,6 +142,7 @@
 </script>
 <style>
   .photo-source-picker { display: flex; flex-direction: column; gap: 0.9rem; width: 100%; max-width: 560px; }
+  .photo-source-picker--compact { flex-direction: row; gap: 0.6rem; width: auto; max-width: none; }
   .camera-modal {
     position: fixed; inset: 0; background: #000; z-index: 100;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.2rem;
