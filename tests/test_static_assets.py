@@ -86,3 +86,23 @@ def test_neither_app_keeps_its_own_copy_of_the_photo_source_partial() -> None:
 
     assert not (web_templates_dir / "_photo_source.html").exists()
     assert not (keys_templates_dir / "_photo_source.html").exists()
+
+
+def test_both_apps_serve_the_shared_theme_init_script() -> None:
+    """Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: theme-init.js applies
+    a previously-stored light/dark override before first paint, so it has to
+    be a real static asset both apps can load in <head> -- not just inline
+    markup in a partial."""
+    web_js = TestClient(web_app.app).get("/static/theme-init.js").text
+    keys_js = TestClient(keys_app.app).get("/static/theme-init.js").text
+
+    assert web_js == keys_js
+    assert "k12ta-theme" in web_js
+
+
+def test_both_apps_render_the_same_shared_theme_toggle_partial() -> None:
+    web_html = web_app.templates.get_template("_theme_toggle.html").render()
+    keys_html = keys_app.templates.get_template("_theme_toggle.html").render()
+
+    assert web_html == keys_html
+    assert 'id="theme-toggle"' in web_html

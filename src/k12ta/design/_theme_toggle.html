@@ -1,0 +1,37 @@
+<!-- Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: a manual light/dark
+     override, top-right on every screen in both apps -- overrides whatever
+     prefers-color-scheme decided, per the household's own request. Shared
+     the same way _lightbox.html and _photo_source.html are (each app's
+     Jinja2Templates falls back to k12ta/design/ after its own templates/
+     directory). Included once, right after <body> opens, in each app's own
+     base.html. theme-init.js (loaded earlier, in <head>) applies any
+     previously-stored choice before first paint; this is only the visible
+     control plus the click handler that saves a new one. -->
+<button type="button" class="theme-toggle" id="theme-toggle" aria-label="Switch between light and dark mode">
+  <span class="theme-toggle-icon icon-sun" aria-hidden="true">&#9728;&#65039;</span>
+  <span class="theme-toggle-icon icon-moon" aria-hidden="true">&#127769;</span>
+</button>
+<script>
+  (function () {
+    var STORAGE_KEY = "k12ta-theme";
+    var root = document.documentElement;
+    var btn = document.getElementById("theme-toggle");
+
+    function isDark() {
+      var explicit = root.getAttribute("data-theme");
+      if (explicit === "dark") return true;
+      if (explicit === "light") return false;
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    function render() {
+      btn.setAttribute("aria-pressed", String(isDark()));
+    }
+    render();
+    btn.addEventListener("click", function () {
+      var next = isDark() ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+      render();
+    });
+  })();
+</script>

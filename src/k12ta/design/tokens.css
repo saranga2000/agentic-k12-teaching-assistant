@@ -5,17 +5,33 @@
    build step, no preprocessor: AGENTS.md rule 4 and docs/ARCHITECTURE.md's "no
    frontend toolchain" commitment both apply here as much as to any Python file.
 
+   Repainted 2026-09-01 ("Ledger"), after a parent design-review pass (mocked in
+   an Artifact before any code changed, per the household's own working style):
+   the original amber/teal/terracotta-on-near-black identity is replaced with a
+   softer, schoolish pastel palette (no colour with a built-in "warning" or
+   "danger" connotation -- no red, no yellow-amber), a proper light theme
+   becomes the default instead of the only-ever-dark original, and a manual
+   light/dark toggle (`_theme_toggle.html`, top-right on every screen) overrides
+   whatever `prefers-color-scheme` decided. Colour variable NAMES are unchanged
+   from the original M9a file for the same reason M9a itself kept them --
+   dozens of templates already reference them, and renaming would be pure,
+   risky churn. Two names ARE new this pass, both additive: `--accent-ink` (the
+   old palette's accent was always dark enough for hardcoded near-black button
+   text everywhere; the new accent is a mid-tone blue that needs light text in
+   the light theme and dark text in the dark theme, so this had to become a
+   real token, not a literal) and `--shadow-card` (the new "real depth, not
+   just colour" elevation the repaint's cards use, absent from the original
+   flat-surface treatment).
+
    What lives here vs. what stays in each app's own base.html:
    - Tokens (this file, :root) -- every colour, size, and radius either app's CSS
-     ever references. Existing colour variable NAMES are unchanged from before
-     this file existed (--affirm, --attention, --neutral, --accent, --bg, --text,
-     --text-dim, --surface, --border) -- dozens of templates already reference
-     them; renaming would be pure, risky churn for a repaint 9b might redo anyway.
+     ever references.
    - Base component classes genuinely identical between the two apps before this
      pass (verified by diff, not assumed): the lightbox, the working-spinner
-     keyframes, [hidden], box-sizing reset, the plain .message treatment. Moving
-     these here is the actual fix for the duplication this milestone exists to
-     close -- both base.html files had byte-identical copies of most of this.
+     keyframes, [hidden], box-sizing reset, the plain .message treatment, and
+     now the theme toggle button. Moving these here is the actual fix for the
+     duplication this milestone exists to close -- both base.html files had
+     byte-identical copies of most of this.
    - What stays in each app's own base.html, deliberately: layout that is
      genuinely different by design, not by accident -- k12ta.web's full-viewport
      centred .screen for a child's kiosk-style tablet view vs. k12ta.keys' scrolling
@@ -26,33 +42,41 @@
      it, while sharing every colour, spacing, and radius decision underneath.
 */
 
-:root {
-  /* ---- Colour --------------------------------------------------------- */
-  /* An affirmative family (calm teal, not a scoreboard green), an attention
-     family (muted amber-brown, never alarm red), and a neutral family for
-     "come back to this one, it's not a verdict." Colour is always the third
-     signal, after a distinct glyph and an explicit label -- never the only one. */
-  --bg: #12141a;
-  --text: #f4f4f6;
-  --text-dim: #b8bcc4;
-  --surface: #1b1e26;
-  --border: #2c2f38;
-  --accent: #ffd166;
-  --accent-active: #f2b705;
-  --affirm: #4ecdc4;
-  --affirm-bg: #1a3c30;
-  --attention: #c98f5e;
-  --attention-bg: #3a2a20;
-  --neutral: #8b93a1;
-  --neutral-bg: #262a33;
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&display=swap');
 
-  /* ---- Type scale ------------------------------------------------------
-     New in this pass -- neither app had a named scale before, just ad hoc
-     rem values (0.78rem, 0.8rem, 0.85rem, 0.9rem... measured across both
-     base.html files, all clustering around these seven stops). Existing
-     hardcoded sizes are not retrofitted to these by this pass (9b's job,
-     screen by screen) -- new and touched CSS should reach for these instead
-     of a new one-off number. */
+:root {
+  /* ---- Colour (light, the default theme) --------------------------------
+     Three semantic families, none of them red or yellow: a dusty periwinkle
+     accent, sage green for affirmed, soft plum for "take a look" (replacing
+     the old amber-brown attention), and slate for anything not yet resolved
+     either way. Colour is always the third signal, after a distinct glyph
+     and an explicit label -- never the only one. */
+  --bg: #f7f4ef;
+  --text: #2b2a28;
+  --text-dim: #6f6b63;
+  --surface: #ffffff;
+  --border: #e6e1d6;
+  --accent: #5f74c2;
+  --accent-active: #4d5fa8;
+  --accent-ink: #ffffff;
+  --affirm: #4f9d78;
+  --affirm-bg: #e3f3ea;
+  --attention: #86609f;
+  --attention-bg: #f1eaf6;
+  --neutral: #6b7488;
+  --neutral-bg: #edeff4;
+  --shadow-card: 0 10px 24px -14px rgba(43, 42, 40, 0.20);
+
+  /* ---- Type ---------------------------------------------------------------
+     Two roles: a warm serif for headings and anything meant to read as a
+     considered result (report-card energy), a humanist sans for everything
+     read quickly. System-font fallbacks so a page still reads correctly with
+     no network access to Google Fonts -- the custom faces are a progressive
+     enhancement, never a requirement to render correctly. */
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  /* ---- Type scale -------------------------------------------------------- */
   --text-xs: 0.8rem;
   --text-sm: 0.92rem;
   --text-base: 1rem;
@@ -61,8 +85,7 @@
   --text-xl: 1.5rem;
   --text-2xl: 1.75rem;
 
-  /* ---- Spacing ----------------------------------------------------------
-     New in this pass, same reasoning as the type scale above. */
+  /* ---- Spacing ------------------------------------------------------------ */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -70,23 +93,65 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
 
-  /* ---- Radius ------------------------------------------------------------
-     Four stops covering every radius value already in use across both apps
-     (6px inputs, 8px cards/buttons, 10px larger cards/photos, 20px the
-     child app's big tap targets) -- named so a new screen picks one of four
-     deliberate choices instead of inventing a fifth. */
+  /* ---- Radius -------------------------------------------------------------- */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
   --radius-xl: 20px;
 
-  /* ---- State --------------------------------------------------------------
-     New in this pass. Neither app had a visible focus indicator before --
-     a real accessibility gap for anyone navigating by keyboard or switch
-     access, not a cosmetic omission. See the :focus-visible rule below. */
-  --focus-ring: 0 0 0 3px rgba(255, 209, 102, 0.45);
+  /* ---- State ---------------------------------------------------------------- */
+  --focus-ring: 0 0 0 3px rgba(95, 116, 194, 0.35);
   --transition-fast: 120ms ease;
+  color-scheme: light;
 }
+
+/* System-driven dark mode: applies only when the OS/browser prefers dark AND
+   the toggle hasn't set an explicit choice. Same three semantic families as
+   light, re-tuned for contrast on a dark ground rather than inverted blindly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1b22;
+    --text: #f2efe9;
+    --text-dim: #a8a4b3;
+    --surface: #242330;
+    --border: #3a3947;
+    --accent: #97a9ea;
+    --accent-active: #7f92d9;
+    --accent-ink: #1a1f33;
+    --affirm: #7fd2a9;
+    --affirm-bg: #1d3a2c;
+    --attention: #c3a4e3;
+    --attention-bg: #332a47;
+    --neutral: #9ca3b8;
+    --neutral-bg: #262636;
+    --shadow-card: 0 14px 30px -16px rgba(0, 0, 0, 0.55);
+    --focus-ring: 0 0 0 3px rgba(151, 169, 234, 0.45);
+    color-scheme: dark;
+  }
+}
+
+/* The toggle's explicit override, in both directions -- wins over the system
+   media query either way, per `_theme_toggle.html` / `theme-init.js`. */
+:root[data-theme="dark"] {
+  --bg: #1c1b22;
+  --text: #f2efe9;
+  --text-dim: #a8a4b3;
+  --surface: #242330;
+  --border: #3a3947;
+  --accent: #97a9ea;
+  --accent-active: #7f92d9;
+  --accent-ink: #1a1f33;
+  --affirm: #7fd2a9;
+  --affirm-bg: #1d3a2c;
+  --attention: #c3a4e3;
+  --attention-bg: #332a47;
+  --neutral: #9ca3b8;
+  --neutral-bg: #262636;
+  --shadow-card: 0 14px 30px -16px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 3px rgba(151, 169, 234, 0.45);
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
 
 /* ---- Base reset and behaviour shared by both apps ------------------------ */
 * { box-sizing: border-box; }
@@ -111,6 +176,11 @@
    styled to look like a button. */
 :focus-visible { outline: none; box-shadow: var(--focus-ring); }
 button, .button-link, a.big-button { min-height: 44px; }
+
+/* Headings carry the display face everywhere, in both apps -- the one
+   typographic identity decision that applies globally rather than per
+   template, so no screen has to opt in individually. */
+h1, h2, h3 { font-family: var(--font-display); }
 
 /* The plain, undecorated message paragraph both apps use for body copy that
    isn't a boxed callout (k12ta.web's screen copy, k12ta.keys' explanatory
@@ -137,4 +207,24 @@ img[data-lightbox] { cursor: zoom-in; }
 .lightbox-close {
   position: absolute; top: 1rem; right: 1.2rem; font-size: 2rem; line-height: 1;
   color: var(--text); background: none; border: none; cursor: pointer;
+}
+
+/* The light/dark toggle (Ledger repaint, 2026-09-01): top-right on every
+   screen in both apps, shared markup/script in `_theme_toggle.html`. Shows
+   the mode currently ACTIVE (sun = light is showing, moon = dark is showing),
+   not the mode a tap would switch to. */
+.theme-toggle {
+  position: fixed; top: 0.85rem; right: 0.85rem; z-index: 600;
+  display: flex; align-items: center; justify-content: center;
+  width: 2.5rem; height: 2.5rem; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border); cursor: pointer;
+  font-size: 1.1rem; box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.3);
+}
+.theme-toggle-icon { display: none; }
+.theme-toggle .icon-sun { display: inline; }
+:root[data-theme="dark"] .theme-toggle .icon-sun { display: none; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { display: inline; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .theme-toggle .icon-sun { display: none; }
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .theme-toggle .icon-moon { display: inline; }
 }
