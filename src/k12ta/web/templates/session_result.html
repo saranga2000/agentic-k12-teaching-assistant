@@ -86,6 +86,12 @@
     <p class="summary-encouragement">{{ summary.encouragement }}</p>
     {% endif %}
   </div>
+  {% if priority_items %}
+  <!-- Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback:
+       what's wrong -- and anything a grown-up said about it -- is the point
+       of this screen; a plain "correct" moves below, collapsed. Same table
+       shape k12ta.keys' evaluations.html now uses, with room for a
+       paragraph-length question: no truncation, the cell just wraps. -->
   <table class="results-table">
     <thead>
       <tr>
@@ -97,7 +103,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for item in items %}
+      {% for item in priority_items %}
       <tr class="outcome-{{ item.outcome | replace('_', '-') }} bucket-{{ item.display_bucket | replace('_', '-') }}">
         <td class="col-photo"><img class="result-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox></td>
         <td class="col-number">{{ item.display_number }}</td>
@@ -122,6 +128,19 @@
       {% endfor %}
     </tbody>
   </table>
+  {% endif %}
+  {% if plain_correct_items %}
+  <details class="correct-list">
+    <summary>See what you got right ({{ plain_correct_items|length }})</summary>
+    {% for item in plain_correct_items %}
+    <div class="correct-row">
+      <span class="correct-row-number">{{ item.display_number }}.</span>
+      <span class="correct-row-question">{{ item.prompt_text | humanize_math }}</span>
+      <span class="correct-row-answer">{{ item.student_answer_raw | humanize_math }}</span>
+    </div>
+    {% endfor %}
+  </details>
+  {% endif %}
   {% else %}
   <p class="message">{{ no_problems_message }}</p>
   {% endif %}
@@ -209,6 +228,21 @@
     font-style: italic; color: var(--text-dim);
   }
   .results-next { width: 100%; max-width: 720px; margin: 1.5rem auto 0; text-align: center; }
+  /* The collapsed "what you got right" list (Ledger repaint, 2026-09-01,
+     parent feedback): much lower priority than anything above, so a plain
+     list rather than the full photo/result table -- most kids never open
+     this at all. */
+  .correct-list { width: 100%; max-width: 720px; margin: 1.2rem auto 0; text-align: left; }
+  .correct-list summary {
+    cursor: pointer; font-size: var(--text-base); color: var(--text-dim); font-weight: 600; padding: 0.4rem 0;
+  }
+  .correct-row {
+    display: flex; gap: 0.6rem; padding: 0.4rem 0; border-top: 1px solid var(--neutral-bg); font-size: var(--text-sm);
+  }
+  .correct-row:first-of-type { border-top: none; }
+  .correct-row-number { font-weight: 700; color: var(--affirm); flex-shrink: 0; }
+  .correct-row-question { flex: 1; }
+  .correct-row-answer { color: var(--text-dim); flex-shrink: 0; }
   .results-next a { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.05rem; }
   .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: var(--space-2); }
   .dispute-reason {

@@ -1282,11 +1282,22 @@ def test_results_page_renders_correct_incorrect_and_needs_human_distinctly(
     response = client.get("/session/s-marcus/sess-synthetic")
 
     assert response.status_code == 200
-    assert "outcome-correct" in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: a
+    # plain "correct" (no dispute, no correction, no withheld resubmit) now
+    # renders in the collapsed "what you got right" list, not the main
+    # outcome-tagged table -- see k12ta.web.app.session_results' own
+    # priority_items/plain_correct_items split.
+    assert 'class="correct-row"' in response.text
     assert "outcome-incorrect" in response.text
     assert "outcome-needs-human" in response.text
-    # Her own photo shows next to every row, not just the identity-ask edge case.
-    assert response.text.count("/captures/s-marcus/c-synthetic/image") == 3
+    # Her own photo shows next to every row in the priority table (the
+    # incorrect and needs-human ones) -- not the identity-ask edge case, and
+    # not the collapsed correct-only list, which is deliberately photo-free
+    # (low priority, kept lightweight; see the correct-row markup above).
+    assert response.text.count("/captures/s-marcus/c-synthetic/image") == 2
+    # And the priority table renders before the collapsed correct list, not
+    # just distinctly styled -- what's wrong comes first, on the page itself.
+    assert response.text.index("outcome-incorrect") < response.text.index('class="correct-row"')
 
 
 def test_results_table_orders_by_real_question_number_not_string_order(
@@ -2073,7 +2084,9 @@ def test_session_results_auto_resolves_when_only_one_candidate_ever_confirmed(
 
     assert response.status_code == 200
     assert "resolve-identity" not in response.text
-    assert "outcome-correct" in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9): a plain "correct" now renders in
+    # the collapsed "what you got right" list, not the outcome-tagged table.
+    assert 'class="correct-row"' in response.text
     graded = sessions.list_graded_problems_for_session(conn, "s-marcus", session_id)
     assert graded[0].outcome == "correct"
     assert graded[0].page_number == 15
@@ -2446,7 +2459,13 @@ def test_submit_resubmit_confirmation_confirms_it_and_then_discloses(
     assert capture.resubmit_confirmed_at is not None
 
     after = client.get("/session/s-marcus/sess-unconfirmed")
-    assert "Correct!" in after.text
+    # Ledger repaint (docs/ROADMAP.md's M9): once confirmed, the true grade
+    # here is a plain "correct" (no dispute, no correction), so it discloses
+    # into the collapsed "what you got right" list rather than the
+    # outcome-tagged table -- the disclosure itself is the point, not which
+    # section renders it.
+    assert 'class="correct-row"' in after.text
+    assert "19" in after.text
     assert 'action="/student/s-marcus/confirm-resubmit"' not in after.text
 
 

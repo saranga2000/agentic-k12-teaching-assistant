@@ -1439,6 +1439,24 @@ def session_results(
     # _problem_sort_key.
     items.sort(key=lambda item: _problem_sort_key(item.problem_id))
     summary = summarize_results(items)
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: what
+    # a student got wrong -- and anything a grown-up said about it -- is the
+    # point of this screen; a plain, unflagged "correct" is much lower
+    # priority and collapses into its own short list rather than sharing
+    # equal billing in the main table. A "correct" row still counts as
+    # priority if a parent has touched it since (a correction, a dispute, or
+    # a withheld resubmit) -- the point is surfacing attention, not hiding
+    # anything a grown-up actually said.
+    priority_items: list[StudentResultView] = []
+    plain_correct_items: list[StudentResultView] = []
+    for item in items:
+        is_priority = (
+            item.display_bucket != "correct"
+            or item.correction_notice is not None
+            or item.dispute is not None
+            or item.needs_resubmit_confirmation
+        )
+        (priority_items if is_priority else plain_correct_items).append(item)
 
     return templates.TemplateResponse(
         request,
@@ -1448,6 +1466,8 @@ def session_results(
             "session_id": session_id,
             "source_id": source.source_id,
             "items": items,
+            "priority_items": priority_items,
+            "plain_correct_items": plain_correct_items,
             "summary": summary,
             "no_problems_message": NO_PROBLEMS_FOUND_MESSAGE,
             "identity_asks": identity_asks,
