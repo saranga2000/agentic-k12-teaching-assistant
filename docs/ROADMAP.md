@@ -2027,6 +2027,67 @@ capture path's tap count is unaffected structurally — no interaction or click
 handler changed in either `_lightbox.html` or `_photo_source.html`, only
 conditional CSS class values and where the shared markup is `{% include %}`d from.
 
+**The "Ledger" repaint, 2026-09-01 — beyond 9b's original scope, done at the
+parent's explicit request after reviewing 9b's result live.** 9b itself was
+deliberately zero-visual-change (see above); once shipped, the parent asked for an
+actual visual identity and real interaction-model changes, mocked in an Artifact
+before any code changed (three review rounds: a first palette pitch, a pastel
+recolour with a light/dark toggle, then real information-architecture fixes) —
+this repo's own working style for a change this visible, same as any other design
+decision here: propose, get feedback, then implement. What shipped:
+
+- **New palette.** The original amber/teal/terracotta-on-near-black identity is
+  replaced with a softer, schoolish set with no red or yellow-family colour (parent
+  feedback: those carry a built-in "warning" connotation this app doesn't want) —
+  a periwinkle accent, sage-green affirm, soft-plum attention, slate neutral.
+  Colour variable NAMES are unchanged (dozens of templates reference them); two new
+  tokens, `--accent-ink` and `--shadow-card`, are additive. Every foreground/
+  background pairing is checked at >= 4.5:1 (WCAG AA), not eyeballed — the first
+  pass of the light palette measured as low as 2.84 on affirm/affirm-bg despite
+  looking fine, caught only by actually computing contrast ratios.
+- **A real light/dark toggle**, top-right on every screen in both apps
+  (`_theme_toggle.html`, `theme-init.js`, shared the same way `_lightbox.html` is).
+  Light is now the CSS default; dark still applies via `prefers-color-scheme`; the
+  toggle's explicit choice overrides either way and persists.
+- **Fast, honest batch review** (`k12ta.keys`'s evaluations.html): the four causes
+  a parent can judge with a plain verdict (answer_differs_from_key, needs_person,
+  low_confidence, attempt_cap_reached — see `PendingItemDisplay.is_bulk_verdictable`)
+  now render as a table with an inline-editable answer and a verdict per row, one
+  submit per page instead of one per question, via a new
+  `POST .../bulk-answer-verdict` endpoint. Deliberately never pre-checks or
+  pre-suggests a verdict: nothing in this codebase retains a tentative model
+  opinion for these causes, so a fabricated "AI thinks this is correct" badge
+  would have been an invented verdict — exactly what this project's fail-closed
+  grading philosophy exists to refuse. NO_KEY_FOR_PAGE and AMBIGUOUS_PROBLEM_ID
+  keep their own single-item forms unchanged, since neither has an honest verdict
+  without more input than a batch row collects.
+- **Jump navigation + fold/unfold.** A sticky tab bar (Needs review / Correct /
+  Partially correct / Incorrect / Disputes) reuses `EnrollmentSummary`'s counts,
+  already computed for `enrollment_landing.html`'s own summary bar and never
+  previously read by evaluations.html itself. The three graded sections are now
+  `<details>`, folded by default, unfolding to a table (not the old plain list) —
+  a `<details id="...">` auto-opens on fragment navigation to its own id in every
+  browser this app targets, so the tabs both scroll and unfold with no framework.
+- **An at-a-glance parent home strip**: flagged (open disputes, aggregated the
+  same way Gap G's `review_queue` already rolls up pending counts) and total
+  waiting, both plain counts. Deliberately no rate or percentage — a "94% correct"
+  figure is exactly the bare, unlabelled cross-program metric this roadmap's own
+  V1 staging rules rule out.
+- **Wrong-first on the child's own screens.** `session_result.html` and
+  `my_pages.html`'s "Graded" section both now split into `priority_items` (not a
+  plain "correct" — incorrect, needs a person, or a correct row a parent has
+  actually corrected, disputed, or is withholding pending resubmit confirmation)
+  and `plain_correct_items`, collapsed into a lightweight "See what you got right
+  (N)" list with no photo and no repeated verdict text. A correct answer a parent
+  has commented on stays in the priority view — the point is surfacing attention,
+  not hiding anything a grown-up actually said.
+- **Fluid layout, not a device assumption.** Only the capture ("take the photo")
+  step is phone-optimized; every other screen is fluid across phone/tablet/laptop
+  width, since a parent or child may open any screen on any device.
+
+Full suite, browser suite, `mypy --strict`, and a manual WCAG contrast check all
+green throughout; each piece above landed as its own commit.
+
 ### Later, in priority order — not milestones, not scheduled
 
 1. Second persona for the younger child, as a parent-run routine with streaks and no
