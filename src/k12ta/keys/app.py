@@ -251,6 +251,19 @@ def home(
         key=lambda item: item.pending_count,
         reverse=True,
     )
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: an
+    # at-a-glance "Today" strip -- plain counts only, deliberately no rate or
+    # percentage here. A cross-program "N% correct" figure is exactly the
+    # bare, unlabelled metric V1's own staging rules rule out (see
+    # docs/ROADMAP.md's "Product staging" section); disputes and a pending
+    # count are just aggregated real events, the same kind of rollup Gap G
+    # already does for review_queue above, not an interpretation of them.
+    open_dispute_count = sum(
+        len(disputes.list_open_for_source(conn, row.student.student_id, source.source_id))
+        for row in rows
+        for source in row.sources
+    )
+    total_pending_count = sum(item.pending_count for item in review_queue)
     return templates.TemplateResponse(
         request,
         "home.html",
@@ -258,6 +271,8 @@ def home(
             "rows": rows,
             "no_students_message": NO_STUDENTS_MESSAGE,
             "review_queue": review_queue,
+            "open_dispute_count": open_dispute_count,
+            "total_pending_count": total_pending_count,
         },
     )
 

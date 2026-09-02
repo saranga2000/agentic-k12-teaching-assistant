@@ -427,6 +427,59 @@ def test_picker_with_no_students_shows_an_intelligible_message(client: TestClien
     assert "No students" in response.text
 
 
+def test_home_glance_strip_shows_flagged_and_waiting_counts(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: know
+    at a glance how things stand across every child, before drilling into any
+    one enrollment. Plain counts only -- see k12ta.keys.app.home's own
+    comment on why a rate or percentage doesn't belong here (V1's staging
+    rules rule out a bare, unlabelled figure)."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+    _seed_decisive_incorrect_problem(conn)
+    disputes.file_dispute(
+        conn,
+        student_id="s-marcus",
+        session_id="sess-c-incorrect",
+        capture_id="c-incorrect",
+        problem_id="1",
+        reason="I carried the 1 correctly",
+        disputed_at="2026-08-13T09:00:00+00:00",
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert (
+        '<li class="glance-stat flag"><strong>1</strong> flagged, needs a decision</li>'
+        in response.text
+    )
+    assert '<li class="glance-stat"><strong>1</strong> waiting on review</li>' in response.text
+
+
+def test_home_glance_strip_is_absent_with_nothing_pending(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert '<ul class="glance-strip">' not in response.text
+
+
 def test_picker_shows_an_add_enrollment_link_per_student(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

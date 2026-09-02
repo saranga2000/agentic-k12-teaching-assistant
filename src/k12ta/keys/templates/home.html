@@ -2,6 +2,18 @@
 {% block title %}Children{% endblock %}
 {% block content %}
 <p><a href="/keys/report-cards">Report cards &rarr;</a></p>
+{% if review_queue or open_dispute_count > 0 %}
+<!-- Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: know
+     at a glance how things stand, before drilling into any one child. Plain
+     counts only, deliberately -- see home()'s own comment on why a rate or
+     percentage does not belong here. -->
+<ul class="glance-strip">
+  {% if open_dispute_count > 0 %}
+  <li class="glance-stat flag"><strong>{{ open_dispute_count }}</strong> flagged, needs a decision</li>
+  {% endif %}
+  <li class="glance-stat"><strong>{{ total_pending_count }}</strong> waiting on review</li>
+</ul>
+{% endif %}
 {% if review_queue %}
 <h2>Needs your attention</h2>
 <ul class="review-queue">
@@ -37,6 +49,15 @@
 {% endif %}
 <p><a class="button-link" href="/students/new">+ Add a child</a></p>
 <style>
+  .glance-strip {
+    list-style: none; padding: 0; margin: 0 0 var(--space-5); display: flex; flex-wrap: wrap; gap: var(--space-3);
+  }
+  .glance-stat {
+    flex: 1; min-width: 10rem; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 0.7rem 0.9rem; box-shadow: var(--shadow-card);
+  }
+  .glance-stat strong { font-family: var(--font-display); font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+  .glance-stat.flag strong { color: var(--attention); }
   .review-queue { list-style: none; padding: 0; margin: 0 0 var(--space-5); }
   .review-queue li {
     display: flex; align-items: center; justify-content: space-between;
