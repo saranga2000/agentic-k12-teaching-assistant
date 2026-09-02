@@ -1983,7 +1983,7 @@ Done when: both apps share one stylesheet and one token set, every screen in the
 above has been through the pass including its empty and failure states, and the capture
 path still takes two taps — measured, not assumed.
 
-**9a shipped 2026-08-31, 9b not started.** `src/k12ta/design/tokens.css` is one
+**9a shipped 2026-08-31, 9b shipped 2026-09-01.** `src/k12ta/design/tokens.css` is one
 physical file, mounted at `/static` independently by both apps
 (`fastapi.staticfiles.StaticFiles`, no new dependency), proven byte-identical by a
 direct test rather than assumed from matching values kept in sync by hand. It carries
@@ -2002,15 +2002,30 @@ full-viewport centred kiosk `.screen`, the parent app's scrolling document layou
 now referencing the shared tokens instead of hardcoded values. Full suite, browser
 suite, and `mypy --strict` all green with no other template touched; capture's
 tap count is unaffected structurally (no interaction changed, only where its CSS
-comes from). **Not done, left for 9b or later:** retrofitting the new type/spacing/
-radius scale into any screen beyond `base.html` itself (every hardcoded rem value
-elsewhere is untouched), merging `_photo_source.html`'s two copies (a real, separately
-scoped case M9a's own text names — deferred because unifying its button sizing
-between the child app's large tap targets and the parent app's normal-sized ones
-needs its own small design decision, not a mechanical extraction), the lightbox's
-HTML/JS (only its CSS was shared, per this milestone's literal scope), and a
-deliberate pass over every screen's empty/failure state — today's states are honest
-(`AGENTS.md` rule 11) but not yet audited as one coherent system.
+comes from).
+
+**9b's four remaining items, all closed 2026-09-01:** the lightbox's HTML/JS (not
+just its CSS) now lives once, in `src/k12ta/design/_lightbox.html`, reached by both
+apps' `Jinja2Templates` search path resolving their own `templates/` directory
+first and `k12ta/design/` as a fallback — the same mechanism used for
+`_photo_source.html` below. `_photo_source.html`'s two copies are now one file at
+that same shared path, its one real difference (the child app's large stacked
+buttons vs. the parent app's plain row-laid-out ones) expressed as a `large`
+parameter rather than as drift between files. Every screen with its own `<style>`
+block beyond `base.html` (9 files across both apps) had its hardcoded rem/px values
+swapped for the matching token wherever a value already exactly equalled an
+existing stop — a zero-visual-change pass, not a redesign; values with no exact
+stop (pill shapes, one-off icon sizing) were left as deliberate literals rather
+than forced onto an approximate token. The empty/failure-state audit (a systematic
+scan of every `{% for %}` loop across both apps for a missing `{% else %}`, not
+just a read-through) found every screen already honest per `AGENTS.md` rule 11
+except one real gap: `confirm.html`'s answer-key scan can legitimately come back
+with zero entries (a blank or misframed page, no failure) and rendered as a bare
+table with no explanation — fixed, with a test. Full suite, browser suite (all 17,
+including the capture-flow test), and `mypy --strict` all green throughout; the
+capture path's tap count is unaffected structurally — no interaction or click
+handler changed in either `_lightbox.html` or `_photo_source.html`, only
+conditional CSS class values and where the shared markup is `{% include %}`d from.
 
 ### Later, in priority order — not milestones, not scheduled
 
