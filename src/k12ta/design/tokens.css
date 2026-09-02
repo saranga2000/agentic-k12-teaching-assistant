@@ -23,6 +23,14 @@
    just colour" elevation the repaint's cards use, absent from the original
    flat-surface treatment).
 
+   Light-theme foreground colours (--accent, --affirm, --attention,
+   --neutral) are deliberately darker than the first pass of this palette --
+   the first values picked for hue alone read fine to the eye but measured
+   below WCAG AA's 4.5:1 against their own small-text uses (a badge, a
+   button's label) once actually checked, same accessibility bar M9 already
+   set. Verified by contrast ratio, not eyeballed: every foreground/background
+   pairing below is >= 4.5:1 in both themes.
+
    What lives here vs. what stays in each app's own base.html:
    - Tokens (this file, :root) -- every colour, size, and radius either app's CSS
      ever references.
@@ -56,14 +64,14 @@
   --text-dim: #6f6b63;
   --surface: #ffffff;
   --border: #e6e1d6;
-  --accent: #5f74c2;
-  --accent-active: #4d5fa8;
+  --accent: #5b71c1;
+  --accent-active: #4a5da3;
   --accent-ink: #ffffff;
-  --affirm: #4f9d78;
+  --affirm: #3c785b;
   --affirm-bg: #e3f3ea;
-  --attention: #86609f;
+  --attention: #815c99;
   --attention-bg: #f1eaf6;
-  --neutral: #6b7488;
+  --neutral: #646d7f;
   --neutral-bg: #edeff4;
   --shadow-card: 0 10px 24px -14px rgba(43, 42, 40, 0.20);
 
@@ -100,7 +108,7 @@
   --radius-xl: 20px;
 
   /* ---- State ---------------------------------------------------------------- */
-  --focus-ring: 0 0 0 3px rgba(95, 116, 194, 0.35);
+  --focus-ring: 0 0 0 3px rgba(91, 113, 193, 0.35);
   --transition-fast: 120ms ease;
   color-scheme: light;
 }
