@@ -3961,6 +3961,183 @@ def test_submit_answer_verdict_promotes_a_fixture_when_a_correct_answer_is_known
     assert page.items[0].correct_answer == "quadrilateral"
 
 
+def test_bulk_answer_verdict_judges_every_checked_row_in_one_submit(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: a parent's fast
+    batch-review path -- one POST judges a whole page instead of one round
+    trip per question."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-p17-a",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=17,
+        expected_answer="21",
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-p17-b",
+        problem_id="2",
+        cause="needs_person",
+        page_number=17,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/bulk-answer-verdict",
+        data={
+            "row_count": "2",
+            "session_id_0": "sess-c-p17-a",
+            "capture_id_0": "c-p17-a",
+            "problem_id_0": "1",
+            "cause_0": "answer_differs_from_key",
+            "verdict_0": "correct",
+            "session_id_1": "sess-c-p17-b",
+            "capture_id_1": "c-p17-b",
+            "problem_id_1": "2",
+            "cause_1": "needs_person",
+            "verdict_1": "incorrect",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/keys/s-marcus/summer_bridge/evaluations"
+    graded_a = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-p17-a")
+    graded_b = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-p17-b")
+    assert graded_a[0].outcome == "correct"
+    assert graded_a[0].needs_human_cause is None
+    assert graded_b[0].outcome == "incorrect"
+    assert graded_b[0].needs_human_cause is None
+
+
+def test_bulk_answer_verdict_leaves_an_unanswered_row_pending(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """A row with no verdict_i sent (a parent left it unchecked, meaning to
+    come back to it) must not be defaulted to anything -- see this endpoint's
+    own docstring on never fabricating a verdict."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-skip",
+        problem_id="1",
+        cause="low_confidence",
+        page_number=9,
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/bulk-answer-verdict",
+        data={
+            "row_count": "1",
+            "session_id_0": "sess-c-skip",
+            "capture_id_0": "c-skip",
+            "problem_id_0": "1",
+            "cause_0": "low_confidence",
+            "verdict_0": "",
+        },
+        follow_redirects=False,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-skip")
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == "low_confidence"
+
+
+def test_bulk_answer_verdict_refuses_a_row_whose_cause_needs_a_key_typed_in(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """NO_KEY_FOR_PAGE never gets a batch-approvable verdict -- there is no
+    honest verdict without a key typed in alongside it, and the bulk form
+    never collects one. A row claiming that cause is silently skipped, the
+    same as an unanswered one, rather than judged with no key on file."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-nokey",
+        problem_id="1",
+        cause="no_key_for_page",
+        page_number=9,
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/bulk-answer-verdict",
+        data={
+            "row_count": "1",
+            "session_id_0": "sess-c-nokey",
+            "capture_id_0": "c-nokey",
+            "problem_id_0": "1",
+            "cause_0": "no_key_for_page",
+            "verdict_0": "correct",
+        },
+        follow_redirects=False,
+    )
+
+    graded = sessions.list_graded_problems_for_session(conn, "s-marcus", "sess-c-nokey")
+    assert graded[0].outcome == "needs_human"
+    assert graded[0].needs_human_cause == "no_key_for_page"
+
+
+def test_bulk_answer_verdict_rejects_an_invalid_verdict_value(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-bad", problem_id="1", cause="needs_person", page_number=9
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/bulk-answer-verdict",
+        data={
+            "row_count": "1",
+            "session_id_0": "sess-c-bad",
+            "capture_id_0": "c-bad",
+            "problem_id_0": "1",
+            "cause_0": "needs_person",
+            "verdict_0": "definitely-correct",
+        },
+    )
+
+    assert response.status_code == 400
+
+
 def test_submit_verdict_correction_promotes_a_fixture_using_the_students_own_answer(
     client: TestClient, conn: sqlite3.Connection, tmp_path: Path
 ) -> None:

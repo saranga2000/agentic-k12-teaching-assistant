@@ -944,6 +944,86 @@ def _promote_correction(
     )
 
 
+def _apply_pending_verdict(
+    conn: sqlite3.Connection,
+    *,
+    student_id: str,
+    source_id: str,
+    session_id: str,
+    capture_id: str,
+    problem_id: str,
+    verdict: str,
+    student_answer_raw: str | None,
+    page_number_override: int | None = None,
+    expected_answer_override: str | None = None,
+) -> None:
+    """The write path shared by a single verdict (`submit_answer_verdict`) and
+    a batched one (`submit_bulk_answer_verdict`): correct the transcription if
+    given, apply the verdict, then audit + promote a correction fixture --
+    factored out 2026-09-01 (Ledger repaint's batch review) so the fast path
+    can never silently diverge from what a single-item verdict already does.
+    `page_number_override`/`expected_answer_override` exist only for
+    NO_KEY_FOR_PAGE's own case (a key just typed in alongside this verdict,
+    fresher than the row's own values, which are always None there) -- always
+    None from the bulk path, which never handles that cause (see
+    `submit_bulk_answer_verdict`'s docstring for why)."""
+    previous_graded = sessions.get_graded_problem(
+        conn, student_id, session_id, capture_id, problem_id
+    )
+    previous_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
+    if student_answer_raw is not None and student_answer_raw.strip():
+        captures.update_student_answer_raw(
+            conn, student_id, capture_id, problem_id, student_answer_raw.strip()
+        )
+    sessions.apply_human_verdict(
+        conn,
+        student_id=student_id,
+        session_id=session_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        outcome=verdict,
+    )
+    if previous_graded is None or previous_problem is None:
+        return
+    new_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
+    verdict_correction_audit.insert_audit_row(
+        conn,
+        verdict_correction_audit.VerdictCorrectionAuditRow(
+            student_id=student_id,
+            session_id=session_id,
+            capture_id=capture_id,
+            problem_id=problem_id,
+            corrected_at=datetime.now(UTC).isoformat(),
+            previous_outcome=previous_graded.outcome,
+            previous_needs_human_cause=previous_graded.needs_human_cause,
+            new_outcome=verdict,
+            previous_student_answer_raw=previous_problem.student_answer_raw,
+            new_student_answer_raw=(
+                new_problem.student_answer_raw
+                if new_problem is not None
+                else previous_problem.student_answer_raw
+            ),
+            source=verdict_correction_audit.VerdictCorrectionSource.NEEDS_HUMAN_RESOLUTION,
+        ),
+    )
+    _promote_correction(
+        conn,
+        student_id=student_id,
+        source_id=source_id,
+        capture_id=capture_id,
+        problem_id=problem_id,
+        page_number=page_number_override or previous_graded.page_number,
+        prompt_text=previous_problem.prompt_text,
+        student_answer_raw=(
+            new_problem.student_answer_raw
+            if new_problem is not None
+            else previous_problem.student_answer_raw
+        ),
+        expected_answer=expected_answer_override or previous_graded.expected_answer,
+        new_outcome=verdict,
+    )
+
+
 @app.post("/keys/{student_id}/{source_id}/answer-verdict", response_model=None)
 def submit_answer_verdict(
     request: Request,
@@ -988,20 +1068,15 @@ def submit_answer_verdict(
     key write in this app uses -- NO_KEY_FOR_PAGE means no entry exists yet,
     so a conflict here should be rare, but is handled exactly like any other:
     held back and shown on resolve.html rather than risking a wrong key
-    silently beating a right one. The verdict is applied only once the key
-    write has a clear outcome (no conflict) -- a held-back conflict leaves
-    this row exactly as it was, to judge again once resolved."""
+    silently beating a right one. The verdict -- and, as of the 2026-09-01
+    refactor into `_apply_pending_verdict`, any `student_answer_raw`
+    correction submitted alongside it -- is applied only once the key write
+    has a clear outcome (no conflict), atomically together: a held-back
+    conflict leaves this row exactly as it was, nothing half-applied, to
+    judge again once resolved."""
     _require_student_and_source(conn, student_id, source_id)
     if verdict not in _VERDICTS:
         raise HTTPException(400, "verdict must be 'correct', 'partially_correct', or 'incorrect'")
-    previous_graded = sessions.get_graded_problem(
-        conn, student_id, session_id, capture_id, problem_id
-    )
-    previous_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
-    if student_answer_raw is not None and student_answer_raw.strip():
-        captures.update_student_answer_raw(
-            conn, student_id, capture_id, problem_id, student_answer_raw.strip()
-        )
     if key_answer_text is not None and key_answer_text.strip() and page_number is not None:
         now = datetime.now(UTC).isoformat()
         conflict = _save_answer_entry(
@@ -1027,59 +1102,96 @@ def submit_answer_verdict(
                     "redirect_to": f"/keys/{student_id}/{source_id}/evaluations",
                 },
             )
-    sessions.apply_human_verdict(
+    _apply_pending_verdict(
         conn,
         student_id=student_id,
+        source_id=source_id,
         session_id=session_id,
         capture_id=capture_id,
         problem_id=problem_id,
-        outcome=verdict,
+        verdict=verdict,
+        student_answer_raw=student_answer_raw,
+        page_number_override=page_number,
+        # A key just typed in for a NO_KEY_FOR_PAGE row (key_answer_text) is
+        # fresher ground truth than the row's own expected_answer, which is
+        # always None in exactly that case (no key existed yet when this row
+        # was graded).
+        expected_answer_override=(
+            key_answer_text.strip()
+            if key_answer_text is not None and key_answer_text.strip()
+            else None
+        ),
     )
-    if previous_graded is not None and previous_problem is not None:
-        new_problem = captures.get_problem(conn, student_id, capture_id, problem_id)
-        verdict_correction_audit.insert_audit_row(
-            conn,
-            verdict_correction_audit.VerdictCorrectionAuditRow(
-                student_id=student_id,
-                session_id=session_id,
-                capture_id=capture_id,
-                problem_id=problem_id,
-                corrected_at=datetime.now(UTC).isoformat(),
-                previous_outcome=previous_graded.outcome,
-                previous_needs_human_cause=previous_graded.needs_human_cause,
-                new_outcome=verdict,
-                previous_student_answer_raw=previous_problem.student_answer_raw,
-                new_student_answer_raw=(
-                    new_problem.student_answer_raw
-                    if new_problem is not None
-                    else previous_problem.student_answer_raw
-                ),
-                source=verdict_correction_audit.VerdictCorrectionSource.NEEDS_HUMAN_RESOLUTION,
-            ),
-        )
-        _promote_correction(
+    return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
+
+
+_BULK_VERDICT_CAUSES = frozenset(
+    {
+        _NEEDS_PERSON_CAUSE,
+        _ANSWER_DIFFERS_CAUSE,
+        _WAITING_ON_TRANSCRIPTION_CAUSE,
+        _ATTEMPT_CAP_REACHED_CAUSE,
+    }
+)
+"""Exactly the causes evaluations.html already shows a plain, key-free verdict
+form for (see that template's own `needs_human_cause in (...)` branch) --
+never NO_KEY_FOR_PAGE, which has no honest verdict without a key typed in
+alongside it, and never AMBIGUOUS_PROBLEM_ID, which has no verdict at all
+until the question number itself is resolved. A row whose cause isn't in this
+set is silently skipped rather than erroring, so a stale page (a parent's
+browser tab open from before something else changed the cause) can't 500."""
+
+
+@app.post("/keys/{student_id}/{source_id}/bulk-answer-verdict")
+async def submit_bulk_answer_verdict(
+    request: Request,
+    student_id: str,
+    source_id: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> RedirectResponse:
+    """The parent-feedback 2026-09-01 fast path: one submit judges every
+    checked row across a whole page (or the whole queue) instead of one
+    round trip per question. Deliberately does NOT pre-fill or pre-suggest a
+    verdict on any row -- `PendingProblemRow` carries no retained model
+    confidence or tentative verdict for these causes (checked directly
+    against `k12ta.store.sessions.PendingProblemRow` before building this),
+    so a fabricated "AI thinks this is correct" badge would be exactly the
+    invented-verdict failure this whole system exists to refuse. What this
+    *does* speed up honestly: a parent still reads every row (the table
+    already shows the key's answer beside the student's for
+    ANSWER_DIFFERS_FROM_KEY, which is most of what makes a page fast to
+    eyeball), but picks a verdict inline per row and submits the whole page
+    in one tap instead of nine. Rows sent with no `verdict_i` (left
+    unanswered) are skipped, not defaulted to anything.
+
+    Indexed form fields (`row_count`, then `session_id_i`/`capture_id_i`/
+    `problem_id_i`/`verdict_i`/`cause_i` per row), the same idiom
+    `submit_confirm` already uses for a variable-length batch -- FastAPI's
+    `Form(...)` parameters need fixed names, which a batch of unknown size
+    doesn't have."""
+    _require_student_and_source(conn, student_id, source_id)
+    data = parse_qs((await request.body()).decode())
+    row_count = int(_get(data, "row_count", "0"))
+    for i in range(row_count):
+        verdict = _get(data, f"verdict_{i}")
+        if not verdict:
+            continue
+        if verdict not in _VERDICTS:
+            raise HTTPException(
+                400, "verdict must be 'correct', 'partially_correct', or 'incorrect'"
+            )
+        cause = _get(data, f"cause_{i}")
+        if cause not in _BULK_VERDICT_CAUSES:
+            continue
+        _apply_pending_verdict(
             conn,
             student_id=student_id,
             source_id=source_id,
-            capture_id=capture_id,
-            problem_id=problem_id,
-            page_number=previous_graded.page_number or page_number,
-            prompt_text=previous_problem.prompt_text,
-            student_answer_raw=(
-                new_problem.student_answer_raw
-                if new_problem is not None
-                else previous_problem.student_answer_raw
-            ),
-            # A key just typed in for a NO_KEY_FOR_PAGE row (key_answer_text)
-            # is fresher ground truth than the row's own expected_answer,
-            # which is always None in exactly that case (no key existed yet
-            # when this row was graded).
-            expected_answer=(
-                key_answer_text.strip()
-                if key_answer_text is not None and key_answer_text.strip()
-                else previous_graded.expected_answer
-            ),
-            new_outcome=verdict,
+            session_id=_get(data, f"session_id_{i}"),
+            capture_id=_get(data, f"capture_id_{i}"),
+            problem_id=_get(data, f"problem_id_{i}"),
+            verdict=verdict,
+            student_answer_raw=None,
         )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
