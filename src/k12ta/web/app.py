@@ -458,6 +458,21 @@ def my_pages(
     items.sort(key=lambda item: _problem_sort_key(item.view.problem_id))
     to_look_at_items = [i for i in items if i.view.display_bucket in _TO_LOOK_AT_BUCKETS]
     waiting_items = [i for i in items if i.view.display_bucket in _WAITING_ON_GROWNUP_BUCKETS]
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: same
+    # split as session_results() -- a plain "correct" graded item (no
+    # dispute, no correction) is much lower priority than one a parent has
+    # actually touched, so it collapses into its own short list instead of
+    # sharing "Graded" with everything else.
+    priority_graded_items: list[MyPageItem] = []
+    plain_correct_graded_items: list[MyPageItem] = []
+    for item in graded_items:
+        is_priority = (
+            item.view.display_bucket != "correct"
+            or item.view.correction_notice is not None
+            or item.view.dispute is not None
+            or item.view.needs_resubmit_confirmation
+        )
+        (priority_graded_items if is_priority else plain_correct_graded_items).append(item)
 
     is_provisional = page_identity_schemas.get_current_schema_provenance(
         conn, student_id, source_id
@@ -469,6 +484,8 @@ def my_pages(
             "student": student,
             "source": source,
             "graded_items": graded_items,
+            "priority_graded_items": priority_graded_items,
+            "plain_correct_graded_items": plain_correct_graded_items,
             "to_look_at_items": to_look_at_items,
             "waiting_items": waiting_items,
             "is_provisional": is_provisional,

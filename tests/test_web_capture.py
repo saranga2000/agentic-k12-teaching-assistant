@@ -530,13 +530,17 @@ def test_my_pages_splits_waiting_to_look_at_and_graded(
 
     assert response.status_code == 200
     assert "12 + 7" in response.text
-    assert "3 + 4" in response.text
     assert 'action="/student/s-marcus/summer_bridge/remind"' in response.text
     assert "Nothing to look at right now." in response.text
     # Each item shows the student's own photo, keyed to its own capture -- not
     # just one photo for the whole page.
     assert "/captures/s-marcus/c-waiting/image" in response.text
-    assert "/captures/s-marcus/c-correct/image" in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: a
+    # plain "correct" graded item (c-correct here) collapses into the "what
+    # you got right" list -- still present, deliberately without its own
+    # photo (low priority, kept lightweight).
+    assert '<details class="correct-list">' in response.text
+    assert "3 + 4" in response.text
 
 
 def test_my_pages_shows_the_students_own_report_card_summary(

@@ -56,9 +56,14 @@
   {% endif %}
 
   <h2>Graded</h2>
-  {% if graded_items %}
+  {% if priority_graded_items %}
+  <!-- Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback:
+       same split as session_result.html -- a plain "correct" (no dispute,
+       no correction) is much lower priority than one a grown-up has
+       actually touched, so it collapses below instead of sharing equal
+       billing here. -->
   <ul class="pages-list">
-    {% for item in graded_items %}
+    {% for item in priority_graded_items %}
     <li class="outcome-{{ item.view.outcome | replace('_', '-') }}">
       <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
       <span class="pages-page">Page {{ item.page_number }}</span>
@@ -81,8 +86,20 @@
     </li>
     {% endfor %}
   </ul>
-  {% else %}
+  {% elif not plain_correct_graded_items %}
   <p class="message">Nothing graded yet.</p>
+  {% endif %}
+  {% if plain_correct_graded_items %}
+  <details class="correct-list">
+    <summary>See what you got right ({{ plain_correct_graded_items|length }})</summary>
+    {% for item in plain_correct_graded_items %}
+    <div class="correct-row">
+      <span class="correct-row-number">Page {{ item.page_number }}</span>
+      <span class="correct-row-question">{{ item.view.prompt_text | humanize_math }}</span>
+      <span class="correct-row-answer">{{ item.view.student_answer_raw | humanize_math }}</span>
+    </div>
+    {% endfor %}
+  </details>
   {% endif %}
 </div>
 <style>
@@ -134,5 +151,18 @@
     padding: 0.5rem 0.9rem; font-size: 0.95rem;
   }
   .report-card-summary strong { font-size: var(--text-md); }
+  /* The collapsed "what you got right" list (Ledger repaint, 2026-09-01,
+     parent feedback) -- same treatment as session_result.html's own. */
+  .correct-list { margin: 0 0 1.5rem; }
+  .correct-list summary {
+    cursor: pointer; font-size: 1.05rem; color: var(--text-dim); font-weight: 600; padding: 0.4rem 0;
+  }
+  .correct-row {
+    display: flex; gap: 0.6rem; padding: 0.4rem 0; border-top: 1px solid var(--surface); font-size: 0.95rem;
+  }
+  .correct-row:first-of-type { border-top: none; }
+  .correct-row-number { font-weight: 700; color: var(--affirm); flex-shrink: 0; }
+  .correct-row-question { flex: 1; }
+  .correct-row-answer { color: var(--text-dim); flex-shrink: 0; }
 </style>
 {% endblock %}
