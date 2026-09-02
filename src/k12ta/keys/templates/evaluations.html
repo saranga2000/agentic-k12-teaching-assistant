@@ -142,22 +142,27 @@
       <button type="submit" class="save-page-btn">Save this page</button>
     </div>
     <table class="review-table">
-      <thead><tr><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Verdict</th></tr></thead>
+      <thead>
+        <tr>
+          <th class="col-photo"></th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th>
+          <th>Answer key</th><th>Verdict</th>
+        </tr>
+      </thead>
       <tbody>
         {% for item in batchable %}
         <tr>
-          <td class="question-number">
+          <td class="col-photo">
             <input type="hidden" name="session_id_{{ loop.index0 }}" value="{{ item.row.session_id }}">
             <input type="hidden" name="capture_id_{{ loop.index0 }}" value="{{ item.row.capture_id }}">
             <input type="hidden" name="problem_id_{{ loop.index0 }}" value="{{ item.row.problem_id }}">
             <input type="hidden" name="cause_{{ loop.index0 }}" value="{{ item.row.needs_human_cause }}">
-            Q{{ item.row.problem_id }}
+            <img class="review-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ item.row.capture_id }}/image" alt="{{ student.display_name }}'s photo" loading="lazy" data-lightbox>
           </td>
+          <td class="question-number">Q{{ item.row.problem_id }}</td>
           <td class="review-q-cell">
             <span class="cause-label">{{ item.cause_label }}</span>
             {% if item.row.reminder_requested_at %}<span class="cause-label reminder-badge">{{ student.display_name }} asked about this</span>{% endif %}
             <div>{{ item.row.prompt_text | humanize_math }}</div>
-            {% if item.row.expected_answer %}<div class="review-key-answer">Key says &ldquo;{{ item.row.expected_answer | humanize_math }}&rdquo;</div>{% endif %}
             {% if item.row.needs_human_cause == "low_confidence" %}
             <p class="message review-note">The model wasn't confident reading this one &mdash; confirm what's below is right, fix it, or clear it and type what {{ student.display_name }} actually wrote.</p>
             {% elif item.row.needs_human_cause == "attempt_cap_reached" %}
@@ -166,6 +171,11 @@
           </td>
           <td>
             <input type="text" name="student_answer_raw_{{ loop.index0 }}" value="{{ item.row.student_answer_raw }}" class="review-answer-input" aria-label="What {{ student.display_name }} wrote for question {{ item.row.problem_id }}">
+          </td>
+          <td class="review-key-cell">
+            {% if item.row.expected_answer %}{{ item.row.expected_answer | humanize_math }}
+            {% elif not source.has_answer_key %}<span class="keyless-note">No answer key for this program</span>
+            {% else %}&mdash;{% endif %}
           </td>
           <td>
             <div class="verdict-pills">
@@ -234,14 +244,20 @@
   <summary><h2>Correct <span class="muted">({{ correct_items|length }})</span></h2></summary>
   {% if correct_items %}
   <table class="graded-table">
-    <thead><tr><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th></th></tr></thead>
+    <thead><tr><th class="col-photo"></th><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Answer key</th><th></th></tr></thead>
     <tbody>
       {% for item in correct_items %}
       <tr>
+        <td class="col-photo"><img class="review-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ item.capture_id }}/image" alt="{{ student.display_name }}'s photo" loading="lazy" data-lightbox></td>
         <td>{{ item.page_number }}</td>
         <td>Q{{ item.problem_id }}</td>
         <td>{{ item.prompt_text | humanize_math }}</td>
         <td>{{ item.student_answer_raw | humanize_math }}</td>
+        <td class="review-key-cell">
+          {% if item.expected_answer %}{{ item.expected_answer | humanize_math }}
+          {% elif not source.has_answer_key %}<span class="keyless-note">No answer key for this program</span>
+          {% else %}&mdash;{% endif %}
+        </td>
         <td>{% set exclude = "correct" %}{% include "_correction_control.html" %}</td>
       </tr>
       {% endfor %}
@@ -256,15 +272,20 @@
   <summary><h2>Partially correct <span class="muted">({{ partially_correct_items|length }})</span></h2></summary>
   {% if partially_correct_items %}
   <table class="graded-table">
-    <thead><tr><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Key</th><th></th></tr></thead>
+    <thead><tr><th class="col-photo"></th><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Answer key</th><th></th></tr></thead>
     <tbody>
       {% for item in partially_correct_items %}
       <tr>
+        <td class="col-photo"><img class="review-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ item.capture_id }}/image" alt="{{ student.display_name }}'s photo" loading="lazy" data-lightbox></td>
         <td>{{ item.page_number }}</td>
         <td>Q{{ item.problem_id }}</td>
         <td>{{ item.prompt_text | humanize_math }}</td>
         <td>{{ item.student_answer_raw | humanize_math }}</td>
-        <td>{% if item.expected_answer %}{{ item.expected_answer | humanize_math }}{% endif %}</td>
+        <td class="review-key-cell">
+          {% if item.expected_answer %}{{ item.expected_answer | humanize_math }}
+          {% elif not source.has_answer_key %}<span class="keyless-note">No answer key for this program</span>
+          {% else %}&mdash;{% endif %}
+        </td>
         <td>{% set exclude = "partially_correct" %}{% include "_correction_control.html" %}</td>
       </tr>
       {% endfor %}
@@ -279,15 +300,20 @@
   <summary><h2>Incorrect <span class="muted">({{ incorrect_items|length }})</span></h2></summary>
   {% if incorrect_items %}
   <table class="graded-table">
-    <thead><tr><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Key</th><th></th></tr></thead>
+    <thead><tr><th class="col-photo"></th><th>Page</th><th>Q</th><th>Question</th><th>{{ student.display_name }} wrote</th><th>Answer key</th><th></th></tr></thead>
     <tbody>
       {% for item in incorrect_items %}
       <tr>
+        <td class="col-photo"><img class="review-thumb" src="/keys/{{ student.student_id }}/{{ source.source_id }}/captures/{{ item.capture_id }}/image" alt="{{ student.display_name }}'s photo" loading="lazy" data-lightbox></td>
         <td>{{ item.page_number }}</td>
         <td>Q{{ item.problem_id }}</td>
         <td>{{ item.prompt_text | humanize_math }}</td>
         <td>{{ item.student_answer_raw | humanize_math }}</td>
-        <td>{% if item.expected_answer %}{{ item.expected_answer | humanize_math }}{% endif %}</td>
+        <td class="review-key-cell">
+          {% if item.expected_answer %}{{ item.expected_answer | humanize_math }}
+          {% elif not source.has_answer_key %}<span class="keyless-note">No answer key for this program</span>
+          {% else %}&mdash;{% endif %}
+        </td>
         <td>{% set exclude = "incorrect" %}{% include "_correction_control.html" %}</td>
       </tr>
       {% endfor %}
@@ -370,7 +396,6 @@
   .review-table td { padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
   .review-table tbody tr:last-child td { border-bottom: none; }
   .review-q-cell { max-width: 26rem; }
-  .review-key-answer { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.2rem; }
   .review-note { font-size: 0.8rem; color: var(--text-dim); margin: 0.3rem 0 0; }
   .review-answer-input {
     width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; border-radius: var(--radius-sm);
@@ -378,6 +403,16 @@
   }
   .verdict-pills { display: flex; flex-direction: column; gap: 0.2rem; white-space: nowrap; }
   .verdict-pills label { display: flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; cursor: pointer; }
+  /* Per-row photo thumbnail + answer-key column (parent feedback,
+     2026-09-02): small in the table, full size in the shared lightbox
+     (see _lightbox.html) on tap -- never inline-blows-up the row. */
+  .col-photo { width: 3rem; }
+  .review-thumb {
+    display: block; width: 2.6rem; height: 2.6rem; object-fit: cover;
+    border-radius: var(--radius-sm); border: 1px solid var(--border);
+  }
+  .review-key-cell { color: var(--text-dim); }
+  .keyless-note { font-size: 0.8rem; font-style: italic; }
 
   /* The three foldable graded sections (Ledger repaint, 2026-09-01) -- low
      priority once nothing's wrong, so collapsed by default; unfolds to a

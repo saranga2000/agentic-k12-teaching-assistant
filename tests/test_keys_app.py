@@ -348,7 +348,7 @@ def test_home_does_not_show_a_stale_request_once_a_source_exists(
     assert "asked for a program to be added" not in response.text
 
 
-def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
+def _seed_marcus_with_source(conn: sqlite3.Connection, *, has_answer_key: bool = True) -> None:
     _seed_marcus(conn)
     content.insert_content_source(
         conn,
@@ -358,7 +358,7 @@ def _seed_marcus_with_source(conn: sqlite3.Connection) -> None:
             label="Summer bridge workbook",
             kind="workbook",
             subject="math",
-            has_answer_key=True,
+            has_answer_key=has_answer_key,
             graded_by_someone_else=False,
             default_mode="full",
             typical_session_minutes=30,
@@ -3423,6 +3423,68 @@ def test_evaluations_graded_sections_order_by_page_then_question_numerically(
     pos2 = re.search(r"\bQ2\b", section).start()
     pos10 = re.search(r"\bQ10\b", section).start()
     assert pos1 < pos2 < pos10
+
+
+def test_evaluations_tables_show_a_thumbnail_and_the_answer_key(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback, 2026-09-02: every table -- pending and graded --
+    shows a small thumbnail of the submitted page (full size via the shared
+    lightbox on tap) and a dedicated answer-key column, not the key folded
+    into the question's own text."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-differs",
+        problem_id="1",
+        cause="answer_differs_from_key",
+        page_number=15,
+        expected_answer="quadrilateral",
+    )
+    _seed_decisive_incorrect_problem(conn, capture_id="c-incorrect-thumb", page_number=16)
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'class="review-thumb"' in response.text
+    assert "/keys/s-marcus/summer_bridge/captures/c-differs/image" in response.text
+    assert "/keys/s-marcus/summer_bridge/captures/c-incorrect-thumb/image" in response.text
+    # The pending table's dedicated Answer key column, not "Key says ..." folded
+    # into the question cell.
+    assert "<th>Answer key</th>" in response.text
+    assert "quadrilateral" in response.text
+
+
+def test_evaluations_table_shows_a_keyless_comment_when_the_program_has_no_key(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    _seed_marcus_with_source(conn, has_answer_key=False)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-keyless", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert "No answer key for this program" in response.text
 
 
 def test_submit_answer_verdict_corrects_a_misread_answer_before_judging_it(
