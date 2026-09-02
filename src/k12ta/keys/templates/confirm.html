@@ -27,7 +27,13 @@
   </div>
   {% endif %}
 
-  <table>
+  {% if not entries %}
+  <p class="message attention">Nothing readable came back for this page &mdash; no answers to
+    confirm. Try rescanning with better light or a straighter angle, or
+    <a href="/keys/{{ student.student_id }}/{{ source.source_id }}/answers/manual-entry">type these answers in by hand</a> instead.</p>
+  {% endif %}
+
+  <table{{ ' hidden' if not entries }}>
     <tr>
       <th>page</th><th>problem</th><th>answer</th><th>ungradeable</th><th>reason</th>
     </tr>

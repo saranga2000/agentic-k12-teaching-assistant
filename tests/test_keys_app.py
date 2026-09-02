@@ -4737,6 +4737,34 @@ def test_successful_upload_renders_confirm_form_with_photo_and_entries(
     assert "checked" in html.split('name="ungradeable_1"')[1].split(">")[0]
 
 
+def test_successful_upload_with_no_entries_shows_an_intelligible_message(
+    client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
+) -> None:
+    """AGENTS.md rule 11: a scan that reads cleanly but finds nothing (a blank
+    page, a cover page, a misframed photo) is not a failure -- entries=() with
+    no `failure` set is a legitimate TRANSCRIBED outcome -- so confirm.html
+    must say so rather than rendering a bare table with only a header row."""
+    _seed_marcus_with_source(conn)
+    transcriber.result = KeyPageResult(
+        entries=(),
+        provider="google",
+        model="gemini-3.7-flash",
+        cost_usd=0.0,
+        latency_ms=500,
+        data_retention=DataRetention.PROVIDER_MAY_TRAIN,
+    )
+
+    response = client.post(
+        "/keys/s-marcus/summer_bridge/upload",
+        files={"photo": ("key.jpg", A_KEY_PHOTO, "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    html = _final_html(response)
+    assert "Nothing readable came back" in html
+    assert 'name="answer_text_0"' not in html
+
+
 def test_confirm_screen_hides_the_bare_page_number_field_for_a_two_component_schema(
     client: TestClient, conn: sqlite3.Connection, transcriber: FakeKeyTranscriber
 ) -> None:
