@@ -131,7 +131,7 @@
   .results { justify-content: flex-start; padding-top: 3rem; align-items: stretch; }
   .results-summary,
   .results-table { width: 100%; max-width: 720px; margin: 0 auto; }
-  .results-summary { text-align: left; margin-bottom: 1.5rem; }
+  .results-summary { text-align: left; margin-bottom: var(--space-5); }
   .summary-counts { display: flex; flex-wrap: wrap; gap: 1.2rem; font-size: 1.1rem; }
   .summary-count strong { font-size: 1.4rem; }
   .summary-right strong { color: var(--affirm); }
@@ -146,7 +146,7 @@
   .results-table .col-photo { width: 3rem; }
   .result-thumb {
     display: block; width: 2.6rem; height: 2.6rem; object-fit: cover;
-    border-radius: 6px; border: 1px solid var(--neutral-bg);
+    border-radius: var(--radius-sm); border: 1px solid var(--neutral-bg);
   }
   /* Row background is the third signal, after glyph and note text -- never the
      only one (rule: meaning is never colour- or glyph-alone). Same three-family
@@ -168,8 +168,8 @@
   .results-table tr.bucket-needs-a-person .outcome-glyph,
   .results-table tr.bucket-repeat .outcome-glyph { color: var(--neutral); }
   .col-result { display: table-cell; }
-  .outcome-glyph { font-size: 1.15rem; font-weight: 700; margin-right: 0.4rem; }
-  .outcome-note { font-size: 0.92rem; }
+  .outcome-glyph { font-size: var(--text-md); font-weight: 700; margin-right: 0.4rem; }
+  .outcome-note { font-size: var(--text-sm); }
   .identity-ask {
     width: 100%; max-width: 720px; margin: 0 auto 1.5rem; text-align: left;
     background: var(--neutral-bg); border: 2px dashed var(--neutral); border-radius: 16px;
@@ -179,7 +179,7 @@
   .identity-ask-options { display: flex; flex-wrap: wrap; gap: 0.6rem; }
   .identity-ask-options form { margin: 0; }
   .identity-ask-option {
-    font-size: 1.05rem; padding: 0.55rem 1.1rem; border-radius: 10px; border: none;
+    font-size: 1.05rem; padding: 0.55rem 1.1rem; border-radius: var(--radius-lg); border: none;
     background: var(--accent); color: #12141a; cursor: pointer; font-weight: 600;
   }
   .identity-ask-option:active { background: var(--accent-active); }
@@ -195,13 +195,13 @@
   }
   .page-number-ask form { display: flex; gap: 0.6rem; margin: 0; }
   .page-number-ask input[type="number"] {
-    flex: 1; font-size: 1.05rem; padding: 0.55rem 0.8rem; border-radius: 10px;
+    flex: 1; font-size: 1.05rem; padding: 0.55rem 0.8rem; border-radius: var(--radius-lg);
     border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
   }
   .schema-guess-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; }
   .schema-guess-row label { display: flex; align-items: center; gap: 0.4rem; }
   .schema-guess-row input[type="text"] {
-    flex: 1; font-size: 1rem; padding: 0.4rem 0.6rem; border-radius: 8px;
+    flex: 1; font-size: var(--text-base); padding: 0.4rem 0.6rem; border-radius: var(--radius-md);
     border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
   }
   .provisional-notice {
@@ -210,20 +210,20 @@
   }
   .results-next { width: 100%; max-width: 720px; margin: 1.5rem auto 0; text-align: center; }
   .results-next a { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 1.05rem; }
-  .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+  .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: var(--space-2); }
   .dispute-reason {
-    flex: 1; min-width: 10rem; font-size: 0.9rem; padding: 0.35rem 0.6rem; border-radius: 8px;
+    flex: 1; min-width: 10rem; font-size: 0.9rem; padding: 0.35rem 0.6rem; border-radius: var(--radius-md);
     border: 1px solid var(--neutral); background: var(--bg); color: var(--text);
   }
   .dispute-button {
-    font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: 8px; border: none;
+    font-size: 0.85rem; padding: 0.35rem 0.7rem; border-radius: var(--radius-md); border: none;
     background: var(--neutral); color: var(--text); cursor: pointer; font-weight: 600;
   }
   .dispute-status { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
   .correction-notice { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--text-dim); font-style: italic; }
-  .resubmit-confirm-form { margin-top: 0.5rem; }
+  .resubmit-confirm-form { margin-top: var(--space-2); }
   .resubmit-confirm-button {
-    font-size: 0.9rem; padding: 0.4rem 0.9rem; border-radius: 8px; border: none;
+    font-size: 0.9rem; padding: 0.4rem 0.9rem; border-radius: var(--radius-md); border: none;
     background: var(--accent); color: #12141a; cursor: pointer; font-weight: 600;
   }
 </style>

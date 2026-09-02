@@ -51,14 +51,14 @@
 </div>
 <style>
   .assignment-chip {
-    font-size: 1rem; padding: 0.6rem 1.1rem; border-radius: 999px;
+    font-size: var(--text-base); padding: 0.6rem 1.1rem; border-radius: 999px;
     background: var(--surface); color: var(--text); border: none;
   }
-  .framing-guide { display: flex; align-items: flex-end; gap: 2rem; }
+  .framing-guide { display: flex; align-items: flex-end; gap: var(--space-6); }
   .frame-good, .frame-bad { display: flex; flex-direction: column; align-items: center; }
   .frame-outline {
     display: flex; align-items: center; justify-content: center;
-    width: 84px; height: 112px; border-radius: 10px;
+    width: 84px; height: 112px; border-radius: var(--radius-lg);
   }
   /* The two examples are deliberately NOT equal in visual weight: one is the
      answer, one is the warning. Relying on border colour alone made them read as
