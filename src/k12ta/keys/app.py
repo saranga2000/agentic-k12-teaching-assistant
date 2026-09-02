@@ -618,6 +618,13 @@ class PendingItemDisplay:
 
     row: sessions.PendingProblemRow
     cause_label: str
+    is_bulk_verdictable: bool
+    """Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: whether this row
+    belongs in evaluations.html's fast batch-review table (see
+    `_BULK_VERDICT_CAUSES`) rather than needing its own individual form
+    (NO_KEY_FOR_PAGE needs a key typed in, AMBIGUOUS_PROBLEM_ID needs a
+    question number set) -- computed once here rather than re-checked with
+    Jinja's `selectattr` against a dotted attribute path in the template."""
 
 
 @dataclass(frozen=True)
@@ -673,6 +680,23 @@ _NEEDS_REVIEW_CAUSES = frozenset(
         _ATTEMPT_CAP_REACHED_CAUSE,
     }
 )
+
+_BULK_VERDICT_CAUSES = frozenset(
+    {
+        _NEEDS_PERSON_CAUSE,
+        _ANSWER_DIFFERS_CAUSE,
+        _WAITING_ON_TRANSCRIPTION_CAUSE,
+        _ATTEMPT_CAP_REACHED_CAUSE,
+    }
+)
+"""Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: exactly the causes
+evaluations.html's fast batch-review table can judge with a plain verdict --
+never NO_KEY_FOR_PAGE, which has no honest verdict without a key typed in
+alongside it, and never AMBIGUOUS_PROBLEM_ID, which has no verdict at all
+until the question number itself is resolved. Used both to build
+PendingItemDisplay.is_bulk_verdictable (this module's own display layer) and
+to validate submit_bulk_answer_verdict's incoming rows (a stale page can't
+smuggle a NO_KEY_FOR_PAGE row into a 500 by claiming a cause it isn't)."""
 
 
 @dataclass(frozen=True)
@@ -846,6 +870,7 @@ def _group_pending_by_capture(
                             if row.needs_human_cause is not None
                             else _UNKNOWN_CAUSE_LABEL
                         ),
+                        is_bulk_verdictable=row.needs_human_cause in _BULK_VERDICT_CAUSES,
                     )
                     for row in rows
                 ),
@@ -1123,23 +1148,6 @@ def submit_answer_verdict(
         ),
     )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
-
-
-_BULK_VERDICT_CAUSES = frozenset(
-    {
-        _NEEDS_PERSON_CAUSE,
-        _ANSWER_DIFFERS_CAUSE,
-        _WAITING_ON_TRANSCRIPTION_CAUSE,
-        _ATTEMPT_CAP_REACHED_CAUSE,
-    }
-)
-"""Exactly the causes evaluations.html already shows a plain, key-free verdict
-form for (see that template's own `needs_human_cause in (...)` branch) --
-never NO_KEY_FOR_PAGE, which has no honest verdict without a key typed in
-alongside it, and never AMBIGUOUS_PROBLEM_ID, which has no verdict at all
-until the question number itself is resolved. A row whose cause isn't in this
-set is silently skipped rather than erroring, so a stale page (a parent's
-browser tab open from before something else changed the cause) can't 500."""
 
 
 @app.post("/keys/{student_id}/{source_id}/bulk-answer-verdict")
