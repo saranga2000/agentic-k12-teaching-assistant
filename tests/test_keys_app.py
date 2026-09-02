@@ -2046,7 +2046,13 @@ def test_enrollment_detail_lists_graded_correct_and_incorrect_items(
     assert response.status_code == 200
     assert "a correct problem" in response.text
     assert "an incorrect problem" in response.text
-    assert "key says &ldquo;20&rdquo;" in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: the "Incorrect"
+    # section is now a table (fold/unfold, parent feedback) with the key's
+    # own answer in its own column rather than "key says <x>" prose.
+    incorrect_section = response.text[response.text.index('id="graded-incorrect"') :]
+    assert "an incorrect problem" in incorrect_section
+    assert "21" in incorrect_section  # what Marcus wrote
+    assert "20" in incorrect_section  # the key's answer
 
 
 def test_enrollment_detail_lists_graded_partially_correct_items(
@@ -2921,7 +2927,9 @@ def test_enrollment_detail_shows_answer_differs_side_by_side_with_a_verdict_form
     assert "Answer differs from the key" in response.text
     assert "rhombus" in response.text
     assert "quadrilateral" in response.text
-    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01: this cause now lands
+    # in the fast batch-review table, not its own single-item form.
+    assert 'action="/keys/s-marcus/summer_bridge/bulk-answer-verdict"' in response.text
     assert 'value="c-differs"' in response.text
 
 
@@ -3006,11 +3014,11 @@ def test_evaluations_screen_offers_a_verdict_form_for_needs_person_rows_too(
     response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
-    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/bulk-answer-verdict"' in response.text
     assert 'value="c-needs-person"' in response.text
-    # No key answer exists for this cause -- the "key says" clause must not
+    # No key answer exists for this cause -- the "Key says" clause must not
     # render a literal "None".
-    assert "key says" not in response.text
+    assert "Key says" not in response.text
 
 
 def test_evaluations_screen_offers_a_verdict_form_for_the_attempt_cap_too(
@@ -3042,7 +3050,7 @@ def test_evaluations_screen_offers_a_verdict_form_for_the_attempt_cap_too(
     assert response.status_code == 200
     assert "Already tried 3 times" in response.text
     assert "photographed this page 3 times" in response.text
-    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/bulk-answer-verdict"' in response.text
     assert 'value="c-capped"' in response.text
 
 
@@ -3075,10 +3083,148 @@ def test_evaluations_screen_offers_a_verdict_form_for_low_confidence_rows_too(
     response = client.get("/keys/s-marcus/summer_bridge/evaluations")
 
     assert response.status_code == 200
-    assert 'action="/keys/s-marcus/summer_bridge/answer-verdict"' in response.text
+    assert 'action="/keys/s-marcus/summer_bridge/bulk-answer-verdict"' in response.text
     assert 'value="c-low-conf"' in response.text
-    assert 'name="student_answer_raw" value="l9"' in response.text
+    assert 'name="student_answer_raw_0" value="l9"' in response.text
     assert "wasn't confident reading this one" in response.text
+
+
+def test_evaluations_screen_has_a_jump_nav_with_live_counts(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback:
+    "easily jump to the other sections besides waiting for review." Reuses
+    EnrollmentSummary, already computed for enrollment_landing.html's own
+    summary bar, so the counts can't drift between the two pages."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert (
+        '<a href="#pending-review" class="eval-tab">Needs review <span>1</span></a>'
+        in response.text
+    )
+    assert '<a href="#graded-correct" class="eval-tab">Correct <span>0</span></a>' in response.text
+    assert (
+        '<a href="#graded-partially-correct" class="eval-tab">Partially correct <span>0</span></a>'
+        in response.text
+    )
+    assert (
+        '<a href="#graded-incorrect" class="eval-tab">Incorrect <span>0</span></a>' in response.text
+    )
+    # No open disputes seeded -- the tab must not render a dead link.
+    assert "Disputes" not in response.text
+
+
+def test_evaluations_screen_graded_sections_are_folded_by_default(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback: correct/partially-correct/incorrect are low priority
+    once nothing needs a decision, so they're collapsed on load -- a parent
+    unfolds one deliberately, via the tab or the disclosure triangle."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-correct",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-correct",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    captures.insert_problem(
+        conn,
+        captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-correct",
+            problem_id="1",
+            prompt_text="14 + 7",
+            student_answer_raw="21",
+            transcription_confidence=0.99,
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-correct",
+            capture_id="c-correct",
+            problem_id="1",
+            outcome="correct",
+            grader_confidence=0.99,
+            page_number=15,
+        ),
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert '<details class="graded-section" id="graded-correct">' in response.text
+    # Genuinely a table, per the parent's own ask -- not the old plain list.
+    assert '<table class="graded-table">' in response.text
+    assert "14 + 7" in response.text
+
+
+def test_evaluations_screen_batch_table_never_pre_checks_a_verdict(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The honesty rule submit_bulk_answer_verdict's own docstring states:
+    PendingProblemRow carries no retained model confidence for these causes,
+    so the rendered radios must never come pre-selected -- that would read
+    as an AI opinion nothing in this codebase actually produced."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn, capture_id="c-review", problem_id="1", cause="needs_person", page_number=15
+    )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    assert 'class="review-table-form"' in response.text
+    assert 'name="row_count" value="1"' in response.text
+    assert 'name="cause_0" value="needs_person"' in response.text
+    assert "checked" not in response.text.split('class="review-table-form"')[1].split("</form>")[0]
 
 
 def test_submit_answer_verdict_corrects_a_misread_answer_before_judging_it(
@@ -4491,7 +4637,7 @@ def test_evaluations_screen_shows_open_disputes_above_pending_review(
     assert "Marcus disputed these" in response.text
     assert "I carried the 1 correctly" in response.text
     dispute_pos = response.text.index("Marcus disputed these")
-    pending_pos = response.text.index("<h2>Pending review</h2>")
+    pending_pos = response.text.index('<h2 id="pending-review">Pending review</h2>')
     assert dispute_pos < pending_pos
 
 
