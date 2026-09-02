@@ -4021,6 +4021,50 @@ def test_bulk_answer_verdict_judges_every_checked_row_in_one_submit(
     assert graded_b[0].needs_human_cause is None
 
 
+def test_bulk_answer_verdict_corrects_a_misread_answer_inline(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """The single-item form's own "fix the transcription before judging it"
+    capability, carried into the batch table row-by-row rather than dropped
+    from it."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    _seed_pending_problem(
+        conn,
+        capture_id="c-fix",
+        problem_id="1",
+        cause="low_confidence",
+        page_number=9,
+        student_answer_raw="l9",
+    )
+
+    client.post(
+        "/keys/s-marcus/summer_bridge/bulk-answer-verdict",
+        data={
+            "row_count": "1",
+            "session_id_0": "sess-c-fix",
+            "capture_id_0": "c-fix",
+            "problem_id_0": "1",
+            "cause_0": "low_confidence",
+            "verdict_0": "correct",
+            "student_answer_raw_0": "19",
+        },
+        follow_redirects=False,
+    )
+
+    problem = captures.get_problem(conn, "s-marcus", "c-fix", "1")
+    assert problem is not None
+    assert problem.student_answer_raw == "19"
+
+
 def test_bulk_answer_verdict_leaves_an_unanswered_row_pending(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:

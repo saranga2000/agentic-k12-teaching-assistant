@@ -1162,13 +1162,16 @@ async def submit_bulk_answer_verdict(
     ANSWER_DIFFERS_FROM_KEY, which is most of what makes a page fast to
     eyeball), but picks a verdict inline per row and submits the whole page
     in one tap instead of nine. Rows sent with no `verdict_i` (left
-    unanswered) are skipped, not defaulted to anything.
+    unanswered) are skipped, not defaulted to anything. `student_answer_raw_i`
+    is optional per row, same meaning as the single-item endpoint's own
+    `student_answer_raw` -- a misread transcription can still be fixed
+    inline, in the same submit, without dropping out of the table.
 
     Indexed form fields (`row_count`, then `session_id_i`/`capture_id_i`/
-    `problem_id_i`/`verdict_i`/`cause_i` per row), the same idiom
-    `submit_confirm` already uses for a variable-length batch -- FastAPI's
-    `Form(...)` parameters need fixed names, which a batch of unknown size
-    doesn't have."""
+    `problem_id_i`/`verdict_i`/`cause_i`/`student_answer_raw_i` per row), the
+    same idiom `submit_confirm` already uses for a variable-length batch --
+    FastAPI's `Form(...)` parameters need fixed names, which a batch of
+    unknown size doesn't have."""
     _require_student_and_source(conn, student_id, source_id)
     data = parse_qs((await request.body()).decode())
     row_count = int(_get(data, "row_count", "0"))
@@ -1191,7 +1194,7 @@ async def submit_bulk_answer_verdict(
             capture_id=_get(data, f"capture_id_{i}"),
             problem_id=_get(data, f"problem_id_{i}"),
             verdict=verdict,
-            student_answer_raw=None,
+            student_answer_raw=_get(data, f"student_answer_raw_{i}") or None,
         )
     return RedirectResponse(f"/keys/{student_id}/{source_id}/evaluations", status_code=303)
 
