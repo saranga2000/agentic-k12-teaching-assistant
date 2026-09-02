@@ -1,0 +1,30 @@
+<!-- M9b (docs/ROADMAP.md): the click-to-enlarge overlay, shared markup and
+     script -- byte-identical in both apps' base.html before this pass (M9a
+     already shared its CSS; this is the HTML/JS half the milestone named as
+     still owed). Lives in k12ta.design/, not either app's own templates
+     directory, and reachable from both because each app's Jinja2Templates is
+     configured with this directory as a fallback search path (see
+     k12ta.web.app / k12ta.keys.app). Included once per page, in each app's
+     own base.html, right after the content block. -->
+<div id="lightbox-overlay" class="lightbox-overlay" hidden>
+  <button type="button" class="lightbox-close" aria-label="Close">&times;</button>
+  <img id="lightbox-image" alt="">
+</div>
+<script>
+  (function () {
+    var overlay = document.getElementById("lightbox-overlay");
+    var image = document.getElementById("lightbox-image");
+    document.addEventListener("click", function (event) {
+      var target = event.target.closest("img[data-lightbox]");
+      if (target) {
+        image.src = target.src;
+        overlay.hidden = false;
+        return;
+      }
+      if (!overlay.hidden) overlay.hidden = true;
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") overlay.hidden = true;
+    });
+  })();
+</script>

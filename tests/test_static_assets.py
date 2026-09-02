@@ -35,3 +35,28 @@ def test_both_apps_serve_byte_identical_tokens_css() -> None:
     keys_css = TestClient(keys_app.app).get("/static/tokens.css").text
 
     assert web_css == keys_css
+
+
+def test_both_apps_render_the_same_shared_lightbox_partial() -> None:
+    """M9b (docs/ROADMAP.md): the lightbox's HTML/JS, not just its CSS, is
+    now one physical file too (k12ta.design/_lightbox.html), reached via
+    each app's Jinja2Templates search path rather than a copy in either
+    app's own templates/ directory. Rendered directly (no HTTP, no database)
+    since this partial takes no template variables."""
+    web_html = web_app.templates.get_template("_lightbox.html").render()
+    keys_html = keys_app.templates.get_template("_lightbox.html").render()
+
+    assert web_html == keys_html
+    assert 'id="lightbox-overlay"' in web_html
+    assert "data-lightbox" in web_html
+
+
+def test_neither_app_keeps_its_own_copy_of_the_lightbox_partial() -> None:
+    """The actual point of M9b's half of this: nothing left to drift."""
+    from pathlib import Path
+
+    web_templates_dir = Path(web_app.__file__).parent / "templates"
+    keys_templates_dir = Path(keys_app.__file__).parent / "templates"
+
+    assert not (web_templates_dir / "_lightbox.html").exists()
+    assert not (keys_templates_dir / "_lightbox.html").exists()

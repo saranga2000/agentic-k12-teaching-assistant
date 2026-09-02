@@ -124,27 +124,6 @@
 </head>
 <body>
 {% block content %}{% endblock %}
-<div id="lightbox-overlay" class="lightbox-overlay" hidden>
-  <button type="button" class="lightbox-close" aria-label="Close">&times;</button>
-  <img id="lightbox-image" alt="">
-</div>
-<script>
-  (function () {
-    var overlay = document.getElementById("lightbox-overlay");
-    var image = document.getElementById("lightbox-image");
-    document.addEventListener("click", function (event) {
-      var target = event.target.closest("img[data-lightbox]");
-      if (target) {
-        image.src = target.src;
-        overlay.hidden = false;
-        return;
-      }
-      if (!overlay.hidden) overlay.hidden = true;
-    });
-    document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape") overlay.hidden = true;
-    });
-  })();
-</script>
+{% include "_lightbox.html" %}
 </body>
 </html>

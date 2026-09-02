@@ -119,7 +119,17 @@ app = FastAPI()
 app.mount(
     "/static", StaticFiles(directory=str(Path(__file__).parent.parent / "design")), name="static"
 )
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates = Jinja2Templates(
+    # M9b (docs/ROADMAP.md): src/k12ta/design/ as a second search path, after
+    # this app's own templates/ -- lets both apps {% include %} the same
+    # physical partial (today just _lightbox.html) without either owning a
+    # copy. This app's own templates always win on a name collision, since
+    # Jinja2's FileSystemLoader tries search paths in the order given.
+    directory=[
+        str(Path(__file__).parent / "templates"),
+        str(Path(__file__).parent.parent / "design"),
+    ]
+)
 templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: Transcriber | None = None

@@ -124,7 +124,14 @@ app = FastAPI()
 app.mount(
     "/static", StaticFiles(directory=str(Path(__file__).parent.parent / "design")), name="static"
 )
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates = Jinja2Templates(
+    # M9b (docs/ROADMAP.md): same shared-partial search path as k12ta.web --
+    # see that app's own comment on this line for why.
+    directory=[
+        str(Path(__file__).parent / "templates"),
+        str(Path(__file__).parent.parent / "design"),
+    ]
+)
 templates.env.filters["humanize_math"] = humanize_math_text
 
 _transcriber: KeyTranscriber | None = None
