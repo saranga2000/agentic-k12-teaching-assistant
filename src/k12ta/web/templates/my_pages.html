@@ -17,40 +17,53 @@
 
   <h2>Waiting on a grown-up</h2>
   {% if waiting_items %}
-  <ul class="pages-list">
-    {% for item in waiting_items %}
-    <li>
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
-      <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
-      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
-      {% if item.reminder_requested_at %}
-      <span class="pages-reminded">Reminder sent</span>
-      {% else %}
-      <form method="post" action="/student/{{ student.student_id }}/{{ source.source_id }}/remind">
-        <input type="hidden" name="session_id" value="{{ item.session_id }}">
-        <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
-        <input type="hidden" name="problem_id" value="{{ item.view.problem_id }}">
-        <button type="submit">Remind a grown-up</button>
-      </form>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
+  <!-- Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback:
+       real table format, same shape as session_result.html's own -- a
+       small photo per row (full size in the shared lightbox on tap), not a
+       card-like list. -->
+  <table class="pages-table">
+    <thead><tr><th class="col-photo"></th><th class="col-page">Page</th><th class="col-question">Question</th><th class="col-result">Status</th></tr></thead>
+    <tbody>
+      {% for item in waiting_items %}
+      <tr>
+        <td class="col-photo"><img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox></td>
+        <td class="col-page">{% if item.page_number %}{{ item.page_number }}{% else %}?{% endif %}</td>
+        <td class="col-question">{{ item.view.prompt_text | humanize_math }}</td>
+        <td class="col-result">
+          {% if item.reminder_requested_at %}
+          <span class="pages-reminded">Reminder sent</span>
+          {% else %}
+          <form method="post" action="/student/{{ student.student_id }}/{{ source.source_id }}/remind">
+            <input type="hidden" name="session_id" value="{{ item.session_id }}">
+            <input type="hidden" name="capture_id" value="{{ item.capture_id }}">
+            <input type="hidden" name="problem_id" value="{{ item.view.problem_id }}">
+            <button type="submit">Remind a grown-up</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% else %}
   <p class="message">Nothing waiting on a grown-up right now.</p>
   {% endif %}
 
   <h2>To look at</h2>
   {% if to_look_at_items %}
-  <ul class="pages-list">
-    {% for item in to_look_at_items %}
-    <li>
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
-      <span class="pages-page">{% if item.page_number %}Page {{ item.page_number }}{% else %}Page not identified yet{% endif %}</span>
-      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo; &mdash; {{ item.view.message }}
-    </li>
-    {% endfor %}
-  </ul>
+  <table class="pages-table">
+    <thead><tr><th class="col-photo"></th><th class="col-page">Page</th><th class="col-question">Question</th><th class="col-result">Result</th></tr></thead>
+    <tbody>
+      {% for item in to_look_at_items %}
+      <tr>
+        <td class="col-photo"><img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox></td>
+        <td class="col-page">{% if item.page_number %}{{ item.page_number }}{% else %}?{% endif %}</td>
+        <td class="col-question">{{ item.view.prompt_text | humanize_math }}</td>
+        <td class="col-result">{{ item.view.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% else %}
   <p class="message">Nothing to look at right now.</p>
   {% endif %}
@@ -61,31 +74,43 @@
        same split as session_result.html -- a plain "correct" (no dispute,
        no correction) is much lower priority than one a grown-up has
        actually touched, so it collapses below instead of sharing equal
-       billing here. -->
-  <ul class="pages-list">
-    {% for item in priority_graded_items %}
-    <li class="outcome-{{ item.view.outcome | replace('_', '-') }}">
-      <img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox>
-      <span class="pages-page">Page {{ item.page_number }}</span>
-      &ldquo;{{ item.view.prompt_text | humanize_math }}&rdquo;
-      <span class="pages-glyph">{{ item.view.glyph }}</span> {{ item.view.message }}
-      {% if item.attempt_count > 1 %}
-      <span class="pages-attempts">Tried {{ item.attempt_count }} times</span>
-      {% endif %}
-      {% with correction_notice=item.view.correction_notice %}
-      {% include "_correction_notice.html" %}
-      {% endwith %}
-      {% with needs_resubmit_confirmation=item.view.needs_resubmit_confirmation, capture_id=item.capture_id, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
-      {% include "_resubmit_confirmation.html" %}
-      {% endwith %}
-      {% if item.view.display_bucket in ('incorrect', 'partially_correct') or item.view.dispute %}
-      {% with session_id=item.session_id, capture_id=item.capture_id, problem_id=item.view.problem_id, dispute=item.view.dispute, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
-      {% include "_dispute_control.html" %}
-      {% endwith %}
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
+       billing here. No separate "answer key" column here (unlike the
+       parent-facing evaluations.html tables): StudentResultView never
+       exposes a raw expected_answer -- whether a key is shown at all
+       depends on this program's feedback mode, and that's already folded
+       into `message` when the policy permits it. A dedicated column would
+       bypass that policy gate. -->
+  <table class="pages-table">
+    <thead><tr><th class="col-photo"></th><th class="col-page">Page</th><th class="col-number">#</th><th class="col-question">Question</th><th class="col-answer">You wrote</th><th class="col-result">Result</th></tr></thead>
+    <tbody>
+      {% for item in priority_graded_items %}
+      <tr class="outcome-{{ item.view.outcome | replace('_', '-') }}">
+        <td class="col-photo"><img class="pages-thumb" src="/captures/{{ student.student_id }}/{{ item.capture_id }}/image" alt="Your photo" loading="lazy" data-lightbox></td>
+        <td class="col-page">{{ item.page_number }}</td>
+        <td class="col-number">{{ item.view.problem_id }}</td>
+        <td class="col-question">{{ item.view.prompt_text | humanize_math }}</td>
+        <td class="col-answer">{{ item.view.student_answer_raw | humanize_math }}</td>
+        <td class="col-result">
+          <span class="pages-glyph">{{ item.view.glyph }}</span> {{ item.view.message }}
+          {% if item.attempt_count > 1 %}
+          <span class="pages-attempts">Tried {{ item.attempt_count }} times</span>
+          {% endif %}
+          {% with correction_notice=item.view.correction_notice %}
+          {% include "_correction_notice.html" %}
+          {% endwith %}
+          {% with needs_resubmit_confirmation=item.view.needs_resubmit_confirmation, capture_id=item.capture_id, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
+          {% include "_resubmit_confirmation.html" %}
+          {% endwith %}
+          {% if item.view.display_bucket in ('incorrect', 'partially_correct') or item.view.dispute %}
+          {% with session_id=item.session_id, capture_id=item.capture_id, problem_id=item.view.problem_id, dispute=item.view.dispute, redirect_to="/student/" ~ student.student_id ~ "/" ~ source.source_id ~ "/pages" %}
+          {% include "_dispute_control.html" %}
+          {% endwith %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% elif not plain_correct_graded_items %}
   <p class="message">Nothing graded yet.</p>
   {% endif %}
@@ -105,27 +130,40 @@
 <style>
   .pages-screen { justify-content: flex-start; padding-top: 2.5rem; align-items: stretch; text-align: left; }
   .pages-screen h1 { text-align: center; }
-  .pages-list { list-style: none; padding: 0; margin: 0 0 1.5rem; }
-  .pages-list li {
-    padding: 0.7rem 0; border-top: 1px solid var(--surface); font-size: 1.05rem;
+  /* Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01/02, parent feedback:
+     real table format, same shape as session_result.html's own -- a small
+     photo per row, full size in the shared lightbox (_lightbox.html) on
+     tap, never inline-blown-up. */
+  table.pages-table { width: 100%; border-collapse: collapse; text-align: left; margin: 0 0 1.5rem; font-size: 0.95rem; }
+  .pages-table th, .pages-table td { padding: 0.6rem 0.5rem; vertical-align: top; border-bottom: 1px solid var(--surface); }
+  .pages-table thead th {
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim);
+    border-bottom: 2px solid var(--neutral-bg);
   }
-  .pages-list li:first-child { border-top: none; }
-  .pages-page { font-weight: 700; margin-right: 0.5rem; }
+  .pages-table tbody tr:last-child td { border-bottom: none; }
+  .col-photo { width: 3rem; }
+  .col-page, .col-number { width: 3rem; font-weight: 700; }
+  .col-answer { color: var(--text-dim); }
   .pages-thumb {
-    width: 2.6rem; height: 2.6rem; object-fit: cover; border-radius: var(--radius-sm);
-    border: 1px solid var(--surface); vertical-align: middle; margin-right: 0.6rem;
+    display: block; width: 2.6rem; height: 2.6rem; object-fit: cover;
+    border-radius: var(--radius-sm); border: 1px solid var(--surface);
   }
-  .pages-glyph { font-weight: 700; margin-left: 0.5rem; }
-  .outcome-correct .pages-glyph { color: var(--affirm); }
-  .outcome-incorrect .pages-glyph,
-  .outcome-partially-correct .pages-glyph { color: var(--attention); }
-  .pages-list form { display: inline; margin-left: 0.6rem; }
-  .pages-list button {
-    font-size: 0.95rem; padding: 0.4rem 0.9rem; border-radius: var(--radius-md); border: none;
+  /* Row background is the third signal, after glyph and message text --
+     never the only one, same rule as session_result.html's results-table. */
+  .pages-table tr.outcome-correct { background: var(--affirm-bg); }
+  .pages-table tr.outcome-correct .pages-glyph { color: var(--affirm); }
+  .pages-table tr.outcome-incorrect,
+  .pages-table tr.outcome-partially-correct { background: var(--attention-bg); }
+  .pages-table tr.outcome-incorrect .pages-glyph,
+  .pages-table tr.outcome-partially-correct .pages-glyph { color: var(--attention); }
+  .pages-glyph { font-weight: 700; margin-right: 0.3rem; }
+  .pages-table form { display: inline; margin-left: 0.4rem; }
+  .pages-table button {
+    font-size: 0.9rem; padding: 0.35rem 0.8rem; border-radius: var(--radius-md); border: none;
     background: var(--accent); color: var(--accent-ink); cursor: pointer; font-weight: 600;
   }
-  .pages-reminded { margin-left: 0.6rem; color: var(--text-dim); font-size: 0.95rem; }
-  .pages-attempts { margin-left: 0.6rem; color: var(--text-dim); font-size: 0.9rem; }
+  .pages-reminded { color: var(--text-dim); font-size: 0.9rem; }
+  .pages-attempts { margin-left: 0.5rem; color: var(--text-dim); font-size: 0.85rem; }
   .dispute-form { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
   .dispute-reason {
     flex: 1; min-width: 10rem; font-size: 0.9rem; padding: 0.35rem 0.6rem; border-radius: var(--radius-md);

@@ -462,6 +462,74 @@ def test_source_home_shows_how_many_are_waiting_on_a_grownup(
     assert "1 waiting on a grown-up" in response.text
 
 
+def test_my_pages_to_look_at_section_is_a_table_with_a_photo_per_row(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback, 2026-09-02: same table treatment for "To look at" as
+    "Waiting" and "Graded" -- a small photo per row, full size in the shared
+    lightbox on tap."""
+    _seed_one_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="a-1",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    store_captures.insert_page_capture(
+        conn,
+        store_captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-blurry",
+            assignment_id="a-1",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    store_captures.insert_problem(
+        conn,
+        store_captures.ProblemRow(
+            student_id="s-marcus",
+            capture_id="c-blurry",
+            problem_id="1",
+            prompt_text="9 x 6",
+            student_answer_raw="54",
+            transcription_confidence=0.4,
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-blurry",
+            assignment_id="a-1",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    sessions.insert_graded_problem(
+        conn,
+        sessions.GradedProblemRow(
+            student_id="s-marcus",
+            session_id="sess-c-blurry",
+            capture_id="c-blurry",
+            problem_id="1",
+            outcome="needs_human",
+            grader_confidence=0.4,
+            needs_human_cause="partial_page_markers",
+            page_number=None,
+        ),
+    )
+
+    response = client.get("/student/s-marcus/summer_bridge/pages")
+
+    assert response.status_code == 200
+    assert "9 x 6" in response.text
+    assert "/captures/s-marcus/c-blurry/image" in response.text
+    assert '<table class="pages-table">' in response.text
+
+
 def test_my_pages_splits_waiting_to_look_at_and_graded(
     client: TestClient, conn: sqlite3.Connection
 ) -> None:
@@ -541,6 +609,12 @@ def test_my_pages_splits_waiting_to_look_at_and_graded(
     # photo (low priority, kept lightweight).
     assert '<details class="correct-list">' in response.text
     assert "3 + 4" in response.text
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-02, parent feedback: real
+    # <table> markup for "Waiting" (this fixture's only non-empty, non-plain-
+    # correct section), not a card-like <ul> list -- the collapsed "what you
+    # got right" section deliberately stays a plain list (low priority, kept
+    # lightweight; see the comment above).
+    assert '<table class="pages-table">' in response.text
 
 
 def test_my_pages_shows_the_students_own_report_card_summary(
@@ -2783,7 +2857,12 @@ def test_my_pages_groups_a_recaptured_page_into_one_item_with_an_attempt_count(
     response = client.get("/student/s-marcus/rsm/pages")
 
     assert response.status_code == 200
-    assert response.text.count("Page 5") == 2  # one per problem, not per capture
+    # Ledger repaint (docs/ROADMAP.md's M9): a real table now, page number in
+    # its own bare column (matching evaluations.html's own convention), not
+    # "Page 5" prose per row.
+    assert (
+        response.text.count('<td class="col-page">5</td>') == 2
+    )  # one per problem, not per capture
     assert response.text.count("Tried 2 times") == 2
     assert "/captures/s-marcus/c-second/image" in response.text
     assert "/captures/s-marcus/c-first/image" not in response.text
