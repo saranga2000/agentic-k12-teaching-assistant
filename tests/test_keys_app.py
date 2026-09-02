@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -3278,6 +3279,150 @@ def test_evaluations_screen_batch_table_never_pre_checks_a_verdict(
     assert 'name="row_count" value="1"' in response.text
     assert 'name="cause_0" value="needs_person"' in response.text
     assert "checked" not in response.text.split('class="review-table-form"')[1].split("</form>")[0]
+
+
+def test_evaluations_batch_table_orders_questions_numerically_not_lexicographically(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Parent feedback, 2026-09-02: every table orders by question number in
+    real ascending order. list_pending_for_source's own ORDER BY is plain
+    text on problem_id, which would put "10" before "2" -- this is a display-
+    layer sort in _group_pending_by_capture, not a query change."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    captures.insert_page_capture(
+        conn,
+        captures.PageCaptureRow(
+            student_id="s-marcus",
+            capture_id="c-order",
+            assignment_id="does-not-matter",
+            captured_at="2026-08-13T08:00:00+00:00",
+            image_path="/tmp/does-not-matter.jpg",
+        ),
+    )
+    sessions.insert_session(
+        conn,
+        sessions.SessionRow(
+            student_id="s-marcus",
+            session_id="sess-c-order",
+            assignment_id="does-not-matter",
+            started_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    for problem_id in ("10", "2", "1"):
+        captures.insert_problem(
+            conn,
+            captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id="c-order",
+                problem_id=problem_id,
+                prompt_text=f"problem {problem_id}",
+                student_answer_raw="x",
+                transcription_confidence=0.9,
+            ),
+        )
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id="sess-c-order",
+                capture_id="c-order",
+                problem_id=problem_id,
+                outcome="needs_human",
+                grader_confidence=0.9,
+                needs_human_cause="needs_person",
+                page_number=15,
+            ),
+        )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    body = response.text
+    # \b so "Q1" doesn't match inside "Q10" -- there's no word boundary
+    # between the "1" and the "0" (both are \w), only after a real "Q1".
+    pos1 = re.search(r"\bQ1\b", body).start()
+    pos2 = re.search(r"\bQ2\b", body).start()
+    pos10 = re.search(r"\bQ10\b", body).start()
+    assert pos1 < pos2 < pos10
+
+
+def test_evaluations_graded_sections_order_by_page_then_question_numerically(
+    client: TestClient, conn: sqlite3.Connection
+) -> None:
+    """Same rule as the pending table above, for the folded Correct/
+    Partially correct/Incorrect sections -- list_resolved_for_source's own
+    ORDER BY is plain text on problem_id too."""
+    _seed_marcus_with_source(conn)
+    content.insert_assignment(
+        conn,
+        content.AssignmentRow(
+            student_id="s-marcus",
+            assignment_id="does-not-matter",
+            source_id="summer_bridge",
+            created_at="2026-08-13T08:00:00+00:00",
+        ),
+    )
+    for capture_id, problem_id in (("c-10", "10"), ("c-2", "2"), ("c-1", "1")):
+        captures.insert_page_capture(
+            conn,
+            captures.PageCaptureRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                assignment_id="does-not-matter",
+                captured_at="2026-08-13T08:00:00+00:00",
+                image_path="/tmp/does-not-matter.jpg",
+            ),
+        )
+        captures.insert_problem(
+            conn,
+            captures.ProblemRow(
+                student_id="s-marcus",
+                capture_id=capture_id,
+                problem_id=problem_id,
+                prompt_text=f"problem {problem_id}",
+                student_answer_raw="x",
+                transcription_confidence=0.9,
+            ),
+        )
+        sessions.insert_session(
+            conn,
+            sessions.SessionRow(
+                student_id="s-marcus",
+                session_id=f"sess-{capture_id}",
+                assignment_id="does-not-matter",
+                started_at="2026-08-13T08:00:00+00:00",
+            ),
+        )
+        sessions.insert_graded_problem(
+            conn,
+            sessions.GradedProblemRow(
+                student_id="s-marcus",
+                session_id=f"sess-{capture_id}",
+                capture_id=capture_id,
+                problem_id=problem_id,
+                outcome="correct",
+                grader_confidence=0.95,
+                page_number=15,
+            ),
+        )
+
+    response = client.get("/keys/s-marcus/summer_bridge/evaluations")
+
+    assert response.status_code == 200
+    section = response.text[response.text.index('id="graded-correct"') :]
+    pos1 = re.search(r"\bQ1\b", section).start()
+    pos2 = re.search(r"\bQ2\b", section).start()
+    pos10 = re.search(r"\bQ10\b", section).start()
+    assert pos1 < pos2 < pos10
 
 
 def test_submit_answer_verdict_corrects_a_misread_answer_before_judging_it(

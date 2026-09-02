@@ -871,6 +871,11 @@ def _group_pending_by_capture(
             key_image_pages[page_number] = (
                 key_page_images.get_image_path(conn, student_id, source_id, page_number) is not None
             )
+        # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback:
+        # question order within a page must read "1, 2, 3, ..." like the
+        # physical page does, not the plain-text database order
+        # list_pending_for_source's own ORDER BY produces ("10" before "2").
+        sorted_rows = sorted(rows, key=lambda row: _problem_number_sort_key(row.problem_id))
         groups.append(
             CaptureGroup(
                 capture_id=capture_id,
@@ -887,7 +892,7 @@ def _group_pending_by_capture(
                         ),
                         is_bulk_verdictable=row.needs_human_cause in _BULK_VERDICT_CAUSES,
                     )
-                    for row in rows
+                    for row in sorted_rows
                 ),
                 earlier_attempts=earlier_attempts,
                 has_key_image=key_image_pages.get(page_number, False)
@@ -1442,6 +1447,14 @@ def evaluations_screen(
     )
     resolved = sessions.list_resolved_for_source(conn, student_id, source_id)
     summary = _summarize_enrollment(pending, capture_groups, resolved)
+    # Ledger repaint (docs/ROADMAP.md's M9), 2026-09-01, parent feedback: page
+    # then question number, in real ascending order -- list_resolved_for_
+    # source's own ORDER BY is plain-text on problem_id ("10" before "2"),
+    # same reasoning as _group_pending_by_capture's sort above.
+
+    def _resolved_sort_key(row: sessions.ResolvedProblemRow) -> tuple[int, tuple[int, str]]:
+        return (row.page_number, _problem_number_sort_key(row.problem_id))
+
     identity_schema = page_identity_schemas.get_current_schema(conn, student_id, source_id)
     # Gap K (docs/USER_WORKFLOWS.md): child-escalated items, surfaced and
     # prioritized above the app-requested queue below -- rendered first in
@@ -1462,9 +1475,15 @@ def evaluations_screen(
             "capture_groups": capture_groups,
             "now_gradable_count": now_gradable_count,
             "summary": summary,
-            "correct_items": [r for r in resolved if r.outcome == "correct"],
-            "partially_correct_items": [r for r in resolved if r.outcome == "partially_correct"],
-            "incorrect_items": [r for r in resolved if r.outcome == "incorrect"],
+            "correct_items": sorted(
+                (r for r in resolved if r.outcome == "correct"), key=_resolved_sort_key
+            ),
+            "partially_correct_items": sorted(
+                (r for r in resolved if r.outcome == "partially_correct"), key=_resolved_sort_key
+            ),
+            "incorrect_items": sorted(
+                (r for r in resolved if r.outcome == "incorrect"), key=_resolved_sort_key
+            ),
             "identity_schema": identity_schema,
         },
     )
