@@ -236,10 +236,13 @@
 
 <!-- Ledger repaint, 2026-09-01, parent feedback: fold these three by default
      (low priority once nothing's wrong), and let the tab bar above jump
-     straight to one, unfolded -- <details id="..."> auto-opens on fragment
-     navigation to its own id in every browser this app targets (docs/
-     DEPLOYMENT.md: Chrome on an iPad, Safari/Chrome on a MacBook), so no
-     extra script is needed for the tabs above to both scroll AND unfold. -->
+     straight to one, unfolded. Opening the <details> itself is this page's
+     own hashchange listener (below), not a browser native behind the
+     scenes -- a real browser test found 2026-09-02 that clicking a
+     same-page anchor changes location.hash without a page load, so a
+     details element whose id IS the fragment target never auto-opens on
+     its own; only a fresh navigation that already carries the hash (e.g.
+     following a link in from enrollment_landing.html's summary bar) does. -->
 <details class="graded-section" id="graded-correct">
   <summary><h2>Correct <span class="muted">({{ correct_items|length }})</span></h2></summary>
   {% if correct_items %}
@@ -448,13 +451,21 @@
       });
     });
 
-    // Defensive fallback for a fragment landing on a closed <details> --
-    // every browser this app targets (docs/DEPLOYMENT.md) already does this
-    // natively, but costs nothing to guarantee.
-    if (location.hash) {
+    // Opens a closed <details> when a jump-nav tab targets its own id.
+    // Found 2026-09-02, in a real browser test: clicking an in-page anchor
+    // link changes location.hash without a page reload, so a check made
+    // only once when this script first runs (the original approach here)
+    // never re-fires for that click -- the tab silently did nothing.
+    // Listening for hashchange is the actual fix; the check also still runs
+    // once on load for a direct link (e.g. enrollment_landing.html's own
+    // summary bar) that lands here with a hash already in the URL.
+    function openDetailsForHash() {
+      if (!location.hash) return;
       var target = document.querySelector(location.hash);
       if (target && target.tagName === "DETAILS") target.open = true;
     }
+    window.addEventListener("hashchange", openDetailsForHash);
+    openDetailsForHash();
   })();
 </script>
 {% endblock %}
